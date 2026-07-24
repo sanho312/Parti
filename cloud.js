@@ -380,10 +380,9 @@
       const { data, error } = await sb.rpc('my_plan');
       if (!error && data) plan = data;
       if (isOwner(user)) plan = TOP_PLAN; // 소유자(이메일 또는 아이디 sanho0312)는 항상 최고 플랜
-      if (plan === 'pro') {
-        const un = document.getElementById('userName');
-        if (un && !un.querySelector('.planBadge')) un.insertAdjacentHTML('afterend', '<span class="planBadge">PRO</span>');
-      }
+      // 플랜 표시는 마이페이지 드롭다운(umPlanName)에서 — 상단바 배지는 제거
+      // (가드가 자식(querySelector)으로 찾는데 형제(afterend)로 삽입해 매번 중복 추가되던 버그도 함께 해소)
+      window.dispatchEvent(new CustomEvent('parti-plan', { detail: plan }));
     } catch (e) {}
   }
 
@@ -397,15 +396,11 @@
     for (const e of API.getDoc().data.entities) m.set(e.id, JSON.stringify(e));
     return m;
   }
-  function rtChip(text) {
-    let c = document.getElementById('rtChip');
-    if (!text) { if (c) c.style.display = 'none'; return; }
-    if (!c) {
-      c = document.createElement('span'); c.id = 'rtChip'; c.className = 'tbtn';
-      c.style.cssText = 'cursor:default;background:rgba(48,209,88,.16);';
-      document.getElementById('topbar').appendChild(c);
-    }
-    c.style.display = ''; c.textContent = text;
+  // 실시간 접속 정보 — 상단바 칩 대신 마이페이지 드롭다운에서 압축 표시. 변경 시 이벤트로 알린다.
+  let rtInfo = { count: 0, names: [] };
+  function setRtInfo(info) {
+    rtInfo = info || { count: 0, names: [] };
+    try { window.dispatchEvent(new CustomEvent('parti-realtime', { detail: rtInfo })); } catch (e) {}
   }
   function joinRealtime(id, canEdit) {
     leaveRealtime();
@@ -427,8 +422,9 @@
     });
     rtChan.on('presence', { event: 'sync' }, () => {
       const stt = rtChan.presenceState();
-      const names = Object.values(stt).flat().map(p => p.u).filter(Boolean);
-      rtChip(names.length > 1 ? `🟢 실시간 ${names.length}명: ${names.join(', ')}` : '🟢 실시간 대기 중');
+      const keys = Object.keys(stt);                       // 클라이언트(기기) 단위로 카운트 — meta 중복 계수 방지
+      const names = [...new Set(keys.map(k => (stt[k] && stt[k][0] && stt[k][0].u) || '').filter(Boolean))];
+      setRtInfo({ count: keys.length, names });
       // 기존 세션에 '새로' 합류했으면 기존 편집자에게 전체 상태를 요청해 현재 화면과 정확히 일치시킨다
       if (!rtGreeted && Object.keys(stt).some(k => k !== clientId)) {
         rtGreeted = true;
@@ -441,8 +437,8 @@
     usage('realtime_join');
   }
   function leaveRealtime() {
-    if (rtChan) { try { sb.removeChannel(rtChan); } catch (e) {} rtChan = null; }
-    rtChip(null);
+    if (rtChan) { try { rtChan.untrack(); } catch (e) {} try { sb.removeChannel(rtChan); } catch (e) {} rtChan = null; }
+    setRtInfo({ count: 0, names: [] });
   }
   // 변경 감시 → 엔티티 단위 diff 방송 (편집 권한 있을 때만 송신)
   setInterval(() => {
@@ -577,6 +573,7 @@
   // 이 모듈에 있으므로 로비가 supabase를 직접 부르지 않고 여기를 거치게 한다.
   window.WEBCAD_CLOUD = {
     ready: () => !!(sb && user),
+    realtime: () => rtInfo, // 현재 실시간 접속 정보 {count, names} — 마이페이지가 읽음
     list: async () => {
       const { data, error } = await sb.rpc('list_drawings');
       if (error) throw error;

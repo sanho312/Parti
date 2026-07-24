@@ -442,9 +442,10 @@
       const IC_FRIENDS = '<svg class="ic" viewBox="0 0 24 24"><circle cx="9" cy="8.5" r="3"/><path d="M3.2 19a5.8 5.8 0 0 1 11.6 0"/><circle cx="17" cy="9.5" r="2.4"/><path d="M15.8 14.6a4.9 4.9 0 0 1 5 4.4"/></svg>';
       const IC_OUT = '<svg class="ic" viewBox="0 0 24 24"><path d="M14.5 8V5.5a1.5 1.5 0 0 0-1.5-1.5H6a1.5 1.5 0 0 0-1.5 1.5v13A1.5 1.5 0 0 0 6 20h7a1.5 1.5 0 0 0 1.5-1.5V16M10 12h10.5M17.5 9l3 3-3 3"/></svg>';
       chip.innerHTML = `
-        <button class="tbtn tglc" id="userChip" title="마이페이지">${IC_USER} <span id="userName"></span></button>
+        <button class="tbtn tglc" id="userChip" title="마이페이지">${IC_USER} <span id="userName"></span><span id="rtDot" title="다른 기기와 실시간 연동 중" style="display:none;width:7px;height:7px;border-radius:50%;background:#30d158;margin-left:6px;box-shadow:0 0 0 2px rgba(48,209,88,.25);"></span></button>
         <div id="userMenu" class="dropdown">
           <div class="menuItem" id="umPlan" style="cursor:default;opacity:.9;">플랜: <b id="umPlanName" style="margin-left:4px;">무료</b></div>
+          <div class="menuItem" id="umRt" style="cursor:default;opacity:.9;">실시간 연동: <b id="umRtInfo" style="margin-left:4px;">나만</b></div>
           <div class="menuSep"></div>
           <button class="menuItem" id="umFriends">${IC_FRIENDS} 친구 <span style="margin-left:auto;opacity:.55;">◀</span></button>
           <div class="menuSep"></div>
@@ -462,11 +463,19 @@
         menu.classList.toggle('open', open === undefined ? !menu.classList.contains('open') : open);
         btn.classList.toggle('on', menu.classList.contains('open'));
         if (!menu.classList.contains('open')) fp.classList.remove('open');
-        if (menu.classList.contains('open')) { // 열 때마다 플랜 최신화
+        if (menu.classList.contains('open')) { // 열 때마다 플랜·실시간 최신화
           const p = window.WEBCAD_CLOUD && WEBCAD_CLOUD.plan ? WEBCAD_CLOUD.plan() : 'free';
           const el = chip.querySelector('#umPlanName'); if (el) el.textContent = p === 'pro' ? '프로 (PRO)' : '무료 (Free)';
+          refreshRt(window.WEBCAD_CLOUD && WEBCAD_CLOUD.realtime ? WEBCAD_CLOUD.realtime() : null);
         }
       };
+      // 실시간 접속 정보 — 상단바엔 초록 점만(압축), 인원/상세는 마이페이지 드롭다운에서
+      function refreshRt(info) {
+        const n = (info && info.count) || 0;
+        const dot = chip.querySelector('#rtDot'); if (dot) dot.style.display = n > 1 ? 'inline-block' : 'none';
+        const el = chip.querySelector('#umRtInfo'); if (el) el.textContent = n > 1 ? (n + '명 실시간 연동 중') : '나만 (단독)';
+      }
+      window.addEventListener('parti-realtime', (e) => refreshRt(e.detail));
       btn.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); toggle(); });
       btn.addEventListener('click', (e) => e.stopPropagation());
       document.addEventListener('pointerdown', () => toggle(false));
