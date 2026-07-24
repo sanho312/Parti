@@ -2932,6 +2932,20 @@ function tests(){
           '★원형 벽 밴드 전부 curv+cc(원 중심) — 인접 밴드 셰이드 연속(매끈한 곡면)');
       }
       eqi(counts.slab, 2, '★슬래브 2 — 사각 방 + 원형 방(다각 근사)');
+      { // 레이어 재질 상속 (레빗 패밀리식): 레이어에 재질만 넣으면 그 레이어 개체가 자동으로 입는다
+        C.state.layers.push({ name: '재질테스트층', color: '#ffffff', visible: true, mat: 'brick' });
+        const te = { id: 999902, type: 'CIRCLE', cx: 0, cy: 0, r: 100, layer: '재질테스트층' };
+        C.state.entities.push(te);
+        const P1 = C.matOf(te);
+        ok(P1 && P1.tex === 'brick', '★레이어 재질 상속 — e.mat 없이 레이어 mat(벽돌) 적용');
+        te.mat = 'wood';
+        const P2 = C.matOf(te);
+        ok(P2 && P2.tex === 'wood', '★개체 직접 재질이 레이어 재질보다 우선');
+        te.layer = '0'; delete te.mat;
+        ok(C.matOf(te) === null, '  재질 없는 레이어 = 기본(null)');
+        C.state.entities = C.state.entities.filter(x => x !== te);
+        C.state.layers = C.state.layers.filter(x => x.name !== '재질테스트층');
+      }
       C.state.entities.length = before; // 정리
       // 스케치 DXF 왕복 (999 WSK)
       S.SK.strokes = [

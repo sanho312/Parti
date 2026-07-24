@@ -7835,15 +7835,20 @@ function matImgNormal(canvas, strength) {
 // ★MAT_PRESETS 의 객체는 모든 개체가 공유한다 — 직접 고치면 한 개체의 색을 바꿨는데
 //   같은 재질을 쓰는 다른 개체가 전부 따라 바뀐다. 반드시 사본에 덮어쓴다.
 function matOf(e) {
-  if (!e || !e.mat) return null;
+  if (!e) return null;
+  // 재질 결정: 개체에 직접 지정(e.mat)이 최우선, 없으면 '레이어의 재질'을 상속 —
+  // 레빗 패밀리처럼 레이어에 재질만 넣어도 그 레이어의 srf/솔리드가 전부 그 재질을 입는다 (2026-07-25).
+  let matName = e.mat;
+  if (!matName) { const ly = getLayer(e.layer); matName = (ly && ly.mat) || null; }
+  if (!matName) return null;
   let P;
-  if (matIsLib(e.mat)) {
-    const L = matLibGet(matLibName(e.mat));
+  if (matIsLib(matName)) {
+    const L = matLibGet(matLibName(matName));
     // 라이브러리에서 지워진 재질을 참조하면 '기본' 으로 떨어진다.
     // 조용히 다른 재질로 갈아끼우면 도면이 사용자 몰래 달라진다 — 차라리 기본이 정직하다.
     if (!L) return null;
     P = matLibSpec(L);
-  } else P = MAT_PRESETS[e.mat];
+  } else P = MAT_PRESETS[matName];
   if (!P) return null;
   const x = e.matx;
   if (!x) return P;
@@ -12365,6 +12370,11 @@ function renderLayers() {
           ${[['', '기본'], ['0', '가는'], ['25', '0.25'], ['50', '0.50'], ['70', '0.70'], ['100', '1.00'], ['200', '2.00']]
             .map(([v, t]) => `<option value="${v}" ${String(l.lineweight ?? '') === v ? 'selected' : ''}>${t}</option>`).join('')}
         </select>
+        <select class="lmat" title="레이어 재질 — 이 레이어의 srf·솔리드가 자동으로 입습니다 (개체에 직접 지정한 재질이 우선)">
+          ${['<option value="">재질 없음</option>']
+            .concat(Object.keys(state.matlib || {}).map(k => `<option value="${MAT_LIB_PREFIX}${escapeHtml(k)}" ${l.mat === MAT_LIB_PREFIX + k ? 'selected' : ''}>${escapeHtml(k)}</option>`))
+            .concat(Object.keys(MAT_PRESETS).map(k => `<option value="${k}" ${l.mat === k ? 'selected' : ''}>${MAT_PRESETS[k].ko}</option>`)).join('')}
+        </select>
        </div>`;
     div.addEventListener('contextmenu', (e) => { // 우클릭: 선택한 객체를 이 레이어로 이동 (라이노식)
       e.preventDefault(); e.stopPropagation();
@@ -12396,6 +12406,12 @@ function renderLayers() {
     });
     div.querySelector('.llt').addEventListener('change', (e) => { e.stopPropagation(); l.linetype = e.target.value; draw(); });
     div.querySelector('.llw').addEventListener('change', (e) => { e.stopPropagation(); l.lineweight = e.target.value === '' ? undefined : parseInt(e.target.value, 10); draw(); });
+    div.querySelector('.lmat').addEventListener('change', (e) => {
+      e.stopPropagation();
+      pushUndo();                                          // 재질은 렌더 결과를 바꾸므로 undo 대상
+      l.mat = e.target.value || undefined;
+      propRefresh();                                       // 2D + 3D(솔리드 색·렌더 재질) 즉시 반영
+    });
     div.querySelector('.nm').addEventListener('dblclick', (e) => {
       e.stopPropagation();
       const nn = prompt('레이어 이름:', l.name);
@@ -15148,7 +15164,7 @@ window.WEBCAD_AI_BRIDGE = {
   state, pushUndo, addEntity, logLine, selectedEntities, ensureLayer,
   entityBBox, entityLength, polyArea,
   translateEntity, applyTransform, T_rotate, move3DEnt, gumRotate, meshSphere, meshCone,
-  runBoolean, isBoolable, bimSolids,
+  runBoolean, isBoolable, bimSolids, matOf,
   genSectionView,   // 입면/단면 자동 생성 (AI make_views 도구)
   renderLayers,     // 레이어 정리 후 패널 갱신 (AI organize_layers 도구)
   switchDoc, getCurDoc: () => curDoc, getDocName: () => currentFileName,   // 입면/단면은 새 탭에 생성 — 봇이 원본 탭으로 복귀할 때 사용
