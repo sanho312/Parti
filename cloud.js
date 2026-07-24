@@ -95,13 +95,13 @@
   }
 
   // ---------- ① 클라우드 저장 / 내 도면 ----------
-  async function saveToCloud(silent) {
+  async function saveToCloud(silent, forceName) {
     if (!user) return;
     const doc = API.getDoc();
     if (!doc.data.entities.length && !cloudId) { if (!silent) API.log('  저장할 도형이 없습니다.', 'warn'); return; }
     let name = doc.name;
     if (!cloudId) {
-      name = prompt('클라우드에 저장할 도면 이름:', name || '새 도면');
+      name = forceName || prompt('클라우드에 저장할 도면 이름:', name || '새 도면');
       if (!name) return;
     }
     try {
@@ -113,7 +113,7 @@
       cloudId = data; lastSavedRev = API.getRev();
       API.setName(name || doc.name);
       if (!silent) API.log(`  ☁ 클라우드에 저장됨: "${name || doc.name}"`, 'ok');
-      if (isNew) joinRealtime(cloudId, true); // 저장 즉시 실시간 세션 시작(공유 상대가 열면 동기화)
+      if (isNew) { joinRealtime(cloudId, true); announceActiveDoc(cloudId); } // 저장 즉시 실시간 세션 + 계정 활성 도면 알림
       usage('cloud_save');
     } catch (e) {
       API.log('  ☁ 저장 실패: ' + koErr(e), 'warn');
@@ -128,6 +128,11 @@
   // 도면 열기 — cloudId·실시간 세션 상태가 이 모듈에만 있으므로 로비도 반드시 이 함수를 거쳐야 한다.
   // 밖에서 직접 열면 cloudId가 갱신되지 않아 다음 "클라우드에 저장"이 같은 도면을 새로 하나 더 만든다.
   async function openDrawing(id, canEdit, mine) {
+    // 공유 세션 일관성: 다른 도면으로 전환하기 전, 저장 안 된 현재 도면을 먼저 저장한다.
+    // (추종으로 여는 경우는 이미 상대가 저장·방송했으므로 생략)
+    if (cloudId && cloudId !== id && !followingDoc && API.getRev() !== lastSavedRev) {
+      try { await saveToCloud(true); } catch (e) {}
+    }
     const { data: row, error } = await sb.from('drawings').select('name,data').eq('id', id).single();
     if (error) throw error;
     API.setDoc(row.name, row.data);
@@ -137,6 +142,7 @@
     usage('cloud_open');
     joinRealtime(id, !!canEdit);              // 실시간 세션 참가
     if (!canEdit) API.log('  👁 읽기 전용 — 상대의 변경이 실시간으로 보이지만 내 수정은 전송/저장되지 않습니다.', 'info');
+    if (!followingDoc) announceActiveDoc(id);  // 다른 기기가 이 도면으로 추종하도록 알림
     return row.name;
   }
 
@@ -376,7 +382,7 @@
 
   // ---------- 실시간 공동편집 (같은 클라우드 도면을 연 사용자끼리 동기화) ----------
   const clientId = Math.random().toString(36).slice(2, 10);
-  let rtChan = null, rtLast = null, rtRev = -1, rtCanEdit = false;
+  let rtChan = null, rtLast = null, rtRev = -1, rtCanEdit = false, rtGreeted = false;
   let rtBlocksHash = '', rtLayersHash = '';
   const hash = (o) => { try { return JSON.stringify(o); } catch (e) { return ''; } };
   function rtSnapshot() {
@@ -397,7 +403,7 @@
   function joinRealtime(id, canEdit) {
     leaveRealtime();
     if (!sb.channel) return; // 구버전/스텁 환경 보호
-    rtCanEdit = canEdit;
+    rtCanEdit = canEdit; rtGreeted = false;
     API.jitterNextId(); // id 충돌 회피
     rtLast = rtSnapshot(); rtRev = API.getRev();
     rtBlocksHash = hash(API.getBlocks()); rtLayersHash = hash(API.getDoc().data.layers);
@@ -405,6 +411,7 @@
     rtChan = sb.channel('drawing:' + id, { config: { broadcast: { self: false }, presence: { key: clientId } } });
     rtChan.on('broadcast', { event: 'ops' }, ({ payload }) => {
       if (!payload || payload.c === clientId) return;
+      if (payload.req) { if (rtCanEdit) sendFullState(); return; } // 신규 기기의 전체상태 요청 → 현재 상태 전송
       API.applyRemote(payload.ups, payload.dels, payload.blocks, payload.layers);
       // 원격 반영분이 다시 방송되지 않도록 기준 스냅샷 갱신
       rtLast = rtSnapshot(); rtRev = API.getRev();
@@ -415,6 +422,11 @@
       const stt = rtChan.presenceState();
       const names = Object.values(stt).flat().map(p => p.u).filter(Boolean);
       rtChip(names.length > 1 ? `🟢 실시간 ${names.length}명: ${names.join(', ')}` : '🟢 실시간 대기 중');
+      // 기존 세션에 '새로' 합류했으면 기존 편집자에게 전체 상태를 요청해 현재 화면과 정확히 일치시킨다
+      if (!rtGreeted && Object.keys(stt).some(k => k !== clientId)) {
+        rtGreeted = true;
+        setTimeout(() => { try { rtChan.send({ type: 'broadcast', event: 'ops', payload: { c: clientId, req: true } }); } catch (e) {} }, 150);
+      }
     });
     rtChan.subscribe(async (status) => {
       if (status === 'SUBSCRIBED') { try { await rtChan.track({ u: uname }); } catch (e) {} }
@@ -440,6 +452,63 @@
     if (ups.length || dels.length || payload.blocks || payload.layers)
       try { rtChan.send({ type: 'broadcast', event: 'ops', payload }); } catch (e) {}
   }, 700);
+
+  // ---------- 계정 실시간 세션: 한 계정의 모든 활성 기기가 '같은 활성 도면'을 공유 ----------
+  // 요청: PC·모바일이 똑같은 작업물이어야 한다. 마지막에 연 도면을 모든 기기가 추종하고,
+  // 로그인 기기에 저장 안 된 로컬 작업이 있으면 유실 없이 별도 도면으로 저장한 뒤 공유 세션에 합류한다.
+  let acctChan = null, followingDoc = false, acctResolved = false;
+  // 신규 합류 기기에 현재 전체 상태를 즉시 전달(늦게 켠 기기도 상대 화면과 정확히 일치)
+  function sendFullState() {
+    if (!rtChan) return;
+    const d = API.getDoc().data;
+    try {
+      rtChan.send({ type: 'broadcast', event: 'ops',
+        payload: { c: clientId, ups: d.entities, dels: [], blocks: API.getBlocks(), layers: d.layers, full: true } });
+    } catch (e) {}
+  }
+  // 내가 연 도면을 계정의 활성 도면으로 알림 → 다른 기기가 추종
+  function announceActiveDoc(id) {
+    if (!id) return;
+    if (acctChan) {
+      try { acctChan.track({ doc: id, cid: clientId, at: Date.now() }); } catch (e) {}
+      try { acctChan.send({ type: 'broadcast', event: 'active-doc', payload: { id, cid: clientId } }); } catch (e) {}
+    }
+    try { if (sb.auth && sb.auth.updateUser) sb.auth.updateUser({ data: { active_doc: id } }); } catch (e) {} // 재로그인 이어받기용
+  }
+  // 다른 기기가 연 도면으로 조용히 추종(추종 중엔 재방송/현재도면 저장을 하지 않는다)
+  async function followOpen(id) {
+    if (!id || id === cloudId) return;
+    followingDoc = true;
+    try { await openDrawing(id, true, true); } catch (e) { API.log('  실시간: 활성 도면을 여는 데 실패했습니다.', 'warn'); }
+    followingDoc = false;
+  }
+  // 로그인 시 시작 도면 결정
+  async function resolveInitialDoc(peerDoc) {
+    if (peerDoc) { await followOpen(peerDoc); return; }                 // 다른 기기가 작업 중 → 그 도면에 합류
+    const doc = API.getDoc();
+    if (!cloudId && doc.data.entities.length) {                         // 저장 안 된 로컬 작업 → 유실 없이 저장 후 공유
+      await saveToCloud(true, '내 작업 ' + new Date().toLocaleDateString());
+      if (cloudId) announceActiveDoc(cloudId);
+      return;
+    }
+    const last = user && user.user_metadata && user.user_metadata.active_doc;
+    if (!cloudId && last) { try { await openDrawing(last, true, true); announceActiveDoc(cloudId); } catch (e) {} }
+  }
+  function startAccountSync() {
+    if (acctChan || !sb || !sb.channel || !user || !user.id) return;
+    acctChan = sb.channel('acct:' + user.id, { config: { broadcast: { self: false }, presence: { key: clientId } } });
+    acctChan.on('broadcast', { event: 'active-doc' }, ({ payload }) => {
+      if (!payload || payload.cid === clientId) return;
+      if (payload.id && payload.id !== cloudId) followOpen(payload.id);
+    });
+    acctChan.on('presence', { event: 'sync' }, () => {
+      if (acctResolved) return; acctResolved = true;                    // 최초 sync 1회로 시작 도면 결정
+      const st = acctChan.presenceState() || {};
+      const peers = Object.values(st).flat().filter(p => p && p.cid && p.cid !== clientId);
+      resolveInitialDoc((peers.find(p => p.doc) || {}).doc || null);
+    });
+    acctChan.subscribe((s) => { if (s === 'SUBSCRIBED') { try { acctChan.track({ doc: cloudId || null, cid: clientId, at: Date.now() }); } catch (e) {} } });
+  }
 
   // ---------- Ctrl+S: 클라우드 도면이면 클라우드에 저장 ----------
   window.addEventListener('keydown', (ev) => {
@@ -535,5 +604,6 @@
     await loadPlan();                 // 플랜을 읽고 나서 알려야 로비가 옛 값('free')을 그리지 않는다
     window.dispatchEvent(new CustomEvent('webcad-cloud-ready'));
     showAnnouncements();              // 공지는 로비를 막지 않게 기다리지 않는다
+    startAccountSync();               // 계정의 모든 활성 기기가 '같은 활성 도면'을 실시간 공유
   });
 })();
