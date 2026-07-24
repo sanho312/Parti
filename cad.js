@@ -114,9 +114,11 @@ function snapshot() {
   });
 }
 let apiRev = 0; // 변경 카운터 (클라우드 자동저장의 dirty 판단용)
-function pushUndo() { undoStack.push(snapshot()); if (undoStack.length > 100) undoStack.shift(); redoStack.length = 0; apiRev++; if (typeof autosave === 'function') autosave(); }
+// 편집 커밋 알림 — 실시간 동기(cloud.js)가 폴링 없이 '변경 즉시' 방송하도록 훅 제공
+function bumpRev() { apiRev++; if (window.WEBCAD_API && WEBCAD_API.onEdit) { try { WEBCAD_API.onEdit(); } catch (e) {} } }
+function pushUndo() { undoStack.push(snapshot()); if (undoStack.length > 100) undoStack.shift(); redoStack.length = 0; bumpRev(); if (typeof autosave === 'function') autosave(); }
 function restore(snap) {
-  apiRev++; // undo/redo도 모델 변경으로 집계 (3D 라이브 갱신·클라우드 미저장 표시)
+  bumpRev(); // undo/redo도 모델 변경으로 집계 (3D 라이브 갱신·클라우드 미저장 표시)
   const d = JSON.parse(snap);
   state.entities = d.entities; state.layers = d.layers;
   state.currentLayer = d.currentLayer; state.nextId = d.nextId; state.blocks = d.blocks || {};
@@ -15239,7 +15241,7 @@ window.WEBCAD_API = {
   // 세션 참가 시 id 충돌 회피 (두 사용자가 같은 nextId로 동시에 생성하는 것 방지)
   jitterNextId: () => { state.nextId += 1000 + Math.floor(Math.random() * 9000); },
   // cloud.js가 설정하는 훅
-  onUsage: null, onSettingsChange: null, onDocChange: null,
+  onUsage: null, onSettingsChange: null, onDocChange: null, onEdit: null,
 };
 
 // 로드된 cad.js 버전을 명령 로그에 표시 (캐시로 예전 버전 로딩 여부 확인용)

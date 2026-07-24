@@ -466,9 +466,8 @@
     lastReqAt = now;
     try { rtChan.send({ type: 'broadcast', event: 'ops', payload: { c: clientId, req: true } }); } catch (e) {}
   }
-  // 변경 감시 → 엔티티 단위 diff 방송 (편집 권한 있을 때만 송신)
-  // 200ms — rev 게이트가 있어 변경 없을 땐 스냅샷 비용 0. 체감 지연 = 200ms + 네트워크.
-  setInterval(() => {
+  // 변경 → 엔티티 단위 diff 방송 (편집 권한 있을 때만 송신)
+  function sendDiff() {
     if (!rtChan || !rtCanEdit || API.getRev() === rtRev) return;
     rtRev = API.getRev();
     const cur = rtSnapshot();
@@ -481,7 +480,12 @@
     const lh = hash(API.getDoc().data.layers); if (lh !== rtLayersHash) { rtLayersHash = lh; payload.layers = API.getDoc().data.layers; }
     if (ups.length || dels.length || payload.blocks || payload.layers)
       try { rtChan.send({ type: 'broadcast', event: 'ops', payload }); } catch (e) {}
-  }, 200);
+  }
+  // '같은 스케치북' 체감 = 폴링이 아니라 변경 즉시 방송 — 편집 커밋 훅(onEdit)에서 40ms 코얼레스
+  // (드래그처럼 연속 커밋되는 조작을 한 묶음으로). 폴링 300ms 는 훅이 못 잡는 경로의 안전망.
+  let sendT = null;
+  API.onEdit = () => { if (sendT || !rtChan || !rtCanEdit) return; sendT = setTimeout(() => { sendT = null; sendDiff(); }, 40); };
+  setInterval(sendDiff, 300);
 
   // ---------- 계정 실시간 세션: 한 계정의 모든 활성 기기가 '같은 활성 도면'을 공유 ----------
   // 요청: PC·모바일이 똑같은 작업물이어야 한다. 마지막에 연 도면을 모든 기기가 추종하고,
