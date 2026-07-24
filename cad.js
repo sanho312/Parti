@@ -2868,7 +2868,10 @@ function bimSolids() {
         if (s0 <= 0.01) { A1 = mitO[k]; A2 = mitI[k]; }            // 세그 시작 = 마이터 코너
         if (s1 >= L - 0.01) { B1 = mitO[k2]; B2 = mitI[k2]; }      // 세그 끝 = 마이터 코너
         const sol = { poly: [A1, B1, B2, A2], z0, z1, color, glass, eid: beid !== undefined ? beid : w.id, open: t <= 2 || glass, seg: k,
-          curv: w.type === 'CIRCLE' || w.type === 'ARC' };  // 곡선 벽(원통·아치) → 세로 이음선 숨김
+          curv: w.type === 'CIRCLE' || w.type === 'ARC',
+          // 곡선 벽 구로 셰이딩용 진짜 원 중심 — 밴드(얇은 사각) 자체 무게중심으로 법선을 만들면
+          // 인접 밴드끼리 정점 셰이드가 어긋나 면 단위 밝기 계단(각진 느낌)이 남는다.
+          ...(w.type === 'CIRCLE' || w.type === 'ARC' ? { cc: [w.cx, w.cy] } : {}) };  // 곡선 벽(원통·아치) → 세로 이음선 숨김
         if (wz) {
           // 곡선을 따라 세운 벽: z0/z1을 '이 구간 바닥 기준의 오프셋'으로 재해석해 양 끝에서 기울인다.
           // (개구부 상·하단 밴드도 같은 오프셋을 유지하므로 창·문이 지형을 따라 같이 기울어짐)
@@ -3561,7 +3564,11 @@ function renderScene(isActive) {
       // quad = [bot_i, bot_j, top_j, top_i] 이므로 좌(i)·우(j) 두 값만 있으면 된다.
       let vsh = null;
       if (s.curv && !s.glow && !v3.falseColor) {
-        const vn = (px, py) => { const dx = px - ccx, dy = py - ccy, L2 = Math.hypot(dx, dy) || 1; return [dx / L2, dy / L2]; };
+        // 곡률 중심: 솔리드가 진짜 원 중심(cc)을 실어주면 그걸 쓴다(곡선 벽 밴드) — 없으면
+        // 무게중심(단일 링 솔리드는 무게중심=원 중심이라 동일). 인접 밴드가 같은 중심을 보므로
+        // 공유 정점의 법선·셰이드가 정확히 이어져 곡면이 연속으로 매끈해진다.
+        const cgx = s.cc ? s.cc[0] : ccx, cgy = s.cc ? s.cc[1] : ccy;
+        const vn = (px, py) => { const dx = px - cgx, dy = py - cgy, L2 = Math.hypot(dx, dy) || 1; return [dx / L2, dy / L2]; };
         const shOf = (px, py) => {
           const [nx2, ny2] = vn(px, py);
           const sgn = (nx2 * onx + ny2 * ony) < 0 ? -1 : 1;   // 안쪽 면이면 법선도 안쪽으로

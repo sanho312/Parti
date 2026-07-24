@@ -414,7 +414,17 @@
     rtChan.on('broadcast', { event: 'ops' }, ({ payload }) => {
       if (!payload || payload.c === clientId) return;
       if (payload.req) { if (rtCanEdit) sendFullState(); return; } // 신규 기기의 전체상태 요청 → 현재 상태 전송
-      API.applyRemote(payload.ups, payload.dels, payload.blocks, payload.layers);
+      if (payload.full) {
+        // 전체 상태 = 권위 스냅샷. 내 '동기화 기준선(rtLast)'에 있는데 스냅샷에 없는 개체는
+        // 상대가 지운 것 → 같이 삭제 (안 지우면 스테일 DB 를 로드한 기기에서 삭제 개체가 되살아남).
+        // 단 기준선에 없는 내 신규 미전송 작업은 보존 — 다음 틱에 방송된다.
+        const have = new Set((payload.ups || []).map(e2 => e2.id));
+        const extra = [];
+        if (rtLast) for (const id2 of rtLast.keys()) if (!have.has(id2)) extra.push(id2);
+        API.applyRemote(payload.ups, extra, payload.blocks, payload.layers);
+      } else {
+        API.applyRemote(payload.ups, payload.dels, payload.blocks, payload.layers);
+      }
       // 원격 반영분이 다시 방송되지 않도록 기준 스냅샷 갱신
       rtLast = rtSnapshot(); rtRev = API.getRev();
       if (payload.blocks) rtBlocksHash = hash(API.getBlocks());
@@ -522,9 +532,12 @@
     }
   }, true);
 
-  // ---------- 창 숨김/전환 시 미저장분 즉시 저장 ----------
+  // ---------- 창 숨김/전환 시 미저장분 즉시 저장 · 복귀 시 실시간 재동기 ----------
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden' && user && cloudId && API.getRev() !== lastSavedRev) saveToCloud(true);
+    // 복귀: iPad Safari 등은 백그라운드에서 웹소켓을 끊는다 — 채널을 새로 잡고
+    // 전체상태 핸드셰이크(rtGreeted=false → req → full)로 그동안의 변경을 통째로 따라잡는다.
+    if (document.visibilityState === 'visible' && user && cloudId && sb && sb.channel) joinRealtime(cloudId, rtCanEdit);
   });
 
   // ---------- 미저장 표시(●) — 파일명 옆 ----------

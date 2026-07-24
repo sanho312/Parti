@@ -2913,6 +2913,12 @@ function tests(){
       eqi(curvW.length, 2, '★곡선 벽 = 진짜 CIRCLE/ARC 벽 개체 (분절 직선 테셀레이션 금지 — 매끈한 곡면)');
       eqi(counts.wall, 6, '★벽 수 = 직선 4 + 곡선 2 (분절 없음)');
       ok(curvW.every(e2 => e2.bim.h > 0 && e2.bim.t > 0), '  곡선 벽에 높이·두께 부여');
+      { // 곡면 밴드 = curv + 진짜 원 중심(cc) — 구로 셰이딩이 밴드 무게중심이 아닌 원 중심 법선을 쓴다
+        const cw = curvW.find(e2 => e2.type === 'CIRCLE');
+        const sols = C.bimSolids().filter(s2 => s2.eid === cw.id);
+        ok(sols.length >= 32 && sols.every(s2 => s2.curv && s2.cc && s2.cc[0] === cw.cx && s2.cc[1] === cw.cy),
+          '★원형 벽 밴드 전부 curv+cc(원 중심) — 인접 밴드 셰이드 연속(매끈한 곡면)');
+      }
       eqi(counts.slab, 2, '★슬래브 2 — 사각 방 + 원형 방(다각 근사)');
       C.state.entities.length = before; // 정리
       // 스케치 DXF 왕복 (999 WSK)
