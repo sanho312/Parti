@@ -3006,6 +3006,37 @@ function tests(){
         C.state.entities = C.state.entities.filter(x => x.id < 999910 || x.id > 999941);
         C.state.layers = C.state.layers.filter(x => x.name !== '창호층');
       }
+      { // 커스텀 창호 기호(owlib) — 저장(정규화)·평면 렌더·3D 프리즘·문서 왕복
+        // ① 저장: 기준선 2000mm + 원 + 대각선 → 1000 정규화
+        const base2 = { type: 'LINE', x1: 0, y1: 0, x2: 2000, y2: 0 };
+        const symC = { type: 'CIRCLE', cx: 1000, cy: 400, r: 200, color: '#12b886' };
+        const symL = { type: 'LINE', x1: 0, y1: 0, x2: 1000, y2: 400 }; // 기준선(2000)보다 짧아야 — '가장 긴 LINE=기준선' 규칙
+        ok(C.owSaveDef('테스트기호', 'plan', [base2, symC, symL]), '★창호저장(평면) 성공');
+        const def2 = C.state.owlib['테스트기호'];
+        ok(def2 && def2.plan.length === 2, '  기준선 제외 2개 저장');
+        const cc2 = def2.plan.find(x => x.type === 'CIRCLE');
+        ok(cc2 && Math.abs(cc2.cx - 500) < 1 && Math.abs(cc2.cy - 200) < 1 && Math.abs(cc2.r - 100) < 1, '★정규화: 2000mm 기준선 → 1000 좌표계 (원 중심·반지름 절반)');
+        // ② 배치 변환: 900mm 개구 + 경첩 반전(X 미러)
+        const placed = C.owPlaced(def2.plan, [5000, 5000], 1, 0, 0.9, 0.9, true, false);
+        const pc = placed.find(x => x.type === 'CIRCLE');
+        ok(pc && Math.abs(pc.cx - (5000 + 500 * 0.9)) < 1 && Math.abs(pc.r - 90) < 1, '★배치: 스케일 0.9 + 경첩 미러 정확');
+        // ③ 평면 렌더: '@' 지정 개구부 draw 무예외
+        const oc = { id: 999960, type: 'LINE', x1: 0, y1: 45000, x2: 900, y2: 45000, layer: '0', bim: { kind: 'opening', ot: 'door', wt: '@테스트기호', h: 2100, sill: 0, t: 200 } };
+        C.state.entities.push(oc);
+        let ok2 = true; try { C.draw(); } catch (err) { ok2 = false; }
+        ok(ok2, '★커스텀 평면 기호 렌더 무예외');
+        // ④ 3D: solid 부위(닫힌 사각, 기준높이 절반) → 프리즘 z 검증
+        const sq = { type: 'LWPOLYLINE', closed: true, points: [[500, -100], [1500, -100], [1500, 100], [500, 100]], bim: { h: 1050, base: 0 } };
+        ok(C.owSaveDef('테스트기호', 'solid', [base2, sq]), '  창호저장(3D) 성공');
+        const hw2 = { id: 999961, type: 'LINE', x1: -1000, y1: 45000, x2: 2000, y2: 45000, layer: '0', bim: { kind: 'wall', h: 2400, t: 200, base: 0 } };
+        C.state.entities.push(hw2);
+        const so2 = C.bimSolids().filter(s3 => s3.eid === 999960);
+        ok(so2.length === 1 && Math.abs(so2[0].z1 - 1050) < 2, '★커스텀 3D 프리즘 — zh(1050/2100)=개구높이 절반 (' + Math.round(so2[0] ? so2[0].z1 : -1) + ')');
+        // ⑤ 문서 왕복: getDoc → setDoc 후 owlib 유지
+        ok(!!AW.WEBCAD_API.getDoc().data.owlib['테스트기호'], '★getDoc 에 owlib 포함 (클라우드·실시간 왕복)');
+        C.state.entities = C.state.entities.filter(x => x.id !== 999960 && x.id !== 999961);
+        delete C.state.owlib['테스트기호'];
+      }
       { // B1 — 인쇄 제외(noplot): 화면엔 보이되 SVG/PDF 출력에서 빠진다
         C.state.layers.push({ name: '보조출력층', color: '#ffffff', visible: true, noplot: true });
         const pe = { id: 999903, type: 'LINE', x1: 77771, y1: 0, x2: 77772, y2: 100, layer: '보조출력층' };

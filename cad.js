@@ -37,6 +37,7 @@ const state = {
   textHeight: 10,
   nextId: 1,
   matlib: {},            // 재질 라이브러리: 이름 -> {name,base,color,scale,rough,metal,img} — 도면에 저장된다
+  owlib: {},             // 커스텀 창호 기호: 이름 -> {plan:[ents], elev:[ents], elevH, solid:[ents]} — 도면에 저장된다
   blocks: {},            // 블록 정의: name -> { entities:[...상대좌표 도형] }
   views: {},             // 저장된 뷰: name -> {x,y,scale}
 };
@@ -111,6 +112,7 @@ function snapshot() {
     sensors: state.sensors, nextSensorId: state.nextSensorId,
     sun: state.sun,          // 태양 설정도 undo 대상
     matlib: state.matlib,    // 재질 라이브러리도 undo 대상 (저장/삭제를 되돌릴 수 있어야)
+    owlib: state.owlib,      // 커스텀 창호 기호도 undo 대상
   });
 }
 let apiRev = 0; // 변경 카운터 (클라우드 자동저장의 dirty 판단용)
@@ -123,6 +125,7 @@ function restore(snap) {
   state.entities = d.entities; state.layers = d.layers;
   state.currentLayer = d.currentLayer; state.nextId = d.nextId; state.blocks = d.blocks || {};
   state.matlib = d.matlib || {};   // undo/redo 도 라이브러리를 되돌린다
+  state.owlib = d.owlib || {};
   state.lights = d.lights || []; state.nextLightId = d.nextLightId || 1;
   state.sensors = d.sensors || []; state.nextSensorId = d.nextSensorId || 1;
   state.sun = d.sun || null;
@@ -2600,8 +2603,93 @@ function owWt(e) {
   if (e.bim && e.bim.wt) return e.bim.wt;
   const ly = getLayer(e.layer);
   const fam = OPENING_TYPES[e.bim.ot] || [];
-  if (ly && ly.defWt && fam.some(([v]) => v === ly.defWt)) return ly.defWt;
+  if (ly && ly.defWt && (ly.defWt.charCodeAt(0) === 64 || fam.some(([v]) => v === ly.defWt))) return ly.defWt; // '@커스텀'은 문·창 공용
   return e.bim.ot === 'door' ? 'swing' : 'fix';
+}
+// ─── 커스텀 창호 기호 라이브러리 (owlib) ───
+// 사용자가 직접 그린 기호를 저장해 유형('@이름')으로 지정 — 표기 방법이 다른 사무소·개인의 자유도.
+// 정규화 계약: 선택 중 '가장 긴 LINE' = 기준선(개구 구간). 기준선 시작→끝 = X축 0..1000,
+// 기준선의 왼쪽 = +Y. 평면·3D 는 X 균등 스케일, 입면은 X=폭·Y=높이(elevH 기준) 비균등.
+// 3D 부위: 닫힌 LWPOLYLINE/CIRCLE = 기둥(프리즘). 개체에 bim{h,base}(mm, 기준높이 2100)를 주면
+// 그 구간만 — 없으면 개구 전체 높이.
+function owSaveDef(name, part, ents) { // part: 'plan' | 'elev' | 'solid' — 저장 성공 시 true
+  const lines = ents.filter(e2 => e2.type === 'LINE');
+  if (!lines.length || ents.length < 2) return false;
+  const bl = lines.reduce((a, b2) => (Math.hypot(a.x2 - a.x1, a.y2 - a.y1) >= Math.hypot(b2.x2 - b2.x1, b2.y2 - b2.y1) ? a : b2));
+  const W = Math.hypot(bl.x2 - bl.x1, bl.y2 - bl.y1); if (W < 1e-6) return false;
+  const ux = (bl.x2 - bl.x1) / W, uy = (bl.y2 - bl.y1) / W, k = 1000 / W;
+  const toLocal = (x, y) => [((x - bl.x1) * ux + (y - bl.y1) * uy) * k, ((x - bl.x1) * -uy + (y - bl.y1) * ux) * k];
+  const T = { type: 'move', pt: (x, y) => toLocal(x, y) };
+  const out = [];
+  let hMax = 0;
+  for (const src of ents) {
+    if (src === bl) continue;
+    if (!['LINE', 'LWPOLYLINE', 'CIRCLE', 'ARC'].includes(src.type)) continue;
+    const c2 = JSON.parse(JSON.stringify(src)); delete c2.id; delete c2.layer;
+    applyTransform(c2, T);
+    if (c2.type === 'CIRCLE' || c2.type === 'ARC') c2.r *= k;
+    if (src.bim && (src.bim.h || src.bim.base)) c2.zb = (src.bim.base || 0) / 2100, c2.zh = (src.bim.h || 2100) / 2100; // 3D 높이 구간(기준 2100)
+    delete c2.bim;
+    out.push(c2);
+    // 입면 높이 범위 (기준선 위쪽 최대 y)
+    const ys = c2.type === 'LINE' ? [c2.y1, c2.y2] : c2.type === 'LWPOLYLINE' ? c2.points.map(p => p[1]) : [c2.cy + c2.r];
+    for (const yv of ys) hMax = Math.max(hMax, yv);
+  }
+  if (!out.length) return false;
+  if (!state.owlib) state.owlib = {};
+  if (!state.owlib[name]) state.owlib[name] = {};
+  state.owlib[name][part] = out;
+  if (part === 'elev') state.owlib[name].elevH = Math.max(100, hMax);
+  return true;
+}
+// 저장 기호 → 실제 개구부 프레임으로 변환된 사본 목록 (mirX=경첩 반전, mirY=열림 반전)
+function owPlaced(defEnts, P1, ux, uy, sx, sy, mirX, mirY) {
+  const nx = -uy, ny = ux;
+  const T = { type: (!!mirX !== !!mirY) ? 'mirror' : 'move', axisDeg: 0,
+    pt: (x, y) => {
+      const lx = (mirX ? 1000 - x : x) * sx, ly = (mirY ? -y : y) * sy;
+      return [P1[0] + ux * lx + nx * ly, P1[1] + uy * lx + ny * ly];
+    } };
+  const out = [];
+  for (const d of defEnts) {
+    let c2 = JSON.parse(JSON.stringify(d));
+    if ((c2.type === 'CIRCLE' || c2.type === 'ARC') && Math.abs(sx - sy) > 1e-9) { // 비균등: 원·호 → 폴리라인 근사
+      const n2 = 24, pts = [];
+      const a0 = c2.type === 'ARC' ? c2.startAngle * Math.PI / 180 : 0;
+      const a1 = c2.type === 'ARC' ? (((c2.endAngle - c2.startAngle) % 360 + 360) % 360 || 360) * Math.PI / 180 + a0 : Math.PI * 2 + a0;
+      for (let i = 0; i <= n2; i++) { const t2 = a0 + (a1 - a0) * i / n2; pts.push([c2.cx + Math.cos(t2) * c2.r, c2.cy + Math.sin(t2) * c2.r]); }
+      c2 = { type: 'LWPOLYLINE', points: pts, closed: c2.type === 'CIRCLE', color: c2.color, linetype: c2.linetype, zb: c2.zb, zh: c2.zh };
+    }
+    applyTransform(c2, T);
+    if (c2.type === 'CIRCLE' || c2.type === 'ARC') c2.r *= sx;
+    out.push(c2);
+  }
+  return out;
+}
+function cmdOwSave() {
+  const sel = selectedEntities();
+  if (sel.length < 2) { logLine('  창호저장: 기호 도형들 + 기준선(개구 구간을 나타내는 "가장 긴 선")을 함께 선택한 뒤 실행하세요.', 'warn'); return; }
+  const name = prompt('창호 기호 이름:'); if (!name) return;
+  const p = bimAskNum('부위 (1=평면, 2=입면, 3=3D):', 1); if (p == null) return;
+  const part = p === 2 ? 'elev' : p === 3 ? 'solid' : 'plan';
+  pushUndo();
+  if (!owSaveDef(name, part, sel)) { logLine('  창호저장 실패 — 기준선(LINE) 1개 + 기호 도형 1개 이상이 필요합니다.', 'warn'); return; }
+  logLine(`  ✔ 창호 기호 "${name}" ${part === 'plan' ? '평면' : part === 'elev' ? '입면' : '3D'} 저장 — 속성/레이어의 창호 선택에서 "@${name}" 으로 지정`, 'ok');
+  renderProps(); renderLayers();
+}
+function cmdOwList() {
+  const ks = Object.keys(state.owlib || {});
+  if (!ks.length) { logLine('  저장된 창호 기호가 없습니다. 기호를 그리고 선택 → 창호저장', 'info'); return; }
+  for (const k of ks) {
+    const d = state.owlib[k];
+    logLine(`  @${k} — ${['plan', 'elev', 'solid'].filter(pp => d[pp]).map(pp => pp === 'plan' ? '평면' : pp === 'elev' ? '입면' : '3D').join('·') || '(비어 있음)'}`, 'info');
+  }
+}
+function cmdOwDel(name) {
+  if (!name || !state.owlib || !state.owlib[name]) { logLine('  창호삭제 <이름> — 창호목록 으로 이름 확인', 'warn'); return; }
+  pushUndo(); delete state.owlib[name];
+  logLine(`  ✔ 창호 기호 "@${name}" 삭제 — 이 기호를 쓰던 개구부는 기본 표기로 돌아갑니다`, 'ok');
+  renderProps(); renderLayers(); propRefresh();
 }
 // 문/창: 벽 선 위 클릭 → 폭 입력 → 벽 방향의 개구부 세그먼트 생성
 function clickOpening(w, rawW, ot) {
@@ -2688,9 +2776,20 @@ function drawBimOverlay(e) {
       ctx.moveTo(s2.x - ax2 * 6 - ay2 * 3.5, s2.y - ay2 * 6 + ax2 * 3.5); ctx.lineTo(s2.x, s2.y);
       ctx.lineTo(s2.x - ax2 * 6 + ay2 * 3.5, s2.y - ay2 * 6 - ax2 * 3.5);
     };
+    // 커스텀 기호('@이름') — 사용자가 그려 저장한 평면 기호를 개구 프레임으로 변환해 그대로 그림
+    if (wt.charCodeAt(0) === 64) {
+      const defC = (state.owlib || {})[wt.slice(1)];
+      if (defC && defC.plan) {
+        for (const c2 of owPlaced(defC.plan, P1, ux2, uy2, W / 1000, W / 1000, !!e.bim.hinge, !!e.bim.flip)) {
+          if (!c2.color) c2.color = '#ff9f0a';
+          c2.layer = e.layer; drawEntity(c2, false);
+        }
+        ctx.globalAlpha = 0.9; return;
+      } // plan 부위가 없으면 아래 기본 표기로 폴백
+    }
     ctx.beginPath();
     const hs = e.bim.hinge ? -1 : 1; // H 에서 F 쪽 진행 부호
-    if (wt === 'swing') {            // 여닫이: 문짝(수직) + 1/4 원 스윙
+    if (wt === 'swing' || (wt.charCodeAt(0) === 64 && e.bim.ot === 'door')) { // 여닫이 (커스텀 문 폴백 포함 — 창 폴백은 아래 기본 이중선)
       wline(H, P(H, 0, W)); warc(H, F, 90);
     } else if (wt === 'dswing') {    // 쌍여닫이: 반반 두 짝
       const M = P(P1, W / 2, 0);
@@ -3031,12 +3130,25 @@ function pushOpening3D(solids, c, g) {
     solids.push({ poly: [[p1[0] + nx, p1[1] + ny], [p2[0] + nx, p2[1] + ny], [p2[0] - nx, p2[1] - ny], [p1[0] - nx, p1[1] - ny]],
       z0: zz0, z1: zz1, color: col, eid: o.id });
   };
+  // 경첩 끝의 세그먼트 s 위치 → c.s0/s1 어느 쪽인지 (개구선과 세그먼트 방향이 반대일 수 있음)
+  const sO1 = (o.x1 - g.x1) * g.ux + (o.y1 - g.y1) * g.uy;
+  const sO2 = (o.x2 - g.x1) * g.ux + (o.y2 - g.y1) * g.uy;
+  const hingeS = o.bim.hinge ? sO2 : sO1;
+  const hAtS0 = Math.abs(hingeS - c.s0) <= Math.abs(hingeS - c.s1);
+  // 커스텀 기호('@이름') 3D — 저장한 닫힌 도형(풋프린트)을 프리즘으로. zb/zh(기준 2100 분율) 있으면 그 구간만
+  if (wt.charCodeAt(0) === 64) {
+    const defC = (state.owlib || {})[wt.slice(1)];
+    if (defC && defC.solid) {
+      const P1w = at(c.s0, 0);
+      for (const c2 of owPlaced(defC.solid, P1w, g.ux, g.uy, Wd / 1000, Wd / 1000, !hAtS0, !!o.bim.flip)) {
+        const zz0 = z0 + (c2.zb || 0) * oh, zz1 = z0 + ((c2.zb || 0) + (c2.zh != null ? c2.zh : 1 - (c2.zb || 0))) * oh;
+        if (c2.type === 'CIRCLE') solids.push({ poly: circlePoly(c2.cx, c2.cy, c2.r, 24), z0: zz0, z1: zz1, color: c2.color || LEAF, eid: o.id, curv: true, cc: [c2.cx, c2.cy] });
+        else if (c2.type === 'LWPOLYLINE' && c2.closed && c2.points.length > 2) solids.push({ poly: c2.points.map(p => [p[0], p[1]]), z0: zz0, z1: zz1, color: c2.color || LEAF, eid: o.id });
+      }
+      return;
+    } // solid 부위 없으면 아래 기본(계열별)으로 폴백
+  }
   if (o.bim.ot === 'door') {
-    // 경첩 끝의 세그먼트 s 위치 → c.s0/s1 어느 쪽인지 (개구선과 세그먼트 방향이 반대일 수 있음)
-    const sO1 = (o.x1 - g.x1) * g.ux + (o.y1 - g.y1) * g.uy;
-    const sO2 = (o.x2 - g.x1) * g.ux + (o.y2 - g.y1) * g.uy;
-    const hingeS = o.bim.hinge ? sO2 : sO1;
-    const hAtS0 = Math.abs(hingeS - c.s0) <= Math.abs(hingeS - c.s1);
     const Hs = hAtS0 ? c.s0 : c.s1, dir = hAtS0 ? 1 : -1;
     const H = at(Hs, 0);
     const swingEnd = (len) => { // 경첩에서 열림각 ~30° 로 뻗은 문짝 끝
@@ -5271,6 +5383,7 @@ function genSectionView(p1, u, nrm, lineLen, depth, isElev) {
     }
   }
   // 창호 입면 기호 수집 (2단계) — 바라보는 쪽(depth 안) 개구부의 유형 기호. ★새 탭 전환 전에 원본 state 에서.
+  const owlibSrc = state.owlib || {};   // 커스텀 기호도 전환 전에 캡처 (전환 후 state 는 새 문서)
   const owSyms = [];
   for (const o of state.entities) {
     if (!o.bim || o.bim.kind !== 'opening' || o.type !== 'LINE') continue;
@@ -5324,6 +5437,15 @@ function genSectionView(p1, u, nrm, lineLen, depth, isElev) {
     for (const ss of owSyms) {
       const W2 = ss.s1 - ss.s0, sm = (ss.s0 + ss.s1) / 2, zm = (ss.z0 + ss.z1) / 2;
       addEntity({ type: 'LWPOLYLINE', layer: '창호', closed: true, points: [[ss.s0, ss.z0], [ss.s1, ss.z0], [ss.s1, ss.z1], [ss.s0, ss.z1]] });
+      // 커스텀 기호('@이름') — 저장한 입면 기호를 개구 사각(폭×높이)으로 변환해 발행
+      if (ss.wt.charCodeAt(0) === 64) {
+        const defC = owlibSrc[ss.wt.slice(1)];
+        if (defC && defC.elev) {
+          for (const c2 of owPlaced(defC.elev, [ss.s0, ss.z0], 1, 0, W2 / 1000, (ss.z1 - ss.z0) / (defC.elevH || 1000), !!ss.hinge, false))
+            addEntity(Object.assign(c2, { layer: '창호' }));
+        }
+        continue; // elev 부위 없으면 외곽 사각만 (이미 발행됨)
+      }
       const dashLt = ss.flip ? 'dashed' : undefined; // 안여닫이 = 점선
       const hE = ss.hinge ? ss.s1 : ss.s0, oE = ss.hinge ? ss.s0 : ss.s1; // 경첩 변 / 손잡이 변
       const harrow = (x1, x2, z) => { ln(x1, z, x2, z); const ah = Math.min(W2 * 0.08, 120), dr = x2 > x1 ? 1 : -1; ln(x2 - dr * ah, z + ah * 0.6, x2, z); ln(x2 - dr * ah, z - ah * 0.6, x2, z); };
@@ -11502,6 +11624,7 @@ const INSTANT_CMDS = {
   stair: cmdStairTag,
   railing: cmdRailingTag,
   setaslight: cmdSetAsLight,
+  owsave: cmdOwSave, owlist: cmdOwList, owdel: () => cmdOwDel(prompt('삭제할 창호 기호 이름 (@ 없이):') || ''),   // 커스텀 창호 기호
   raytrace: cmdRaytrace,
   rendered: cmdRendered,
   material: cmdMaterial,
@@ -11966,6 +12089,7 @@ const CMD_ALIASES = {
   stair: 'stair', '계단': 'stair',
   railing: 'railing', handrail: 'railing', 난간: 'railing', 손스침: 'railing',
   setaslight: 'setaslight', light: 'setaslight', lamp: 'setaslight', 조명: 'setaslight', 광원지정: 'setaslight', 광원: 'setaslight',
+  창호저장: 'owsave', 창호목록: 'owlist', 창호삭제: 'owdel',
   unsetlight: 'unsetlight', 광원해제: 'unsetlight',
   raytrace: 'raytrace', rt: 'raytrace', raytraced: 'raytrace', 레이트레이싱: 'raytrace', 렌더: 'raytrace',
   rendered: 'rendered', 렌더링: 'rendered', 렌더링뷰: 'rendered', 렌더뷰: 'rendered',
@@ -12673,6 +12797,7 @@ function renderLayers() {
           <option value="">창호: 자동</option>
           <optgroup label="문">${OPENING_TYPES.door.map(([v, t]) => `<option value="${v}" ${l.defWt === v ? 'selected' : ''}>${t}</option>`).join('')}</optgroup>
           <optgroup label="창">${OPENING_TYPES.window.map(([v, t]) => `<option value="${v}" ${l.defWt === v ? 'selected' : ''}>${t}</option>`).join('')}</optgroup>
+          ${Object.keys(state.owlib || {}).length ? '<optgroup label="내 기호">' + Object.keys(state.owlib).map(n2 => `<option value="@${escapeHtml(n2)}" ${l.defWt === '@' + n2 ? 'selected' : ''}>@${escapeHtml(n2)}</option>`).join('') + '</optgroup>' : ''}
         </select>
        </div>`;
     div.addEventListener('contextmenu', (e) => { // 우클릭: 선택한 객체를 이 레이어로 이동 (라이노식)
@@ -13096,8 +13221,11 @@ function renderProps() {
     rows += `<div class="row" style="margin-top:8px;"><label style="color:var(--accent-text);">BIM</label><span style="font-weight:590;">${kindKo}</span></div>`;
     if (e.bim.kind === 'opening') { // 창호 표시기호: 유형 + 경첩/열림 방향
       const wtCur = owWt(e);
+      const owCust = Object.keys(state.owlib || {});
       rows += `<div class="row"><label>창호</label><select id="pOwt">${(OPENING_TYPES[e.bim.ot] || [])
-        .map(([v, t]) => `<option value="${v}" ${wtCur === v ? 'selected' : ''}>${t}</option>`).join('')}</select></div>`;
+        .map(([v, t]) => `<option value="${v}" ${wtCur === v ? 'selected' : ''}>${t}</option>`).join('')
+        }${owCust.length ? '<optgroup label="내 기호 (창호저장)">' + owCust.map(n2 =>
+          `<option value="@${escapeHtml(n2)}" ${wtCur === '@' + n2 ? 'selected' : ''}>@${escapeHtml(n2)}</option>`).join('') + '</optgroup>' : ''}</select></div>`;
       rows += `<div style="display:flex;gap:6px;margin-top:2px;">
         <button class="miniBtn" id="pOwHinge" title="경첩(스윙 축)을 반대쪽 끝으로">경첩 반전</button>
         <button class="miniBtn" id="pOwFlip" title="열림 방향을 벽 반대쪽으로">안/밖 반전</button></div>`;
@@ -15140,6 +15268,7 @@ function applyDoc(d) {
   state.nextId = Math.max(d.nextId || 1, state.entities.reduce((m, e) => Math.max(m, e.id || 0), 0) + 1);
   state.blocks = d.blocks || {}; insertName = null;
   state.matlib = d.matlib || {};   // 재질 라이브러리 — 없으면 빈 것으로 (옛 도면 호환)
+  state.owlib = d.owlib || {};     // 커스텀 창호 기호 라이브러리
   // ★태양·날씨(시간·계절·운량·탁도)도 도면의 일부다. restore(undo)만 이걸 복원하고
   //   문서 저장/불러오기·공유 경로(applyDoc)는 빠뜨렸었다 — 흐린 오후로 저장해도 열면 맑음이 됐다.
   state.sun = d.sun || null;
@@ -15364,6 +15493,7 @@ function restoreLocal(d) {
   state.nextId = Math.max(d.nextId || 1, state.entities.reduce((m, e) => Math.max(m, e.id || 0), 0) + 1);
   state.blocks = d.blocks || {}; insertName = null;
   state.matlib = d.matlib || {};   // 재질 라이브러리 — 없으면 빈 것으로 (옛 도면 호환)
+  state.owlib = d.owlib || {};     // 커스텀 창호 기호 라이브러리
   if (d.view) state.view = d.view;
   setFileName(d.fileName || null, d.fileLoc === 'pc' ? null : (d.fileLoc || null)); // 핸들은 복원 불가 → 'pc' 표시는 내림
   state.selection.clear();
@@ -15448,7 +15578,7 @@ window.__CADTEST__ = {
   bimSolids, pushLitPoly, lineClipPoly, genSectionView, stairSolids, stairSteps, railingSolids, railingPath, cmdRailingTag, lightEmitters, lightGizmos, renderLightList, cmdSetAsLight, cmdUnsetLight, cmdLighting, cmdRaytrace, rtBuildScene, rtTrisByEntity, rtSyncCamera, rtGeoSig, rtSupported, rtPreview, rtFullRes, rtLightsChanged, litCacheSig, rtSetEnv, rtEnvWanted, cmdRtEnv, parseIES, iesCandelaAt, iesSummary, iesToTexture, iesFluxFactor, lightCandela, cmdIes, selectedLights, cmdRtDenoise, rtExposure, cmdExposure, RT_EXPOSURE, RT_EXPOSURE_DAY,
   vpIsPlan, vpPlanIndex, vpRect, vpRectCss, planCvRect, syncPlanCv, open3D, close3D, is3DActive, resize, worldToScreen, screenToWorld,
   rview, rviewFrame, rviewBuildScene, rviewSyncSun, rviewSig, cmdRendered,
-  MAT_PRESETS, MAT_ALIAS, matOf, matKey, matHex, matBoxUV, matGeo, matBuild, matTextures, matDrawTex, cmdMaterial, rtGeoSig, bimSolidColor, secHatchFor, computePatternSegs, owWt, OPENING_TYPES,
+  MAT_PRESETS, MAT_ALIAS, matOf, matKey, matHex, matBoxUV, matGeo, matBuild, matTextures, matDrawTex, cmdMaterial, rtGeoSig, bimSolidColor, secHatchFor, computePatternSegs, owWt, OPENING_TYPES, owSaveDef, owPlaced,
   runCommandInput, feedCmdArg,
   skyCloud, sunDirectIlluminanceClear, skyBlend, SKY_OVERCAST_E, SKY_OVERCAST_RGB,
   skyCloudMask, skySolve, skyCtxCompute, _skyFbm, SKY_CLOUD_TILE,
@@ -15514,7 +15644,7 @@ window.WEBCAD_API = {
   getDoc: () => ({
     name: currentFileName,
     data: { v: 1, entities: liveEnts(), layers: state.layers, currentLayer: state.currentLayer,
-            blocks: state.blocks, matlib: state.matlib, sun: state.sun, nextId: state.nextId, view: state.view, views: state.views,
+            blocks: state.blocks, matlib: state.matlib, owlib: state.owlib, sun: state.sun, nextId: state.nextId, view: state.view, views: state.views,
             levels: state.levels, curLv: state.curLv,
             lights: state.lights, nextLightId: state.nextLightId,
             sensors: state.sensors, nextSensorId: state.nextSensorId },
@@ -15522,7 +15652,7 @@ window.WEBCAD_API = {
   // 클라우드 도면 로드
   setDoc: (name, d) => {
     applyDoc({ entities: d.entities, layers: d.layers, currentLayer: d.currentLayer, nextId: d.nextId,
-               matlib: d.matlib, sun: d.sun,
+               matlib: d.matlib, owlib: d.owlib, sun: d.sun,
                lights: d.lights, nextLightId: d.nextLightId,
                sensors: d.sensors, nextSensorId: d.nextSensorId,
                blocks: d.blocks, view: d.view, views: d.views, levels: d.levels, curLv: d.curLv,
