@@ -5060,6 +5060,20 @@ function clickSection(w, isElev) {
   cmdOp = { name, step: 'p1' }; previewEnts = null;
   setPrompt((isElev ? '입면' : '단면') + ': 첫 점을 클릭하세요. (연속, Esc 종료)');
 }
+// 절단면 재료표시(KS 도면 해치) 자동 결정 — 레이어 secHatch 명시 > 레이어/개체 재질에서 유도 > 기본 사선.
+// 단면을 자를 때마다 일일이 해치를 그리지 않아도 재료 기호가 저절로 나오게 한다 (2026-07-25 사용자).
+const MAT_SECHATCH = { concrete: 'concrete', plaster: 'dots', wood: 'ansi31', brick: 'ansi31', stone: 'rubble',
+  tile: 'grid', metal: 'steel', steel: 'steel', asphalt: 'dots', marble: 'grid', paint: 'dots', fabric: 'dots' };
+function secHatchFor(eid) {
+  const src = state.entities.find(x => x.id === eid);
+  const ly = src && getLayer(src.layer);
+  const sh = ly && ly.secHatch;
+  if (sh === 'none') return null;
+  if (sh) return sh;
+  const mname = (src && src.mat) || (ly && ly.mat) || '';
+  const base = mname && matIsLib(mname) ? ((matLibGet(matLibName(mname)) || {}).base || '') : mname;
+  return MAT_SECHATCH[base] || 'ansi31';
+}
 function genSectionView(p1, u, nrm, lineLen, depth, isElev) {
   const solids = bimSolids();
   if (!solids.length) { logLine('  BIM 요소가 없습니다 — 먼저 wall/slab/column을 지정하세요.', 'warn'); return; }
@@ -5075,11 +5089,12 @@ function genSectionView(p1, u, nrm, lineLen, depth, isElev) {
     if (!isElev && dmin < -1e-6 && dmax > 1e-6) {
       // 절단됨: 선과 풋프린트의 교차 구간 → 사각형
       for (const [s0, s1] of lineClipPoly(p1, u, s.poly)) {
+        const hp = s.glass ? null : secHatchFor(s.eid); // ★새 탭 전환 전에 결정 — 이후엔 state 가 새 문서다
         if (s.zt) {
           // 경사 상단: 절단선 위 두 점의 상단 높이 → 사다리꼴
           const A = { x: p1.x + u.x * s0, y: p1.y + u.y * s0 }, B = { x: p1.x + u.x * s1, y: p1.y + u.y * s1 };
-          cuts.push({ s0, s1, z0: s.z0, z1: null, zA: solidTopZ(s, A.x, A.y), zB: solidTopZ(s, B.x, B.y), glass: s.glass });
-        } else cuts.push({ s0, s1, z0: s.z0, z1: s.z1, glass: s.glass });
+          cuts.push({ s0, s1, z0: s.z0, z1: null, zA: solidTopZ(s, A.x, A.y), zB: solidTopZ(s, B.x, B.y), glass: s.glass, hp });
+        } else cuts.push({ s0, s1, z0: s.z0, z1: s.z1, glass: s.glass, hp });
         smin = Math.min(smin, s0); smax = Math.max(smax, s1);
       }
     } else if (dmin > 1e-6 && dmin <= depth) {
@@ -5128,8 +5143,15 @@ function genSectionView(p1, u, nrm, lineLen, depth, isElev) {
       ? [[c.s0, c.z0], [c.s1, c.z0], [c.s1, c.zB], [c.s0, c.zA]]
       : [[c.s0, c.z0], [c.s1, c.z0], [c.s1, c.z1], [c.s0, c.z1]];
     addEntity({ type: 'LWPOLYLINE', layer: '절단', closed: true, points: pts, lineweight: 50 });
-    if (!c.glass) addEntity({ type: 'HATCH', layer: '절단', pattern: 'ansi31',
-      spacing: Math.max(60, (c.s1 - c.s0) / 3), boundary: { kind: 'poly', points: pts } });
+    if (!c.glass && c.hp) { // 재료표시: 레이어/재질에서 결정된 패턴 + 재료에 맞는 간격
+      const w2 = c.s1 - c.s0;
+      const sp2 = c.hp === 'insul' ? Math.max(40, Math.min(300, w2))          // 고리 지름 = 부재 두께
+        : c.hp === 'concrete' ? 90 : c.hp === 'rubble' ? 130
+        : (c.hp === 'ansi37' || c.hp === 'steel') ? 70 : c.hp === 'dots' ? 60
+        : Math.max(60, w2 / 3);
+      addEntity({ type: 'HATCH', layer: '절단', pattern: c.hp,
+        spacing: sp2, boundary: { kind: 'poly', points: pts } });
+    }
   }
   // 층 레벨선 + 레벨 라벨
   for (const lvv of srcLevels) {
@@ -10986,6 +11008,7 @@ const HATCH_PATTERNS = {
   ansi31: { ko: '사선(일반)' }, ansi37: { ko: '격자 사선' }, steel: { ko: '강재(이중 사선)' },
   grid: { ko: '격자(타일)' }, brick: { ko: '벽돌(조적)' }, concrete: { ko: '콘크리트' },
   dots: { ko: '점(모래·미장)' }, solid: { ko: '단색 채움' },
+  insul: { ko: '단열재(고리)' }, rubble: { ko: '잡석' }, xbox: { ko: '목구조재(X)' }, // KS 도면 재료표시 (단면 자동해치용)
 };
 let hatchPattern = 'ansi31';
 
@@ -11069,6 +11092,45 @@ function computePatternSegs(e) {
       for (let y = bb.ymin + sp / 2; y < bb.ymax; y += sp, row++)
         for (let x = bb.xmin + sp / 2 + (row % 2) * sp / 2; x < bb.xmax; x += sp)
           if (pointInBoundary(b, x, y)) dots.push([x, y]);
+      break;
+    }
+    case 'insul': { // 단열재 — 고리(원) 사슬. sp = 고리 지름 (보통 벽 두께에 맞춤)
+      const bb = boundaryBBox(b), d = Math.max(20, sp);
+      for (let x = bb.xmin + d / 2; x < bb.xmax + d / 2 - 1e-6; x += d) {
+        const cx = Math.min(x, bb.xmax - d / 2);
+        for (let y = bb.ymin; y < bb.ymax; y += d) {
+          const cy = y + d / 2; let prev = null;
+          for (let k = 0; k <= 12; k++) { // 원 고리 12각 근사
+            const a = k / 12 * 2 * Math.PI;
+            const px = cx + Math.cos(a) * d * 0.475, py = cy + Math.sin(a) * d * 0.475;
+            if (prev && pointInBoundary(b, px, py) && pointInBoundary(b, prev[0], prev[1])) segs.push([prev[0], prev[1], px, py]);
+            prev = [px, py];
+          }
+        }
+      }
+      break;
+    }
+    case 'rubble': { // 잡석 — 불규칙 돌덩이 윤곽 (결정적 의사난수)
+      const bb = boundaryBBox(b); let i = 0;
+      for (let y = bb.ymin; y < bb.ymax; y += sp) for (let x = bb.xmin; x < bb.xmax; x += sp) {
+        i++;
+        const h = Math.abs(Math.sin(i * 127.1) * 43758.5453) % 1;
+        const cx = x + sp / 2 + (h - 0.5) * sp * 0.35, cy = y + sp / 2 + ((h * 7.919 % 1) - 0.5) * sp * 0.35;
+        const r = sp * 0.3 * (0.7 + h * 0.5), nv = 5 + Math.floor(h * 3);
+        let prev = null;
+        for (let k = 0; k <= nv; k++) {
+          const a = k / nv * 2 * Math.PI + h * 6;
+          const rr = r * (0.72 + ((Math.sin(a * 3 + h * 9) + 1) / 2) * 0.5);
+          const px = cx + Math.cos(a) * rr, py = cy + Math.sin(a) * rr;
+          if (prev && pointInBoundary(b, px, py) && pointInBoundary(b, prev[0], prev[1])) segs.push([prev[0], prev[1], px, py]);
+          prev = [px, py];
+        }
+      }
+      break;
+    }
+    case 'xbox': { // 목구조재(각재) — 단면 사각에 대각 X (KS 재료표시)
+      const bb = boundaryBBox(b);
+      segs.push([bb.xmin, bb.ymin, bb.xmax, bb.ymax], [bb.xmin, bb.ymax, bb.xmax, bb.ymin]);
       break;
     }
     case 'solid': break;
@@ -12385,6 +12447,12 @@ function renderLayers() {
         <select class="lrole" title="건물화 역할 — 스케치를 건물로 바꿀 때 이 레이어 도형의 역할 (자동 = 이름·모양으로 판정)">
           ${LAYER_ROLE_OPTS.map(([v, t]) => `<option value="${v}" ${(l.role || '') === v ? 'selected' : ''}>${t}</option>`).join('')}
         </select>
+        <select class="lsec" title="단면 재료표시 — 단면(section)을 자르면 이 레이어 개체의 절단면에 자동으로 채워지는 KS 재료 해치 (자동 = 재질에서 유도)">
+          ${[['', '재료: 자동'], ['none', '해치 없음'], ['concrete', '콘크리트'], ['ansi31', '사선(벽돌·목재·지반)'], ['ansi37', '콘크리트블럭'], ['steel', '강재'], ['insul', '단열재'], ['rubble', '잡석'], ['xbox', '목구조재'], ['dots', '모르타르·모래'], ['grid', '타일'], ['solid', '단색']]
+            .map(([v, t]) => `<option value="${v}" ${(l.secHatch || '') === v ? 'selected' : ''}>${t}</option>`).join('')}
+        </select>
+       </div>
+       <div class="lrow2" onclick="event.stopPropagation()">
         <input class="ldh" type="number" min="0" step="50" placeholder="높이" value="${l.defH ?? ''}" title="기본 높이(mm) — 건물화 시 이 레이어 벽·기둥의 높이 (비우면 전체 기본 2400)">
         <input class="ldt" type="number" min="0" step="10" placeholder="두께" value="${l.defT ?? ''}" title="기본 두께(mm) — 건물화 시 이 레이어 벽의 두께 (비우면 전체 기본 200)">
        </div>`;
@@ -12429,6 +12497,9 @@ function renderLayers() {
     });
     div.querySelector('.lrole').addEventListener('change', (e) => {
       e.stopPropagation(); pushUndo(); l.role = e.target.value || undefined;
+    });
+    div.querySelector('.lsec').addEventListener('change', (e) => {
+      e.stopPropagation(); pushUndo(); l.secHatch = e.target.value || undefined;
     });
     div.querySelector('.ldh').addEventListener('change', (e) => {
       e.stopPropagation(); pushUndo();
@@ -15144,7 +15215,7 @@ window.__CADTEST__ = {
   bimSolids, pushLitPoly, lineClipPoly, genSectionView, stairSolids, stairSteps, railingSolids, railingPath, cmdRailingTag, lightEmitters, lightGizmos, renderLightList, cmdSetAsLight, cmdUnsetLight, cmdLighting, cmdRaytrace, rtBuildScene, rtTrisByEntity, rtSyncCamera, rtGeoSig, rtSupported, rtPreview, rtFullRes, rtLightsChanged, litCacheSig, rtSetEnv, rtEnvWanted, cmdRtEnv, parseIES, iesCandelaAt, iesSummary, iesToTexture, iesFluxFactor, lightCandela, cmdIes, selectedLights, cmdRtDenoise, rtExposure, cmdExposure, RT_EXPOSURE, RT_EXPOSURE_DAY,
   vpIsPlan, vpPlanIndex, vpRect, vpRectCss, planCvRect, syncPlanCv, open3D, close3D, is3DActive, resize, worldToScreen, screenToWorld,
   rview, rviewFrame, rviewBuildScene, rviewSyncSun, rviewSig, cmdRendered,
-  MAT_PRESETS, MAT_ALIAS, matOf, matKey, matHex, matBoxUV, matGeo, matBuild, matTextures, matDrawTex, cmdMaterial, rtGeoSig, bimSolidColor,
+  MAT_PRESETS, MAT_ALIAS, matOf, matKey, matHex, matBoxUV, matGeo, matBuild, matTextures, matDrawTex, cmdMaterial, rtGeoSig, bimSolidColor, secHatchFor, computePatternSegs,
   runCommandInput, feedCmdArg,
   skyCloud, sunDirectIlluminanceClear, skyBlend, SKY_OVERCAST_E, SKY_OVERCAST_RGB,
   skyCloudMask, skySolve, skyCtxCompute, _skyFbm, SKY_CLOUD_TILE,
@@ -15190,7 +15261,7 @@ window.WEBCAD_AI_BRIDGE = {
   state, pushUndo, addEntity, logLine, selectedEntities, ensureLayer,
   entityBBox, entityLength, polyArea,
   translateEntity, applyTransform, T_rotate, move3DEnt, gumRotate, meshSphere, meshCone,
-  runBoolean, isBoolable, bimSolids, matOf,
+  runBoolean, isBoolable, bimSolids,
   genSectionView,   // 입면/단면 자동 생성 (AI make_views 도구)
   renderLayers,     // 레이어 정리 후 패널 갱신 (AI organize_layers 도구)
   switchDoc, getCurDoc: () => curDoc, getDocName: () => currentFileName,   // 입면/단면은 새 탭에 생성 — 봇이 원본 탭으로 복귀할 때 사용

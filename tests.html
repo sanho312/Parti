@@ -2958,6 +2958,24 @@ function tests(){
         C.state.entities.length = b0;
         C.state.layers = C.state.layers.filter(x => x.name !== '자유벽층');
       }
+      { // 단면 재료표시(secHatch) — 레이어 명시·재질 유도·새 패턴 3종
+        C.state.layers.push({ name: '단열층', color: '#ffffff', visible: true, secHatch: 'insul' });
+        C.state.layers.push({ name: '콘벽층', color: '#ffffff', visible: true, mat: 'concrete' });
+        const se1 = { id: 999905, type: 'LINE', x1: 0, y1: 0, x2: 100, y2: 0, layer: '단열층' };
+        const se2 = { id: 999906, type: 'LINE', x1: 0, y1: 0, x2: 100, y2: 0, layer: '콘벽층' };
+        C.state.entities.push(se1, se2);
+        eqi(C.secHatchFor(999905), 'insul', '★단면재료: 레이어 명시(단열재) 최우선');
+        eqi(C.secHatchFor(999906), 'concrete', '★단면재료 자동: 레이어 재질(콘크리트)에서 유도');
+        se2.mat = 'metal';
+        eqi(C.secHatchFor(999906), 'steel', '  개체 재질(금속)이 레이어 재질보다 우선 → 강재 해치');
+        const bb2 = { kind: 'poly', points: [[0, 0], [200, 0], [200, 2400], [0, 2400]] };
+        const mk = (p2, sp2) => C.computePatternSegs({ pattern: p2, spacing: sp2, boundary: bb2 });
+        ok(mk('insul', 150).segs.length > 10, '★단열재 고리 패턴 세그먼트 생성');
+        ok(mk('rubble', 130).segs.length > 10, '★잡석 패턴 세그먼트 생성');
+        ok(mk('xbox', 100).segs.length >= 2, '★목구조재 X 패턴 생성');
+        C.state.entities = C.state.entities.filter(x => x !== se1 && x !== se2);
+        C.state.layers = C.state.layers.filter(x => x.name !== '단열층' && x.name !== '콘벽층');
+      }
       { // B1 — 인쇄 제외(noplot): 화면엔 보이되 SVG/PDF 출력에서 빠진다
         C.state.layers.push({ name: '보조출력층', color: '#ffffff', visible: true, noplot: true });
         const pe = { id: 999903, type: 'LINE', x1: 77771, y1: 0, x2: 77772, y2: 100, layer: '보조출력층' };
