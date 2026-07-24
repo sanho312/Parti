@@ -367,12 +367,19 @@
   // 개발자(소유자) 계정은 항상 최고 플랜으로 고정 — 프로 기능 패치 적용 여부를 바로 확인하기 위함.
   // (클라이언트 측 표시/게이팅 전용. 서버 강제는 my_plan RPC 가 담당.)
   const OWNER_EMAILS = ['ghkdtksgh3430@gmail.com'];
+  const OWNER_USERNAMES = ['sanho0312']; // 개발자 계정 아이디(username) — 이메일이 달라도 이 아이디면 소유자
   const TOP_PLAN = 'pro'; // 현재 최상위 티어
+  function isOwner(u) {
+    if (!u) return false;
+    const email = String(u.email || '').toLowerCase();
+    const uname = String((u.user_metadata && u.user_metadata.username) || '').toLowerCase();
+    return OWNER_EMAILS.includes(email) || OWNER_USERNAMES.includes(uname);
+  }
   async function loadPlan() {
     try {
       const { data, error } = await sb.rpc('my_plan');
       if (!error && data) plan = data;
-      if (user && OWNER_EMAILS.includes(String(user.email || '').toLowerCase())) plan = TOP_PLAN;
+      if (isOwner(user)) plan = TOP_PLAN; // 소유자(이메일 또는 아이디 sanho0312)는 항상 최고 플랜
       if (plan === 'pro') {
         const un = document.getElementById('userName');
         if (un && !un.querySelector('.planBadge')) un.insertAdjacentHTML('afterend', '<span class="planBadge">PRO</span>');
