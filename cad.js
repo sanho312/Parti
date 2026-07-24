@@ -2586,6 +2586,23 @@ function cmdBimClear() {
   logLine(`  ✔ BIM 속성 해제 ${sel.length}개`, 'ok');
   renderProps(); draw();
 }
+// ─── 창호 표시기호 (KS) — 개구부 유형 사전 ───
+// bim.wt(유형)·hinge(경첩: 0=x1쪽 끝, 1=x2쪽)·flip(0=기본 열림 방향, 1=반대쪽) — DXF·클라우드·실시간 자동 왕복
+const OPENING_TYPES = {
+  door: [['swing', '여닫이문'], ['dswing', '쌍여닫이문'], ['slide', '미서기문'], ['pocket', '미닫이문'],
+         ['fold', '접이문'], ['dact', '자재문'], ['rev', '회전문']],
+  window: [['fix', '붙박이창'], ['wswing', '여닫이창'], ['wslide', '미서기창'], ['hung', '오르내리창'],
+           ['shutter', '셔터'], ['mesh', '망사창']],
+};
+const owTypeKo = (wt) => { for (const g of Object.values(OPENING_TYPES)) for (const [v, t] of g) if (v === wt) return t; return wt || ''; };
+// 개구부의 유형 결정: 개체 지정 > 레이어 기본(defWt, 같은 계열만) > 기본(여닫이문/붙박이창)
+function owWt(e) {
+  if (e.bim && e.bim.wt) return e.bim.wt;
+  const ly = getLayer(e.layer);
+  const fam = OPENING_TYPES[e.bim.ot] || [];
+  if (ly && ly.defWt && fam.some(([v]) => v === ly.defWt)) return ly.defWt;
+  return e.bim.ot === 'door' ? 'swing' : 'fix';
+}
 // 문/창: 벽 선 위 클릭 → 폭 입력 → 벽 방향의 개구부 세그먼트 생성
 function clickOpening(w, rawW, ot) {
   const hit = pick(w, rawW);
@@ -2632,21 +2649,104 @@ function drawBimOverlay(e) {
     }
     ctx.stroke();
   } else if (k === 'opening' && e.type === 'LINE') {
-    // 벽 밴드를 끊는 표시: 배경색 밴드 + 주황 심볼
+    // 창호 표시기호(KS) — 유형(wt)별 평면 기호. 벽 밴드를 끊는 배경 밴드는 공통.
     const a = worldToScreen(e.x1, e.y1), b = worldToScreen(e.x2, e.y2);
     ctx.lineCap = 'butt';
     ctx.strokeStyle = getCSS('--canvas-bg') || '#0a1020';
     ctx.lineWidth = Math.max(2, (e.bim.t || 200) * sc + 2);
     ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
     ctx.strokeStyle = '#ff9f0a'; ctx.globalAlpha = 0.9;
-    ctx.lineWidth = Math.max(1.5, (e.bim.ot === 'door' ? 3 : 2));
-    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
-    if (e.bim.ot === 'window') { // 창: 이중선
-      const dx = b.x - a.x, dy = b.y - a.y, L2 = Math.hypot(dx, dy) || 1;
-      const nx = -dy / L2 * 3, ny = dx / L2 * 3;
-      ctx.beginPath(); ctx.moveTo(a.x + nx, a.y + ny); ctx.lineTo(b.x + nx, b.y + ny);
-      ctx.moveTo(a.x - nx, a.y - ny); ctx.lineTo(b.x - nx, b.y - ny); ctx.stroke();
+    ctx.lineWidth = Math.max(1.5, (e.bim.ot === 'door' ? 2.2 : 1.6));
+    const wt = owWt(e);
+    // 월드 기하: P1→P2, 진행 u, 법선 n(flip 으로 반전), 경첩 H(hinge: 0=P1, 1=P2)
+    const W = Math.hypot(e.x2 - e.x1, e.y2 - e.y1) || 1;
+    const ux2 = (e.x2 - e.x1) / W, uy2 = (e.y2 - e.y1) / W;
+    const fs = e.bim.flip ? -1 : 1;
+    const nx2 = -uy2 * fs, ny2 = ux2 * fs;
+    const P1 = [e.x1, e.y1], P2 = [e.x2, e.y2];
+    const H = e.bim.hinge ? P2 : P1, F = e.bim.hinge ? P1 : P2;
+    const S = (p) => worldToScreen(p[0], p[1]);
+    const wline = (p, q) => { const s1 = S(p), s2 = S(q); ctx.moveTo(s1.x, s1.y); ctx.lineTo(s2.x, s2.y); };
+    // 경첩 H 기준, F 방향에서 n 쪽으로 deg° 스윙하는 호 (월드 폴리라인 근사 — 화면 Y 반전 무관)
+    const warc = (h, f, deg, rad) => {
+      const r = rad != null ? rad : Math.hypot(f[0] - h[0], f[1] - h[1]);
+      const a0 = Math.atan2(f[1] - h[1], f[0] - h[0]);
+      const sgn = fs * (e.bim.hinge ? -1 : 1); // 스윙 방향: n 쪽으로
+      for (let i = 0; i <= 16; i++) {
+        const t2 = a0 + sgn * (deg * Math.PI / 180) * i / 16;
+        const s2 = S([h[0] + Math.cos(t2) * r, h[1] + Math.sin(t2) * r]);
+        i ? ctx.lineTo(s2.x, s2.y) : ctx.moveTo(s2.x, s2.y);
+      }
+    };
+    const dash = (on) => ctx.setLineDash(on ? [5, 4] : []);
+    const P = (p, du, dn) => [p[0] + ux2 * du + nx2 * dn, p[1] + uy2 * du + ny2 * dn]; // u/n 오프셋 헬퍼
+    const off = Math.min((e.bim.t || 200) / 4, 60);
+    const arrow = (p, q) => { // 화면 화살표 (q = 촉)
+      const s1 = S(p), s2 = S(q), dxs = s2.x - s1.x, dys = s2.y - s1.y, Ls = Math.hypot(dxs, dys) || 1;
+      const ax2 = dxs / Ls, ay2 = dys / Ls;
+      ctx.moveTo(s1.x, s1.y); ctx.lineTo(s2.x, s2.y);
+      ctx.moveTo(s2.x - ax2 * 6 - ay2 * 3.5, s2.y - ay2 * 6 + ax2 * 3.5); ctx.lineTo(s2.x, s2.y);
+      ctx.lineTo(s2.x - ax2 * 6 + ay2 * 3.5, s2.y - ay2 * 6 - ax2 * 3.5);
+    };
+    ctx.beginPath();
+    const hs = e.bim.hinge ? -1 : 1; // H 에서 F 쪽 진행 부호
+    if (wt === 'swing') {            // 여닫이: 문짝(수직) + 1/4 원 스윙
+      wline(H, P(H, 0, W)); warc(H, F, 90);
+    } else if (wt === 'dswing') {    // 쌍여닫이: 반반 두 짝
+      const M = P(P1, W / 2, 0);
+      wline(P1, P(P1, 0, W / 2)); warc(P1, M, e.bim.flip ? -90 : 90, W / 2);
+      wline(P2, P(P2, 0, W / 2));
+      { const a0 = Math.atan2(M[1] - P2[1], M[0] - P2[0]); const sg = e.bim.flip ? 1 : -1;
+        for (let i = 0; i <= 16; i++) { const t2 = a0 + sg * (Math.PI / 2) * i / 16; const s2 = S([P2[0] + Math.cos(t2) * W / 2, P2[1] + Math.sin(t2) * W / 2]); i ? ctx.lineTo(s2.x, s2.y) : ctx.moveTo(s2.x, s2.y); } }
+    } else if (wt === 'slide' || wt === 'wslide') { // 미서기: 어긋난 두 짝(+문이면 화살표)
+      wline(P(P1, 0, off), P(P1, W * 0.58, off));
+      wline(P(P2, 0, -off), P(P2, -W * 0.58, -off));
+      if (wt === 'slide') { arrow(P(P1, W * 0.2, off * 2.2), P(P1, W * 0.45, off * 2.2)); arrow(P(P2, -W * 0.2, -off * 2.2), P(P2, -W * 0.45, -off * 2.2)); }
+    } else if (wt === 'pocket') {    // 미닫이: 문짝 + 벽 속 점선
+      wline(H, P(H, hs * W * 0.65, 0));
+      ctx.stroke(); ctx.beginPath(); dash(true);
+      wline(P(H, hs * W * 0.65, 0), F);
+      ctx.stroke(); dash(false); ctx.beginPath();
+      arrow(P(H, hs * W * 0.5, off * 2), P(H, hs * W * 0.2, off * 2));
+    } else if (wt === 'fold') {      // 접이문: 지그재그
+      const amp = Math.min((e.bim.t || 200) * 0.9, W / 5);
+      const s0 = S(P1); ctx.moveTo(s0.x, s0.y);
+      for (let i = 1; i <= 4; i++) { const s2 = S(P(P1, W * (i - 0.5) / 4, amp)); ctx.lineTo(s2.x, s2.y); const s3 = S(P(P1, W * i / 4, 0)); ctx.lineTo(s3.x, s3.y); }
+    } else if (wt === 'dact') {      // 자재문: 양방향 호 (반대쪽은 점선)
+      wline(H, P(H, 0, W)); warc(H, F, 90);
+      ctx.stroke(); ctx.beginPath(); dash(true);
+      wline(H, P(H, 0, -W));
+      { const a0 = Math.atan2(F[1] - H[1], F[0] - H[0]); const sg = -fs * (e.bim.hinge ? -1 : 1);
+        for (let i = 0; i <= 16; i++) { const t2 = a0 + sg * (Math.PI / 2) * i / 16; const s2 = S([H[0] + Math.cos(t2) * W, H[1] + Math.sin(t2) * W]); i ? ctx.lineTo(s2.x, s2.y) : ctx.moveTo(s2.x, s2.y); } }
+      ctx.stroke(); dash(false); ctx.beginPath();
+    } else if (wt === 'rev') {       // 회전문: 원 + X 날개
+      const M = P(P1, W / 2, 0);
+      for (let i = 0; i <= 24; i++) { const t2 = i / 24 * Math.PI * 2; const s2 = S([M[0] + Math.cos(t2) * W / 2, M[1] + Math.sin(t2) * W / 2]); i ? ctx.lineTo(s2.x, s2.y) : ctx.moveTo(s2.x, s2.y); }
+      const d = W / 2 * 0.72;
+      wline([M[0] + (ux2 + nx2) * d * 0.707, M[1] + (uy2 + ny2) * d * 0.707], [M[0] - (ux2 + nx2) * d * 0.707, M[1] - (uy2 + ny2) * d * 0.707]);
+      wline([M[0] + (ux2 - nx2) * d * 0.707, M[1] + (uy2 - ny2) * d * 0.707], [M[0] - (ux2 - nx2) * d * 0.707, M[1] - (uy2 - ny2) * d * 0.707]);
+    } else if (wt === 'wswing') {    // 여닫이창: 중심선 + 창짝 + 점선 호
+      wline(P1, P2);
+      const E = [H[0] + Math.cos(Math.atan2(F[1] - H[1], F[0] - H[0]) + fs * (e.bim.hinge ? -1 : 1) * 0.6) * W * 0.92,
+                 H[1] + Math.sin(Math.atan2(F[1] - H[1], F[0] - H[0]) + fs * (e.bim.hinge ? -1 : 1) * 0.6) * W * 0.92];
+      wline(H, E);
+      ctx.stroke(); ctx.beginPath(); dash(true); warc(H, F, 34, W * 0.92); ctx.stroke(); dash(false); ctx.beginPath();
+    } else if (wt === 'hung') {      // 오르내리창: 이중선 + ↑ 표시
+      wline(P(P1, 0, off), P(P2, 0, off)); wline(P(P1, 0, -off), P(P2, 0, -off));
+      arrow(P(P1, W / 2, off * 1.5), P(P1, W / 2 + Math.min(200, W / 4), off * 1.5));
+    } else if (wt === 'shutter') {   // 셔터: 이중선 + 셔터함(사각)
+      wline(P(P1, 0, off), P(P2, 0, off)); wline(P(P1, 0, -off), P(P2, 0, -off));
+      const bx = Math.min((e.bim.t || 200), 150);
+      const c1 = P(H, 0, bx / 2), c2 = P(H, hs * bx, bx / 2), c3 = P(H, hs * bx, -bx / 2), c4 = P(H, 0, -bx / 2);
+      wline(c1, c2); wline(c2, c3); wline(c3, c4); wline(c4, c1);
+    } else if (wt === 'mesh') {      // 망사창: 이중선 + 중앙 점선
+      wline(P(P1, 0, off), P(P2, 0, off)); wline(P(P1, 0, -off), P(P2, 0, -off));
+      ctx.stroke(); ctx.beginPath(); dash(true); wline(P1, P2); ctx.stroke(); dash(false); ctx.beginPath();
+    } else {                         // fix(붙박이창) 기본: 이중선
+      wline(P1, P2);
+      wline(P(P1, 0, off), P(P2, 0, off)); wline(P(P1, 0, -off), P(P2, 0, -off));
     }
+    ctx.stroke(); dash(false);
   } else if (k === 'slab' || k === 'roof') {
     ctx.globalAlpha = 0.06; ctx.fillStyle = entityColor(e);
     ctx.beginPath();
@@ -2903,6 +3003,7 @@ function bimSolids() {
         if (sill > 0) band(c.s0, c.s1, base, base + sill, wallCol);            // 창 아래
         if (base + h > base + sill + oh) band(c.s0, c.s1, base + sill + oh, base + h, wallCol); // 인방(상부)
         if (c.o.bim.ot === 'window') band(c.s0 + 10, c.s1 - 10, base + sill, base + sill + oh, '#7ec8ff', true, c.o.id); // 유리
+        if (!wz) pushOpening3D(solids, c, { x1, y1, ux, uy, t, base });   // 창호 3D — 문짝·창틀 (유형별)
         cur = c.s1;
       }
       band(cur, L, base, base + h, wallCol);
@@ -2914,6 +3015,61 @@ function bimSolids() {
   for (const e of state.entities) if (e.lightId) litIds.add(e.id);
   if (litIds.size) for (const s of solids) if (litIds.has(s.eid)) s.lit = 1;
   return solids;
+}
+// ─── 창호 3D — 문짝(열림 표현)·창틀 프레임. 유형(wt)별 단순 프리즘 몇 개 (3단계) ───
+function pushOpening3D(solids, c, g) {
+  const o = c.o, wt = owWt(o);
+  const sill = o.bim.sill || 0, oh = o.bim.h || 2100;
+  const z0 = g.base + sill, z1 = g.base + sill + oh;
+  const Wd = c.s1 - c.s0; if (Wd < 60) return;
+  const at = (s, d) => [g.x1 + g.ux * s - g.uy * d, g.y1 + g.uy * s + g.ux * d];
+  const fs = o.bim.flip ? -1 : 1;
+  const LEAF = '#a9825a', FRAME = '#8a8f98';
+  const plank = (p1, p2, zz0, zz1, col, th) => { // 두 점을 잇는 두께 th 판
+    const dx = p2[0] - p1[0], dy = p2[1] - p1[1], L2 = Math.hypot(dx, dy); if (L2 < 1) return;
+    const nx = -dy / L2 * (th || 40) / 2, ny = dx / L2 * (th || 40) / 2;
+    solids.push({ poly: [[p1[0] + nx, p1[1] + ny], [p2[0] + nx, p2[1] + ny], [p2[0] - nx, p2[1] - ny], [p1[0] - nx, p1[1] - ny]],
+      z0: zz0, z1: zz1, color: col, eid: o.id });
+  };
+  if (o.bim.ot === 'door') {
+    // 경첩 끝의 세그먼트 s 위치 → c.s0/s1 어느 쪽인지 (개구선과 세그먼트 방향이 반대일 수 있음)
+    const sO1 = (o.x1 - g.x1) * g.ux + (o.y1 - g.y1) * g.uy;
+    const sO2 = (o.x2 - g.x1) * g.ux + (o.y2 - g.y1) * g.uy;
+    const hingeS = o.bim.hinge ? sO2 : sO1;
+    const hAtS0 = Math.abs(hingeS - c.s0) <= Math.abs(hingeS - c.s1);
+    const Hs = hAtS0 ? c.s0 : c.s1, dir = hAtS0 ? 1 : -1;
+    const H = at(Hs, 0);
+    const swingEnd = (len) => { // 경첩에서 열림각 ~30° 로 뻗은 문짝 끝
+      const a0 = Math.atan2(g.uy * dir, g.ux * dir) + fs * dir * 0.5;
+      return [H[0] + Math.cos(a0) * len, H[1] + Math.sin(a0) * len];
+    };
+    if (wt === 'swing' || wt === 'dact') plank(H, swingEnd(Wd), z0, z1, LEAF);
+    else if (wt === 'dswing') {
+      plank(H, swingEnd(Wd / 2), z0, z1, LEAF);
+      const F2 = at(hAtS0 ? c.s1 : c.s0, 0);
+      const a1 = Math.atan2(g.uy * -dir, g.ux * -dir) - fs * dir * 0.5;
+      plank(F2, [F2[0] + Math.cos(a1) * Wd / 2, F2[1] + Math.sin(a1) * Wd / 2], z0, z1, LEAF);
+    } else if (wt === 'slide') {
+      const off = Math.min(g.t / 6, 40);
+      plank(at(c.s0, off), at(c.s0 + Wd * 0.55, off), z0, z1, LEAF);
+      plank(at(c.s1, -off), at(c.s1 - Wd * 0.55, -off), z0, z1, LEAF);
+    } else if (wt === 'pocket') plank(at(Hs, 0), at(Hs + dir * Wd * 0.5, 0), z0, z1, LEAF); // 반쯤 열린 미닫이
+    else if (wt === 'fold') {
+      const M = at((c.s0 + c.s1) / 2, fs * Math.min(g.t, Wd / 4));
+      plank(at(c.s0, 0), M, z0, z1, LEAF); plank(M, at(c.s1, 0), z0, z1, LEAF);
+    } else if (wt === 'rev') {
+      const sm = (c.s0 + c.s1) / 2, r = Wd * 0.35;
+      plank(at(sm - r, r), at(sm + r, -r), z0, z1, LEAF); plank(at(sm - r, -r), at(sm + r, r), z0, z1, LEAF);
+    } else plank(H, swingEnd(Wd), z0, z1, LEAF); // 알 수 없는 유형 = 여닫이
+  } else { // 창: 틀(4변) + 유형별 부재
+    plank(at(c.s0 + 10, 0), at(c.s1 - 10, 0), z0, z0 + 50, FRAME);          // 하부 레일
+    plank(at(c.s0 + 10, 0), at(c.s1 - 10, 0), z1 - 50, z1, FRAME);          // 상부 레일
+    plank(at(c.s0 + 10, 0), at(c.s0 + 55, 0), z0, z1, FRAME);               // 좌 멀리언
+    plank(at(c.s1 - 55, 0), at(c.s1 - 10, 0), z0, z1, FRAME);               // 우 멀리언
+    if (wt === 'wslide' || wt === 'mesh') plank(at((c.s0 + c.s1) / 2 - 22, 0), at((c.s0 + c.s1) / 2 + 22, 0), z0, z1, FRAME); // 중앙 세로대
+    if (wt === 'hung') plank(at(c.s0 + 10, 0), at(c.s1 - 10, 0), (z0 + z1) / 2 - 22, (z0 + z1) / 2 + 22, FRAME);             // 중앙 가로대
+    if (wt === 'shutter') for (let z = z0 + 200; z < z1 - 100; z += 300) plank(at(c.s0 + 10, 0), at(c.s1 - 10, 0), z - 20, z + 20, FRAME); // 슬랫
+  }
 }
 // 벽 경로의 정점별 바닥 높이 — 표면 위 곡선(zs) / 3D 선(z1,z2)이면 배열, 평면 도형이면 null(예전 동작)
 function wallBaseZs(w) {
@@ -5114,6 +5270,30 @@ function genSectionView(p1, u, nrm, lineLen, depth, isElev) {
       smin = Math.min(smin, ps0); smax = Math.max(smax, ps1);
     }
   }
+  // 창호 입면 기호 수집 (2단계) — 바라보는 쪽(depth 안) 개구부의 유형 기호. ★새 탭 전환 전에 원본 state 에서.
+  const owSyms = [];
+  for (const o of state.entities) {
+    if (!o.bim || o.bim.kind !== 'opening' || o.type !== 'LINE') continue;
+    const lyO = getLayer(o.layer); if (lyO && !lyO.visible) continue;
+    const mx = (o.x1 + o.x2) / 2, my = (o.y1 + o.y2) / 2;
+    const d = (mx - p1.x) * nrm.x + (my - p1.y) * nrm.y;
+    if (!(d > 1e-6 && d <= depth)) continue;
+    const sA = (o.x1 - p1.x) * u.x + (o.y1 - p1.y) * u.y;
+    const sB = (o.x2 - p1.x) * u.x + (o.y2 - p1.y) * u.y;
+    // 호스트 벽의 base (개구 중점에 근접한 벽) — 층이 있는 모델에서 기호 높이가 맞도록
+    let baseZ = 0;
+    for (const wE of state.entities) {
+      if (!wE.bim || wE.bim.kind !== 'wall' || wE.type !== 'LINE') continue;
+      const ddx = wE.x2 - wE.x1, ddy = wE.y2 - wE.y1, LL2 = Math.hypot(ddx, ddy) || 1;
+      const tt = ((mx - wE.x1) * ddx + (my - wE.y1) * ddy) / (LL2 * LL2);
+      if (tt < -0.05 || tt > 1.05) continue;
+      if (Math.hypot(mx - (wE.x1 + ddx * tt), my - (wE.y1 + ddy * tt)) <= (wE.bim.t || 200)) { baseZ = wE.bim.base || 0; break; }
+    }
+    const sillO = o.bim.sill || 0, ohO = o.bim.h || 2100;
+    owSyms.push({ s0: Math.min(sA, sB), s1: Math.max(sA, sB), z0: baseZ + sillO, z1: baseZ + sillO + ohO,
+      wt: owWt(o), ot: o.bim.ot, flip: !!o.bim.flip, hinge: (o.bim.hinge ? sB : sA) <= (sA + sB) / 2 ? 0 : 1, d });
+    smin = Math.min(smin, Math.min(sA, sB)); smax = Math.max(smax, Math.max(sA, sB));
+  }
   if (!cuts.length && !projs.length) {
     logLine('  이 위치에서는 절단/투영되는 BIM 요소가 없습니다. 선 위치와 방향을 확인하세요.', 'warn'); return;
   }
@@ -5135,6 +5315,40 @@ function genSectionView(p1, u, nrm, lineLen, depth, isElev) {
     } else {
       addEntity({ type: 'LWPOLYLINE', layer: p.glass ? '유리' : '투영', closed: true,
         points: [[p.s0, p.z0], [p.s1, p.z0], [p.s1, p.z1], [p.s0, p.z1]] });
+    }
+  }
+  // 창호 입면 기호 발행 — '창호' 레이어 (KS: 실선=밖여닫이, 점선=안여닫이)
+  if (owSyms.length) {
+    ensureLayer('창호', '#e0a33a');
+    const ln = (x1, y1, x2, y2, lt) => addEntity({ type: 'LINE', layer: '창호', x1, y1, x2, y2, ...(lt ? { linetype: lt } : {}) });
+    for (const ss of owSyms) {
+      const W2 = ss.s1 - ss.s0, sm = (ss.s0 + ss.s1) / 2, zm = (ss.z0 + ss.z1) / 2;
+      addEntity({ type: 'LWPOLYLINE', layer: '창호', closed: true, points: [[ss.s0, ss.z0], [ss.s1, ss.z0], [ss.s1, ss.z1], [ss.s0, ss.z1]] });
+      const dashLt = ss.flip ? 'dashed' : undefined; // 안여닫이 = 점선
+      const hE = ss.hinge ? ss.s1 : ss.s0, oE = ss.hinge ? ss.s0 : ss.s1; // 경첩 변 / 손잡이 변
+      const harrow = (x1, x2, z) => { ln(x1, z, x2, z); const ah = Math.min(W2 * 0.08, 120), dr = x2 > x1 ? 1 : -1; ln(x2 - dr * ah, z + ah * 0.6, x2, z); ln(x2 - dr * ah, z - ah * 0.6, x2, z); };
+      const varrow = (s, z1a, z2a) => { ln(s, z1a, s, z2a); const ah = Math.min((ss.z1 - ss.z0) * 0.08, 120), dr = z2a > z1a ? 1 : -1; ln(s - ah * 0.6, z2a - dr * ah, s, z2a); ln(s + ah * 0.6, z2a - dr * ah, s, z2a); };
+      switch (ss.wt) {
+        case 'swing': case 'dact': case 'wswing':
+          ln(hE, ss.z0, oE, zm, dashLt); ln(hE, ss.z1, oE, zm, dashLt); break;
+        case 'dswing':
+          ln(ss.s0, ss.z0, sm, zm); ln(ss.s0, ss.z1, sm, zm); ln(ss.s1, ss.z0, sm, zm); ln(ss.s1, ss.z1, sm, zm); break;
+        case 'slide': case 'wslide':
+          ln(sm, ss.z0, sm, ss.z1); harrow(ss.s0 + W2 * 0.15, sm - W2 * 0.08, zm); break;
+        case 'hung':
+          ln(ss.s0, zm, ss.s1, zm); varrow(sm, zm - (zm - ss.z0) * 0.5, ss.z0 + (ss.z1 - ss.z0) * 0.85); break;
+        case 'shutter':
+          for (let z = ss.z0 + 300; z < ss.z1 - 100; z += 300) ln(ss.s0, z, ss.s1, z); break;
+        case 'fold':
+          ln(ss.s0 + W2 / 4, ss.z0, ss.s0 + W2 / 4, ss.z1); ln(sm, ss.z0, sm, ss.z1); ln(ss.s0 + W2 * 3 / 4, ss.z0, ss.s0 + W2 * 3 / 4, ss.z1); break;
+        case 'pocket':
+          harrow(ss.s0 + W2 * 0.2, ss.s1 - W2 * 0.2, zm); break;
+        case 'rev':
+          ln(ss.s0, ss.z0, ss.s1, ss.z1); ln(ss.s0, ss.z1, ss.s1, ss.z0); break;
+        case 'mesh':
+          ln(ss.s0, ss.z0, ss.s1, ss.z1, 'dashed'); ln(ss.s0, ss.z1, ss.s1, ss.z0, 'dashed'); break;
+        // fix: 사각 외곽만
+      }
     }
   }
   // 절단(외곽 + 해치)
@@ -12455,6 +12669,11 @@ function renderLayers() {
        <div class="lrow2" onclick="event.stopPropagation()">
         <input class="ldh" type="number" min="0" step="50" placeholder="높이" value="${l.defH ?? ''}" title="기본 높이(mm) — 건물화 시 이 레이어 벽·기둥의 높이 (비우면 전체 기본 2400)">
         <input class="ldt" type="number" min="0" step="10" placeholder="두께" value="${l.defT ?? ''}" title="기본 두께(mm) — 건물화 시 이 레이어 벽의 두께 (비우면 전체 기본 200)">
+        <select class="lwt" title="기본 창호 — 이 레이어에 만드는 문/창의 표시기호 유형 (개체에 직접 지정한 유형이 우선)">
+          <option value="">창호: 자동</option>
+          <optgroup label="문">${OPENING_TYPES.door.map(([v, t]) => `<option value="${v}" ${l.defWt === v ? 'selected' : ''}>${t}</option>`).join('')}</optgroup>
+          <optgroup label="창">${OPENING_TYPES.window.map(([v, t]) => `<option value="${v}" ${l.defWt === v ? 'selected' : ''}>${t}</option>`).join('')}</optgroup>
+        </select>
        </div>`;
     div.addEventListener('contextmenu', (e) => { // 우클릭: 선택한 객체를 이 레이어로 이동 (라이노식)
       e.preventDefault(); e.stopPropagation();
@@ -12500,6 +12719,9 @@ function renderLayers() {
     });
     div.querySelector('.lsec').addEventListener('change', (e) => {
       e.stopPropagation(); pushUndo(); l.secHatch = e.target.value || undefined;
+    });
+    div.querySelector('.lwt').addEventListener('change', (e) => {
+      e.stopPropagation(); pushUndo(); l.defWt = e.target.value || undefined; draw(); // wt 미지정 개구부 기호가 즉시 바뀜
     });
     div.querySelector('.ldh').addEventListener('change', (e) => {
       e.stopPropagation(); pushUndo();
@@ -12872,6 +13094,14 @@ function renderProps() {
   if (e.bim) {
     const kindKo = { wall: '벽', slab: '슬래브', column: '기둥', stair: '계단', roof: '지붕', railing: '난간', opening: (e.bim.ot === 'door' ? '문' : '창') }[e.bim.kind];
     rows += `<div class="row" style="margin-top:8px;"><label style="color:var(--accent-text);">BIM</label><span style="font-weight:590;">${kindKo}</span></div>`;
+    if (e.bim.kind === 'opening') { // 창호 표시기호: 유형 + 경첩/열림 방향
+      const wtCur = owWt(e);
+      rows += `<div class="row"><label>창호</label><select id="pOwt">${(OPENING_TYPES[e.bim.ot] || [])
+        .map(([v, t]) => `<option value="${v}" ${wtCur === v ? 'selected' : ''}>${t}</option>`).join('')}</select></div>`;
+      rows += `<div style="display:flex;gap:6px;margin-top:2px;">
+        <button class="miniBtn" id="pOwHinge" title="경첩(스윙 축)을 반대쪽 끝으로">경첩 반전</button>
+        <button class="miniBtn" id="pOwFlip" title="열림 방향을 벽 반대쪽으로">안/밖 반전</button></div>`;
+    }
     for (const [k, lab] of (BIM_FIELDS[e.bim.kind] || []))
       rows += `<div class="row"><label>${lab}</label><input type="number" step="any" data-bk="${k}" value="${e.bim[k] != null ? e.bim[k] : 0}"></div>`;
     rows += `<button class="miniBtn" id="pBimClr1" style="margin-top:2px;">BIM 해제</button>`;
@@ -12894,6 +13124,9 @@ function renderProps() {
   }));
   wireLightProps(body);
   wireMatProp(body, [e]);   // 재질 — 다중 선택과 같은 코드
+  document.getElementById('pOwt')?.addEventListener('change', (ev) => { pushUndo(); e.bim.wt = ev.target.value; propRefresh(); logLine(`  창호 유형 → ${owTypeKo(e.bim.wt)}`, 'info'); });
+  document.getElementById('pOwHinge')?.addEventListener('click', () => { pushUndo(); e.bim.hinge = e.bim.hinge ? 0 : 1; propRefresh(); });
+  document.getElementById('pOwFlip')?.addEventListener('click', () => { pushUndo(); e.bim.flip = e.bim.flip ? 0 : 1; propRefresh(); });
   document.getElementById('pBimClr1')?.addEventListener('click', cmdBimClear);
   document.getElementById('pBimWall1')?.addEventListener('click', cmdWallTag);
   document.getElementById('pBimSlab1')?.addEventListener('click', cmdSlabTag);
@@ -15215,7 +15448,7 @@ window.__CADTEST__ = {
   bimSolids, pushLitPoly, lineClipPoly, genSectionView, stairSolids, stairSteps, railingSolids, railingPath, cmdRailingTag, lightEmitters, lightGizmos, renderLightList, cmdSetAsLight, cmdUnsetLight, cmdLighting, cmdRaytrace, rtBuildScene, rtTrisByEntity, rtSyncCamera, rtGeoSig, rtSupported, rtPreview, rtFullRes, rtLightsChanged, litCacheSig, rtSetEnv, rtEnvWanted, cmdRtEnv, parseIES, iesCandelaAt, iesSummary, iesToTexture, iesFluxFactor, lightCandela, cmdIes, selectedLights, cmdRtDenoise, rtExposure, cmdExposure, RT_EXPOSURE, RT_EXPOSURE_DAY,
   vpIsPlan, vpPlanIndex, vpRect, vpRectCss, planCvRect, syncPlanCv, open3D, close3D, is3DActive, resize, worldToScreen, screenToWorld,
   rview, rviewFrame, rviewBuildScene, rviewSyncSun, rviewSig, cmdRendered,
-  MAT_PRESETS, MAT_ALIAS, matOf, matKey, matHex, matBoxUV, matGeo, matBuild, matTextures, matDrawTex, cmdMaterial, rtGeoSig, bimSolidColor, secHatchFor, computePatternSegs,
+  MAT_PRESETS, MAT_ALIAS, matOf, matKey, matHex, matBoxUV, matGeo, matBuild, matTextures, matDrawTex, cmdMaterial, rtGeoSig, bimSolidColor, secHatchFor, computePatternSegs, owWt, OPENING_TYPES,
   runCommandInput, feedCmdArg,
   skyCloud, sunDirectIlluminanceClear, skyBlend, SKY_OVERCAST_E, SKY_OVERCAST_RGB,
   skyCloudMask, skySolve, skyCtxCompute, _skyFbm, SKY_CLOUD_TILE,

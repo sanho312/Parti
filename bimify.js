@@ -306,6 +306,10 @@ function build(analysis, roles, opts) {
     eo.bim = role === 'door'
       ? { kind: 'opening', ot: 'door', h: 2100, sill: 0, t: o.wallT }
       : { kind: 'opening', ot: 'window', h: 1200, sill: 900, t: o.wallT };
+    // 창호 표시기호: 문 호 인식 → 경첩 = 호 중심에 가까운 끝 / 짧은 평행선 → 미서기창 (레이어 기본이 있으면 owWt 가 우선 적용)
+    if (role === 'door' && s.kind === 'arc') {
+      eo.bim.hinge = Math.hypot(eo.x2 - s.cx, eo.y2 - s.cy) < Math.hypot(eo.x1 - s.cx, eo.y1 - s.cy) ? 1 : 0;
+    } else if (role === 'window') eo.bim.wt = 'wslide';
     counts[role]++;
   }
   // 바닥 슬래브 — 닫힌 영역마다 (프로그램 자동, AI 불필요). 원형 방은 다각 근사.

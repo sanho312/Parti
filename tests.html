@@ -2976,6 +2976,36 @@ function tests(){
         C.state.entities = C.state.entities.filter(x => x !== se1 && x !== se2);
         C.state.layers = C.state.layers.filter(x => x.name !== '단열층' && x.name !== '콘벽층');
       }
+      { // 창호 표시기호 — 유형 해석·평면 기호 렌더·3D 문짝/창틀
+        // ① 유형 해석: 개체 지정 > 레이어 기본 > 기본값
+        C.state.layers.push({ name: '창호층', color: '#ffffff', visible: true, defWt: 'slide' });
+        const od = { id: 999910, type: 'LINE', x1: 0, y1: 40000, x2: 900, y2: 40000, layer: '0', bim: { kind: 'opening', ot: 'door', h: 2100, sill: 0, t: 200 } };
+        ok(C.owWt(od) === 'swing', '★문 기본 = 여닫이(swing)');
+        od.layer = '창호층';
+        ok(C.owWt(od) === 'slide', '★레이어 기본 창호(defWt=미서기) 상속');
+        od.bim.wt = 'fold';
+        ok(C.owWt(od) === 'fold', '★개체 직접 지정이 레이어 기본보다 우선');
+        const ow = { id: 999911, type: 'LINE', x1: 0, y1: 41000, x2: 1200, y2: 41000, layer: '0', bim: { kind: 'opening', ot: 'window', h: 1200, sill: 900, t: 200 } };
+        ok(C.owWt(ow) === 'fix', '  창 기본 = 붙박이(fix)');
+        // ② 평면 기호: 13종 전부 렌더가 예외 없이 실행
+        const allWt = [].concat(C.OPENING_TYPES.door.map(x => ['door', x[0]]), C.OPENING_TYPES.window.map(x => ['window', x[0]]));
+        const owEnts = allWt.map(([ot2, wt2], i) => ({ id: 999920 + i, type: 'LINE', x1: i * 2000, y1: 42000, x2: i * 2000 + 1000, y2: 42000, layer: '0',
+          bim: { kind: 'opening', ot: ot2, wt: wt2, h: 2100, sill: ot2 === 'window' ? 900 : 0, t: 200, hinge: i % 2, flip: i % 3 === 0 ? 1 : 0 } }));
+        C.state.entities.push(od, ow, ...owEnts);
+        let drawOK = true; try { C.draw(); } catch (err) { drawOK = false; }
+        ok(drawOK, '★평면 창호 기호 13종 렌더 무예외 (여닫이~망사창)');
+        // ③ 3D: 여닫이문 → 문짝 솔리드, 미서기창 → 유리+틀(≥5)
+        const hw = { id: 999940, type: 'LINE', x1: -1000, y1: 42000, x2: 2000, y2: 42000, layer: '0', bim: { kind: 'wall', h: 2400, t: 200, base: 0 } };
+        const hd = { id: 999941, type: 'LINE', x1: 0, y1: 42000, x2: 900, y2: 42000, layer: '0', bim: { kind: 'opening', ot: 'door', wt: 'swing', h: 2100, sill: 0, t: 200 } };
+        C.state.entities.push(hw, hd);
+        const sol3 = C.bimSolids().filter(s3 => s3.eid === 999941);
+        ok(sol3.length >= 1, '★3D 여닫이문 = 문짝 솔리드 생성 (' + sol3.length + '개)');
+        hd.bim = { kind: 'opening', ot: 'window', wt: 'wslide', h: 1200, sill: 900, t: 200 };
+        const solW = C.bimSolids().filter(s3 => s3.eid === 999941);
+        ok(solW.length >= 5, '★3D 미서기창 = 유리+틀 4변+세로대 (' + solW.length + '개)');
+        C.state.entities = C.state.entities.filter(x => x.id < 999910 || x.id > 999941);
+        C.state.layers = C.state.layers.filter(x => x.name !== '창호층');
+      }
       { // B1 — 인쇄 제외(noplot): 화면엔 보이되 SVG/PDF 출력에서 빠진다
         C.state.layers.push({ name: '보조출력층', color: '#ffffff', visible: true, noplot: true });
         const pe = { id: 999903, type: 'LINE', x1: 77771, y1: 0, x2: 77772, y2: 100, layer: '보조출력층' };
