@@ -90,8 +90,14 @@ function heuristic(analysis) {
   // 레이어 이름이 곧 의도 — 스케치 레이어가 지정돼 있으면 최우선 (AI 도 규칙도 필요 없다)
   const LAYER_ROLE = { '벽': 'wall', '기둥': 'column', '가구': 'furniture', '문': 'door',
     '창': 'window', '개구부': 'door', '슬래브': 'wall', '치수': 'ignore', '문자': 'ignore', '밑그림': 'ignore' };
+  // A1: 레이어 속성으로 명시한 역할이 최우선 — 이름 규칙(LAYER_ROLE)보다 먼저.
+  // 레이어 이름을 자유롭게 지어도('구조', 'core' 등) 역할만 지정하면 건물화가 정확해진다.
+  const cadLays2 = (B() && B().state && B().state.layers) || [];
+  const explicitRole = (nm) => { const L = nm && cadLays2.find(x => x.name === nm); return (L && L.role) || null; };
   for (const s of shapes) {
     let role = 'furniture';
+    const xr = explicitRole(s.layer);
+    if (xr) { roles[s.strokeId] = s.kind === 'dot' ? 'ignore' : xr; continue; }
     if (s.layer && LAYER_ROLE[s.layer]) { roles[s.strokeId] = s.kind === 'dot' ? 'ignore' : LAYER_ROLE[s.layer]; continue; }
     if (s.kind === 'dot') role = 'ignore';
     else if (s.kind === 'circle') role = s.r <= 400 ? 'column' : (s.r >= 1000 ? 'wall' : 'furniture'); // 큰 원 = 원형 방(곡선 벽)
@@ -185,10 +191,13 @@ function build(analysis, roles, opts) {
   for (const [name, color] of Object.values(LAYERS)) br.ensureLayer(name, color);
   const counts = { wall: 0, door: 0, window: 0, column: 0, furniture: 0, slab: 0 };
   const wallSegs = [];                             // {x1,y1,x2,y2,L}
-  const addWallSeg = (a, b) => {
+  // 레이어 기본값(A2): 레이어에 defH/defT 가 있으면 그 레이어 스트로크의 벽·기둥이 그 값을 쓴다
+  const cadLays = (br.state && br.state.layers) || [];
+  const layDef = (nm) => (nm && cadLays.find(x => x.name === nm)) || {};
+  const addWallSeg = (a, b, hh, tt) => {
     const L = dist(a, b); if (L < 50) return;
     const e = br.addEntity({ type: 'LINE', layer: '벽', x1: a[0], y1: a[1], x2: b[0], y2: b[1] });
-    e.bim = { kind: 'wall', h: o.wallH, t: o.wallT, base: 0 };
+    e.bim = { kind: 'wall', h: hh || o.wallH, t: tt || o.wallT, base: 0 };
     wallSegs.push({ x1: a[0], y1: a[1], x2: b[0], y2: b[1], L });
     counts.wall++;
   };
@@ -196,25 +205,27 @@ function build(analysis, roles, opts) {
   for (const s of analysis.shapes) {
     const role = roles[s.strokeId] || 'ignore';
     if (role === 'ignore') continue;
+    const ld = layDef(s.layer);
+    const wh = (+ld.defH > 0) ? +ld.defH : o.wallH, wt = (+ld.defT > 0) ? +ld.defT : o.wallT;
     if (role === 'wall') {
-      if (s.kind === 'line') addWallSeg(s.a, s.b);
+      if (s.kind === 'line') addWallSeg(s.a, s.b, wh, wt);
       else if (s.kind === 'rect' || s.kind === 'polygon')
-        for (let i = 0; i < s.pts.length; i++) addWallSeg(s.pts[i], s.pts[(i + 1) % s.pts.length]);
+        for (let i = 0; i < s.pts.length; i++) addWallSeg(s.pts[i], s.pts[(i + 1) % s.pts.length], wh, wt);
       else if (s.kind === 'curve') {
         // 자유곡선(비정형) 벽 = 부드러운 단일 LWPOLYLINE + smooth — Catmull-Rom 재분할로 윤곽을
         // 매끈하게 하고, 3D(bimSolids)가 정점 법선(vnrm)으로 연속 구로 셰이딩을 건다.
         // 예전엔 세그먼트마다 독립 LINE 벽이라 각지고 이음선이 보였다 (2026-07-24 사용자).
         const pts = catmullSmooth(s.pts.map(p => [p[0], p[1]]), !!s.closed);
         const e = br.addEntity({ type: 'LWPOLYLINE', layer: '벽', points: pts, closed: !!s.closed });
-        e.bim = { kind: 'wall', h: o.wallH, t: o.wallT, base: 0, smooth: true };
+        e.bim = { kind: 'wall', h: wh, t: wt, base: 0, smooth: true };
         counts.wall++;
         // 문/창 호스트 매칭용 가상 세그먼트
         for (let i = 1; i < pts.length; i++) wallSegs.push({ x1: pts[i - 1][0], y1: pts[i - 1][1], x2: pts[i][0], y2: pts[i][1], L: dist(pts[i - 1], pts[i]) });
         if (s.closed) wallSegs.push({ x1: pts[pts.length - 1][0], y1: pts[pts.length - 1][1], x2: pts[0][0], y2: pts[0][1], L: dist(pts[pts.length - 1], pts[0]) });
       }
       else if (s.kind === 'polyline') {                // 꺾은선(각진 의도) — 기존대로 직선 벽
-        for (let i = 1; i < s.pts.length; i++) addWallSeg(s.pts[i - 1], s.pts[i]);
-        if (s.closed) addWallSeg(s.pts[s.pts.length - 1], s.pts[0]);
+        for (let i = 1; i < s.pts.length; i++) addWallSeg(s.pts[i - 1], s.pts[i], wh, wt);
+        if (s.closed) addWallSeg(s.pts[s.pts.length - 1], s.pts[0], wh, wt);
       } else if (s.kind === 'arc' || s.kind === 'circle') {
         // 곡선 벽 = 진짜 ARC/CIRCLE 개체 하나 — 라이노·퓨전처럼 매끈한 곡면.
         // cad.js(bimSolids)가 64각 마이터 링 + 세로 이음선 숨김 + 구로 셰이딩으로 원통/아치를 그린다.
@@ -222,7 +233,7 @@ function build(analysis, roles, opts) {
         const e = s.kind === 'circle'
           ? br.addEntity({ type: 'CIRCLE', layer: '벽', cx: s.cx, cy: s.cy, r: s.r })
           : br.addEntity({ type: 'ARC', layer: '벽', cx: s.cx, cy: s.cy, r: s.r, startAngle: s.startAngle, endAngle: s.endAngle });
-        e.bim = { kind: 'wall', h: o.wallH, t: o.wallT, base: 0 };
+        e.bim = { kind: 'wall', h: wh, t: wt, base: 0 };
         counts.wall++;
         // 문/창 호스트 매칭용 '가상' 세그먼트 — 개체는 만들지 않고 매칭 표(wallSegs)만 채운다
         const sweep = s.kind === 'circle' ? 360 : (((s.endAngle - s.startAngle) % 360 + 360) % 360 || 360);
@@ -243,7 +254,7 @@ function build(analysis, roles, opts) {
       let e = null;
       if (s.kind === 'circle') e = br.addEntity({ type: 'CIRCLE', layer: '기둥', cx: s.cx, cy: s.cy, r: s.r });
       else if (s.pts) e = br.addEntity({ type: 'LWPOLYLINE', layer: '기둥', points: s.pts.map(p => [p[0], p[1]]), closed: true });
-      if (e) { e.bim = { kind: 'column', h: o.wallH, base: 0 }; counts.column++; }
+      if (e) { e.bim = { kind: 'column', h: wh, base: 0 }; counts.column++; }
       continue;
     }
     // furniture — 인식 기하 그대로, '가구' 레이어 (색 유지)

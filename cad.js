@@ -12349,7 +12349,11 @@ const LAYIC = {
   unlock: '<svg class="ic" viewBox="0 0 24 24"><rect x="5.5" y="11" width="13" height="8.5" rx="2"/><path d="M8.5 11V8a3.5 3.5 0 0 1 6.8-1.2"/></svg>',
   eye:    '<svg class="ic" viewBox="0 0 24 24"><path d="M2.5 12S6 5.8 12 5.8 21.5 12 21.5 12 18 18.2 12 18.2 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.6"/></svg>',
   eyeOff: '<svg class="ic" viewBox="0 0 24 24"><path d="M2.5 12S6 5.8 12 5.8 21.5 12 21.5 12 18 18.2 12 18.2 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.6"/><line x1="4.5" y1="4.5" x2="19.5" y2="19.5"/></svg>',
+  plot:    '<svg class="ic" viewBox="0 0 24 24"><path d="M7 9V4h10v5"/><path d="M7 18H5a1 1 0 0 1-1-1v-5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v5a1 1 0 0 1-1 1h-2"/><rect x="7" y="15" width="10" height="5" rx="1"/></svg>',
+  plotOff: '<svg class="ic" viewBox="0 0 24 24"><path d="M7 9V4h10v5"/><path d="M7 18H5a1 1 0 0 1-1-1v-5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v5a1 1 0 0 1-1 1h-2"/><rect x="7" y="15" width="10" height="5" rx="1"/><line x1="4.5" y1="4.5" x2="19.5" y2="19.5"/></svg>',
 };
+// 건물화 역할 선택지 — 레이어 속성으로 명시 지정(자동 = 이름·모양 판정). bimify.js 가 최우선 참조.
+const LAYER_ROLE_OPTS = [['', '자동'], ['wall', '벽'], ['column', '기둥'], ['door', '문'], ['window', '창'], ['furniture', '가구'], ['ignore', '제외']];
 function renderLayers() {
   const list = document.getElementById('layerList');
   list.innerHTML = '';
@@ -12361,6 +12365,7 @@ function renderLayers() {
       `<div class="lrow1">
         <span class="sw" style="background:${l.color}"></span>
         <span class="nm">${escapeHtml(l.name)}</span>
+        <span class="plt${l.noplot ? ' off' : ''}" title="인쇄·내보내기 포함/제외 — 끄면 화면엔 보이되 플롯 PDF·SVG·PNG 에서 빠집니다">${l.noplot ? LAYIC.plotOff : LAYIC.plot}</span>
         <span class="lk${l.locked ? ' on' : ''}" title="잠금(수정 불가)">${l.locked ? LAYIC.lock : LAYIC.unlock}</span>
         <span class="eye${l.visible ? '' : ' off'}" title="표시/숨김">${l.visible ? LAYIC.eye : LAYIC.eyeOff}</span>
        </div>
@@ -12375,6 +12380,13 @@ function renderLayers() {
             .concat(Object.keys(state.matlib || {}).map(k => `<option value="${MAT_LIB_PREFIX}${escapeHtml(k)}" ${l.mat === MAT_LIB_PREFIX + k ? 'selected' : ''}>${escapeHtml(k)}</option>`))
             .concat(Object.keys(MAT_PRESETS).map(k => `<option value="${k}" ${l.mat === k ? 'selected' : ''}>${MAT_PRESETS[k].ko}</option>`)).join('')}
         </select>
+       </div>
+       <div class="lrow2" onclick="event.stopPropagation()">
+        <select class="lrole" title="건물화 역할 — 스케치를 건물로 바꿀 때 이 레이어 도형의 역할 (자동 = 이름·모양으로 판정)">
+          ${LAYER_ROLE_OPTS.map(([v, t]) => `<option value="${v}" ${(l.role || '') === v ? 'selected' : ''}>${t}</option>`).join('')}
+        </select>
+        <input class="ldh" type="number" min="0" step="50" placeholder="높이" value="${l.defH ?? ''}" title="기본 높이(mm) — 건물화 시 이 레이어 벽·기둥의 높이 (비우면 전체 기본 2400)">
+        <input class="ldt" type="number" min="0" step="10" placeholder="두께" value="${l.defT ?? ''}" title="기본 두께(mm) — 건물화 시 이 레이어 벽의 두께 (비우면 전체 기본 200)">
        </div>`;
     div.addEventListener('contextmenu', (e) => { // 우클릭: 선택한 객체를 이 레이어로 이동 (라이노식)
       e.preventDefault(); e.stopPropagation();
@@ -12411,6 +12423,20 @@ function renderLayers() {
       pushUndo();                                          // 재질은 렌더 결과를 바꾸므로 undo 대상
       l.mat = e.target.value || undefined;
       propRefresh();                                       // 2D + 3D(솔리드 색·렌더 재질) 즉시 반영
+    });
+    div.querySelector('.plt').addEventListener('click', (e) => {
+      e.stopPropagation(); l.noplot = !l.noplot; renderLayers();   // 출력 시점에만 걸러지므로 재렌더 불필요
+    });
+    div.querySelector('.lrole').addEventListener('change', (e) => {
+      e.stopPropagation(); pushUndo(); l.role = e.target.value || undefined;
+    });
+    div.querySelector('.ldh').addEventListener('change', (e) => {
+      e.stopPropagation(); pushUndo();
+      const v = parseFloat(e.target.value); l.defH = (isFinite(v) && v > 0) ? v : undefined;
+    });
+    div.querySelector('.ldt').addEventListener('change', (e) => {
+      e.stopPropagation(); pushUndo();
+      const v = parseFloat(e.target.value); l.defT = (isFinite(v) && v > 0) ? v : undefined;
     });
     div.querySelector('.nm').addEventListener('dblclick', (e) => {
       e.stopPropagation();
@@ -14026,7 +14052,7 @@ function buildSVG() {
   out.push(`<rect width="100%" height="100%" fill="white"/>`);
   out.push(`<g fill="none" stroke-width="${sw}">`);
   for (const e of exportEntities()) {
-    const l = getLayer(e.layer); if (l && !l.visible) continue;
+    const l = getLayer(e.layer); if (l && (!l.visible || l.noplot)) continue; // noplot = 화면엔 보이되 출력(PDF·SVG·PNG)에선 제외
     const c = entityColor(e) === '#ffffff' ? '#000000' : entityColor(e); // 흰색은 흰배경에서 검정으로
     switch (e.type) {
       case 'LINE': out.push(`<line x1="${X(e.x1)}" y1="${Y(e.y1)}" x2="${X(e.x2)}" y2="${Y(e.y2)}" stroke="${c}"/>`); break;
@@ -14069,7 +14095,7 @@ function savePNG(fname) {
   const Y = y => (b.maxY - y + margin) * scale;
   o.lineWidth = Math.max(1, (Math.max(b.w, b.h) / 600) * scale);
   for (const e of exportEntities()) {
-    const l = getLayer(e.layer); if (l && !l.visible) continue;
+    const l = getLayer(e.layer); if (l && (!l.visible || l.noplot)) continue; // noplot = 화면엔 보이되 출력(PDF·SVG·PNG)에선 제외
     let c = entityColor(e); if (c === '#ffffff') c = '#000000';
     o.strokeStyle = c; o.fillStyle = c;
     o.beginPath();
@@ -14138,7 +14164,7 @@ function buildPDF(opt) {
   ops.push('q');
   ops.push(`${num(margin)} ${num(margin)} ${num(availW)} ${num(PH - 2 * margin)} re W n`);
   for (const e of exportEntities()) {
-    const l = getLayer(e.layer); if (l && !l.visible) continue;
+    const l = getLayer(e.layer); if (l && (!l.visible || l.noplot)) continue; // noplot = 화면엔 보이되 출력(PDF·SVG·PNG)에선 제외
     setColor(entityColor(e));
     switch (e.type) {
       case 'LINE': ops.push(`${num(X(e.x1))} ${num(Y(e.y1))} m ${num(X(e.x2))} ${num(Y(e.y2))} l S`); break;

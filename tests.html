@@ -2946,6 +2946,29 @@ function tests(){
         C.state.entities = C.state.entities.filter(x => x !== te);
         C.state.layers = C.state.layers.filter(x => x.name !== '재질테스트층');
       }
+      { // A1·A2 — 레이어 역할 명시 + 기본 높이/두께: 이름이 규칙에 없어도 역할 지정이 최우선
+        C.state.layers.push({ name: '자유벽층', color: '#ffffff', visible: true, role: 'wall', defH: 3000, defT: 300 });
+        const an2 = P.analyze([{ id: 21, color: '#888', hw: 8, layer: '자유벽층', pts: seg(0, 30000, 800, 30010).map(p => [p[0], p[1], 0.5]) }]);
+        const r2 = BF.heuristic(an2);
+        eqi(r2[21], 'wall', '★레이어 role=wall 명시 → 800mm 짧은 선도 벽 (휴리스틱이면 가구였을 것)');
+        const b0 = C.state.entities.length;
+        BF.build(an2, r2);
+        const w2 = C.state.entities.slice(b0).find(e2 => e2.bim && e2.bim.kind === 'wall');
+        ok(w2 && w2.bim.h === 3000 && w2.bim.t === 300, '★레이어 defH/defT → 벽 h3000·t300 (전체 기본 2400/200 대신)');
+        C.state.entities.length = b0;
+        C.state.layers = C.state.layers.filter(x => x.name !== '자유벽층');
+      }
+      { // B1 — 인쇄 제외(noplot): 화면엔 보이되 SVG/PDF 출력에서 빠진다
+        C.state.layers.push({ name: '보조출력층', color: '#ffffff', visible: true, noplot: true });
+        const pe = { id: 999903, type: 'LINE', x1: 77771, y1: 0, x2: 77772, y2: 100, layer: '보조출력층' };
+        C.state.entities.push(pe);
+        const svgOff = C.buildSVG();                  // 제외 상태 (SVG 좌표는 bbox 기준 이동이라 원좌표 검색 불가 — 내용량으로 검증)
+        C.state.layers.find(x => x.name === '보조출력층').noplot = false;
+        const svgOn = C.buildSVG();                   // 포함 상태
+        ok(svgOn.length > svgOff.length, '★noplot = 출력(SVG) 제외, 해제 = 포함 (+' + (svgOn.length - svgOff.length) + 'B)');
+        C.state.entities = C.state.entities.filter(x => x !== pe);
+        C.state.layers = C.state.layers.filter(x => x.name !== '보조출력층');
+      }
       C.state.entities.length = before; // 정리
       // 스케치 DXF 왕복 (999 WSK)
       S.SK.strokes = [

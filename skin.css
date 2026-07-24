@@ -146,7 +146,9 @@ button.tbtn{ display:inline-flex; align-items:center; gap:6px; }
 .tbtn.on{ background:var(--panel3); color:var(--text); }
 
 /* ── 레이어 행 잠금·표시 아이콘 (renderLayers 의 SVG) ── */
-.layer .lk svg.ic, .layer .eye svg.ic{ width:13px; height:13px; vertical-align:-2px; }
+.layer .lk svg.ic, .layer .eye svg.ic, .layer .plt svg.ic{ width:13px; height:13px; vertical-align:-2px; }
+.layer .plt{ cursor:pointer; opacity:.55; }
+.layer .plt.off{ opacity:1; color:#e08030; } /* 제외 상태를 또렷하게 — 모르고 빠진 채 출력하는 사고 방지 */
 .layer .lk{ cursor:pointer; opacity:.55; }
 .layer .lk.on{ opacity:1; }
 .layer .eye{ cursor:pointer; }

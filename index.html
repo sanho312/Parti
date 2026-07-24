@@ -369,7 +369,9 @@ try { if (localStorage.getItem('webcad_theme') === 'light') document.documentEle
   .layer .lrow2{display:flex;gap:4px;}
   .layer .lrow2 select{flex:1;min-width:0;background:var(--panel2);color:var(--text);
     border:none;border-radius:var(--radius-sm);font-size:11px;padding:3px 4px;}
-  .layer.active .lrow2 select{background:rgba(0,0,0,.28);}
+  .layer .lrow2 input{flex:0 0 46px;min-width:0;background:var(--panel2);color:var(--text);
+    border:none;border-radius:var(--radius-sm);font-size:11px;padding:3px 4px;}
+  .layer.active .lrow2 select,.layer.active .lrow2 input{background:rgba(0,0,0,.28);}
   .layer .sw{width:14px;height:14px;border-radius:4px;border:0.5px solid rgba(0,0,0,.4);flex:0 0 auto;cursor:pointer;}
   .layer .sw:hover{outline:1.5px solid var(--text);outline-offset:1px;}
   /* 레이어 색상 팝오버: 고정 프리셋 + 최근 사용 + 팔레트 */
@@ -410,7 +412,7 @@ try { if (localStorage.getItem('webcad_theme') === 'light') document.documentEle
   ::-webkit-scrollbar-track{background:transparent;}
 </style>
 <!-- Beyond UI 스킨 (2026-07-20) — 변수·컴포넌트 오버라이드. 메인 스타일 뒤에 로드되어 이긴다 -->
-<link rel="stylesheet" href="skin.css?v=8">
+<link rel="stylesheet" href="skin.css?v=9">
 </head>
 <body>
 <div id="app">
@@ -939,9 +941,9 @@ try { if (localStorage.getItem('webcad_theme') === 'light') document.documentEle
   </div>
 </div>
 
-<script src="cad.js?v=20260725a"></script>
+<script src="cad.js?v=20260725b"></script>
 <script src="prep.js?v=5"></script>
-<script src="bimify.js?v=5"></script>
+<script src="bimify.js?v=6"></script>
 <script src="sketch.js?v=15"></script>
 <script src="cmdpop.js?v=8"></script>
 <script src="panels.js?v=6"></script>
