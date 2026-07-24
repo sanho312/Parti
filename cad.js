@@ -15237,6 +15237,9 @@ window.WEBCAD_API = {
     if (blocks) { state.blocks = blocks; refreshBlockList(); }
     if (layers) { state.layers = layers; renderLayers(); }
     updateStat(); renderProps(); draw();
+    // 3D 뷰도 즉시 갱신 — 이게 없으면 원격 변경이 솔리드에 반영되지 않아, 개체를 클릭해
+    // 선택 경로가 render3D 를 돌릴 때까지 3D 화면이 옛 상태로 남는다 (2026-07-24 사용자).
+    if (is3DActive() && typeof v3 !== 'undefined' && v3) { v3.solids = bimSolids(); render3D(); }
   },
   // 세션 참가 시 id 충돌 회피 (두 사용자가 같은 nextId로 동시에 생성하는 것 방지)
   jitterNextId: () => { state.nextId += 1000 + Math.floor(Math.random() * 9000); },
