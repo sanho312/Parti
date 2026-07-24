@@ -2804,6 +2804,13 @@ function bimSolids() {
     // 꼭짓점 링 구성: LINE=2점 열린, 폴리라인=점열(닫힘 여부), 원=24각 닫힘
     let V, closedW;
     if (w.type === 'CIRCLE') { V = circlePoly(w.cx, w.cy, w.r, segN); closedW = true; }
+    else if (w.type === 'ARC') { // 호 벽(아치) — CIRCLE 벽과 같은 곡면 처리(64각 밀도·이음선 숨김·구로)
+      const sw = ((w.endAngle - w.startAngle) % 360 + 360) % 360 || 360;
+      const m = Math.max(2, Math.round(segN * sw / 360));
+      V = [];
+      for (let i = 0; i <= m; i++) { const a = (w.startAngle + sw * i / m) * Math.PI / 180; V.push([w.cx + Math.cos(a) * w.r, w.cy + Math.sin(a) * w.r]); }
+      closedW = false;
+    }
     else if (w.type === 'LINE') { V = [[w.x1, w.y1], [w.x2, w.y2]]; closedW = false; }
     else { V = (w.points || []).map(p => [p[0], p[1]]); closedW = !!w.closed && V.length > 2; }
     const n = V.length; if (n < 2) continue;

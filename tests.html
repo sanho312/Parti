@@ -2909,7 +2909,10 @@ function tests(){
       eqi(counts.window, 1, '창 1 생성');
       const win = C.state.entities.slice(before).find(e => e.bim && e.bim.kind === 'opening' && e.bim.ot === 'window');
       ok(win && win.bim.sill === 900, '  창 sill 900');
-      ok(counts.wall >= 30, '★곡선 벽 테셀레이션 (벽 분절 ' + counts.wall + ')');
+      const curvW = C.state.entities.slice(before).filter(e2 => e2.bim && e2.bim.kind === 'wall' && (e2.type === 'CIRCLE' || e2.type === 'ARC'));
+      eqi(curvW.length, 2, '★곡선 벽 = 진짜 CIRCLE/ARC 벽 개체 (분절 직선 테셀레이션 금지 — 매끈한 곡면)');
+      eqi(counts.wall, 6, '★벽 수 = 직선 4 + 곡선 2 (분절 없음)');
+      ok(curvW.every(e2 => e2.bim.h > 0 && e2.bim.t > 0), '  곡선 벽에 높이·두께 부여');
       eqi(counts.slab, 2, '★슬래브 2 — 사각 방 + 원형 방(다각 근사)');
       C.state.entities.length = before; // 정리
       // 스케치 DXF 왕복 (999 WSK)

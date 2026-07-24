@@ -174,22 +174,24 @@ function build(analysis, roles, opts) {
       else if (s.kind === 'polyline' || s.kind === 'curve') {
         for (let i = 1; i < s.pts.length; i++) addWallSeg(s.pts[i - 1], s.pts[i]);
         if (s.closed) addWallSeg(s.pts[s.pts.length - 1], s.pts[0]);   // 닫힌 자유곡선 벽은 마지막 변도
-      } else if (s.kind === 'arc') {                                   // 곡선 벽: 호를 짧은 벽으로 테셀레이션
-        const sweep = ((s.endAngle - s.startAngle) % 360 + 360) % 360 || 360;
-        const n = Math.min(48, Math.max(4, Math.ceil(sweep / 12)));
+      } else if (s.kind === 'arc' || s.kind === 'circle') {
+        // 곡선 벽 = 진짜 ARC/CIRCLE 개체 하나 — 라이노·퓨전처럼 매끈한 곡면.
+        // cad.js(bimSolids)가 64각 마이터 링 + 세로 이음선 숨김 + 구로 셰이딩으로 원통/아치를 그린다.
+        // 예전처럼 짧은 직선 벽 여러 개로 테셀레이션하면 '뚝뚝 끊긴 벽체'가 됐다 (2026-07-24 사용자).
+        const e = s.kind === 'circle'
+          ? br.addEntity({ type: 'CIRCLE', layer: '벽', cx: s.cx, cy: s.cy, r: s.r })
+          : br.addEntity({ type: 'ARC', layer: '벽', cx: s.cx, cy: s.cy, r: s.r, startAngle: s.startAngle, endAngle: s.endAngle });
+        e.bim = { kind: 'wall', h: o.wallH, t: o.wallT, base: 0 };
+        counts.wall++;
+        // 문/창 호스트 매칭용 '가상' 세그먼트 — 개체는 만들지 않고 매칭 표(wallSegs)만 채운다
+        const sweep = s.kind === 'circle' ? 360 : (((s.endAngle - s.startAngle) % 360 + 360) % 360 || 360);
+        const st = s.kind === 'circle' ? 0 : s.startAngle;
+        const n = Math.min(48, Math.max(8, Math.ceil(sweep / 12)));
         let prev = null;
         for (let i = 0; i <= n; i++) {
-          const a = (s.startAngle + sweep * i / n) * Math.PI / 180;
+          const a = (st + sweep * i / n) * Math.PI / 180;
           const p = [s.cx + Math.cos(a) * s.r, s.cy + Math.sin(a) * s.r];
-          if (prev) addWallSeg(prev, p);
-          prev = p;
-        }
-      } else if (s.kind === 'circle') {                                // 원형 방
-        let prev = null;
-        for (let i = 0; i <= 24; i++) {
-          const a = i / 24 * 2 * Math.PI;
-          const p = [s.cx + Math.cos(a) * s.r, s.cy + Math.sin(a) * s.r];
-          if (prev) addWallSeg(prev, p);
+          if (prev) wallSegs.push({ x1: prev[0], y1: prev[1], x2: p[0], y2: p[1], L: dist(prev, p) });
           prev = p;
         }
       }
