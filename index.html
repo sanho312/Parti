@@ -169,9 +169,10 @@ try { if (localStorage.getItem('webcad_theme') === 'light') document.documentEle
   .menuWrap{position:relative;display:inline-block;}
   .dropdown{position:absolute;top:calc(100% + 8px);left:0;z-index:40;display:none;
     min-width:230px;background:var(--glass-pop);-webkit-backdrop-filter:var(--glass);backdrop-filter:var(--glass);
-    border-radius:var(--radius-lg);padding:7px;box-shadow:var(--shadow-pop),var(--spec);}
+    border:1px solid var(--line);border-radius:var(--radius-lg);padding:7px;box-shadow:var(--shadow-pop),var(--spec);}
+  #userMenu{left:auto;right:0;}   /* 우측 끝 칩의 메뉴 — 화면 밖으로 나가지 않게 우측 정렬 */
   .dropdown.open{display:block;}
-  .menuItem{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:transparent;color:var(--text);
+  .menuItem{display:flex;align-items:center;gap:10px;width:100%;white-space:nowrap;text-align:left;background:transparent;color:var(--text);
     border:none;border-radius:var(--radius-sm);padding:10px 12px;font-size:14px;cursor:pointer;letter-spacing:-0.01em;
     transition:background .12s ease;}
   .menuItem:hover{background:rgba(255,255,255,0.12);}
@@ -409,7 +410,7 @@ try { if (localStorage.getItem('webcad_theme') === 'light') document.documentEle
   ::-webkit-scrollbar-track{background:transparent;}
 </style>
 <!-- Beyond UI 스킨 (2026-07-20) — 변수·컴포넌트 오버라이드. 메인 스타일 뒤에 로드되어 이긴다 -->
-<link rel="stylesheet" href="skin.css?v=7">
+<link rel="stylesheet" href="skin.css?v=8">
 </head>
 <body>
 <div id="app">
