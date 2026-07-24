@@ -358,10 +358,15 @@
   }
 
   // ---------- ⑩ 플랜 배지 ----------
+  // 개발자(소유자) 계정은 항상 최고 플랜으로 고정 — 프로 기능 패치 적용 여부를 바로 확인하기 위함.
+  // (클라이언트 측 표시/게이팅 전용. 서버 강제는 my_plan RPC 가 담당.)
+  const OWNER_EMAILS = ['ghkdtksgh3430@gmail.com'];
+  const TOP_PLAN = 'pro'; // 현재 최상위 티어
   async function loadPlan() {
     try {
       const { data, error } = await sb.rpc('my_plan');
       if (!error && data) plan = data;
+      if (user && OWNER_EMAILS.includes(String(user.email || '').toLowerCase())) plan = TOP_PLAN;
       if (plan === 'pro') {
         const un = document.getElementById('userName');
         if (un && !un.querySelector('.planBadge')) un.insertAdjacentHTML('afterend', '<span class="planBadge">PRO</span>');
