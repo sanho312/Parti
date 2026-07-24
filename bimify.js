@@ -9,6 +9,32 @@ window.WEBCAD_BIMIFY = (() => {
 'use strict';
 const B = () => window.WEBCAD_AI_BRIDGE;
 const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+// 자유곡선을 Catmull-Rom 으로 재분할해 매끈한 점열로 (비정형 곡면 벽용 — 약 120mm 간격, 상한 400점)
+function catmullSmooth(P, closed) {
+  if (!P || P.length < 3) return P;
+  const n = P.length, out = [];
+  const get = (i) => closed ? P[((i % n) + n) % n] : P[Math.max(0, Math.min(n - 1, i))];
+  const segs = closed ? n : n - 1;
+  for (let i = 0; i < segs; i++) {
+    const p0 = get(i - 1), p1 = get(i), p2 = get(i + 1), p3 = get(i + 2);
+    const L = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]);
+    const div = Math.max(1, Math.min(8, Math.round(L / 120)));
+    for (let j = 0; j < div; j++) {
+      const t = j / div, t2 = t * t, t3 = t2 * t;
+      out.push([
+        0.5 * ((2 * p1[0]) + (-p0[0] + p2[0]) * t + (2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * t2 + (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * t3),
+        0.5 * ((2 * p1[1]) + (-p0[1] + p2[1]) * t + (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * t2 + (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * t3)]);
+    }
+  }
+  if (!closed) out.push([P[n - 1][0], P[n - 1][1]]);
+  if (out.length > 400) { // 상한 — 면 수 폭증 방지
+    const st = Math.ceil(out.length / 400), o2 = [];
+    for (let i = 0; i < out.length; i += st) o2.push(out[i]);
+    if (!closed) o2.push(out[out.length - 1]);
+    return o2;
+  }
+  return out;
+}
 function perpInfo(p, x1, y1, x2, y2) {           // 점→선분: {d, t, px, py}
   const dx = x2 - x1, dy = y2 - y1;
   const L2 = dx * dx + dy * dy;
@@ -85,7 +111,10 @@ function heuristic(analysis) {
         && perpInfo(s.b, l.a[0], l.a[1], l.b[0], l.b[1]).d <= tol);
       if (isWin) role = 'window';
       else role = ((s.lengthMM || 0) >= 1000 && (connected(s) || analysis.regions.length)) ? 'wall' : 'furniture';
-    } else role = 'furniture';                     // 열린 자유곡선
+    } else if (s.kind === 'curve') {
+      // 열린 자유곡선 — 꺾은선과 같은 규칙: 길고(1.5m+) 방 구조에 닿아 있으면 비정형 곡선 벽
+      role = ((s.lengthMM || 0) >= 1500 && (connected(s) || analysis.regions.length)) ? 'wall' : 'furniture';
+    } else role = 'furniture';
     roles[s.strokeId] = role;
   }
   return roles;
@@ -171,9 +200,21 @@ function build(analysis, roles, opts) {
       if (s.kind === 'line') addWallSeg(s.a, s.b);
       else if (s.kind === 'rect' || s.kind === 'polygon')
         for (let i = 0; i < s.pts.length; i++) addWallSeg(s.pts[i], s.pts[(i + 1) % s.pts.length]);
-      else if (s.kind === 'polyline' || s.kind === 'curve') {
+      else if (s.kind === 'curve') {
+        // 자유곡선(비정형) 벽 = 부드러운 단일 LWPOLYLINE + smooth — Catmull-Rom 재분할로 윤곽을
+        // 매끈하게 하고, 3D(bimSolids)가 정점 법선(vnrm)으로 연속 구로 셰이딩을 건다.
+        // 예전엔 세그먼트마다 독립 LINE 벽이라 각지고 이음선이 보였다 (2026-07-24 사용자).
+        const pts = catmullSmooth(s.pts.map(p => [p[0], p[1]]), !!s.closed);
+        const e = br.addEntity({ type: 'LWPOLYLINE', layer: '벽', points: pts, closed: !!s.closed });
+        e.bim = { kind: 'wall', h: o.wallH, t: o.wallT, base: 0, smooth: true };
+        counts.wall++;
+        // 문/창 호스트 매칭용 가상 세그먼트
+        for (let i = 1; i < pts.length; i++) wallSegs.push({ x1: pts[i - 1][0], y1: pts[i - 1][1], x2: pts[i][0], y2: pts[i][1], L: dist(pts[i - 1], pts[i]) });
+        if (s.closed) wallSegs.push({ x1: pts[pts.length - 1][0], y1: pts[pts.length - 1][1], x2: pts[0][0], y2: pts[0][1], L: dist(pts[pts.length - 1], pts[0]) });
+      }
+      else if (s.kind === 'polyline') {                // 꺾은선(각진 의도) — 기존대로 직선 벽
         for (let i = 1; i < s.pts.length; i++) addWallSeg(s.pts[i - 1], s.pts[i]);
-        if (s.closed) addWallSeg(s.pts[s.pts.length - 1], s.pts[0]);   // 닫힌 자유곡선 벽은 마지막 변도
+        if (s.closed) addWallSeg(s.pts[s.pts.length - 1], s.pts[0]);
       } else if (s.kind === 'arc' || s.kind === 'circle') {
         // 곡선 벽 = 진짜 ARC/CIRCLE 개체 하나 — 라이노·퓨전처럼 매끈한 곡면.
         // cad.js(bimSolids)가 64각 마이터 링 + 세로 이음선 숨김 + 구로 셰이딩으로 원통/아치를 그린다.

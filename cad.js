@@ -2839,6 +2839,12 @@ function bimSolids() {
       mitO.push([V[i][0] + ox, V[i][1] + oy]);
       mitI.push([V[i][0] - ox, V[i][1] - oy]);
     }
+    // 자유곡선(비정형) 벽: bim.smooth 플래그 — 정점 법선(마이터 바깥 방향)으로 연속 구로 셰이딩
+    const smoothW = !!(w.bim && w.bim.smooth) && w.type !== 'CIRCLE' && w.type !== 'ARC' && n > 2;
+    const vNrm = (idx) => {
+      const dx = mitO[idx][0] - V[idx][0], dy = mitO[idx][1] - V[idx][1];
+      const L2 = Math.hypot(dx, dy) || 1; return [dx / L2, dy / L2];
+    };
     for (let k = 0; k < nE; k++) {
       const x1 = V[k][0], y1 = V[k][1], k2 = (k + 1) % n;
       const x2 = V[k2][0], y2 = V[k2][1];
@@ -2868,10 +2874,13 @@ function bimSolids() {
         if (s0 <= 0.01) { A1 = mitO[k]; A2 = mitI[k]; }            // 세그 시작 = 마이터 코너
         if (s1 >= L - 0.01) { B1 = mitO[k2]; B2 = mitI[k2]; }      // 세그 끝 = 마이터 코너
         const sol = { poly: [A1, B1, B2, A2], z0, z1, color, glass, eid: beid !== undefined ? beid : w.id, open: t <= 2 || glass, seg: k,
-          curv: w.type === 'CIRCLE' || w.type === 'ARC',
+          curv: w.type === 'CIRCLE' || w.type === 'ARC' || smoothW,
           // 곡선 벽 구로 셰이딩용 진짜 원 중심 — 밴드(얇은 사각) 자체 무게중심으로 법선을 만들면
           // 인접 밴드끼리 정점 셰이드가 어긋나 면 단위 밝기 계단(각진 느낌)이 남는다.
-          ...(w.type === 'CIRCLE' || w.type === 'ARC' ? { cc: [w.cx, w.cy] } : {}) };  // 곡선 벽(원통·아치) → 세로 이음선 숨김
+          ...(w.type === 'CIRCLE' || w.type === 'ARC' ? { cc: [w.cx, w.cy] } : {}),  // 곡선 벽(원통·아치) → 세로 이음선 숨김
+          // 자유곡선(비정형) 벽: 원 중심이 없으므로 양 끝 '정점 법선'(마이터 방향)을 직접 실어
+          // 인접 밴드가 공유 정점에서 같은 법선을 보게 한다 — 연속 구로 셰이딩
+          ...(smoothW ? { vnrm: [vNrm(k), vNrm(k2)] } : {}) };
         if (wz) {
           // 곡선을 따라 세운 벽: z0/z1을 '이 구간 바닥 기준의 오프셋'으로 재해석해 양 끝에서 기울인다.
           // (개구부 상·하단 밴드도 같은 오프셋을 유지하므로 창·문이 지형을 따라 같이 기울어짐)
@@ -3569,13 +3578,17 @@ function renderScene(isActive) {
         // 공유 정점의 법선·셰이드가 정확히 이어져 곡면이 연속으로 매끈해진다.
         const cgx = s.cc ? s.cc[0] : ccx, cgy = s.cc ? s.cc[1] : ccy;
         const vn = (px, py) => { const dx = px - cgx, dy = py - cgy, L2 = Math.hypot(dx, dy) || 1; return [dx / L2, dy / L2]; };
-        const shOf = (px, py) => {
-          const [nx2, ny2] = vn(px, py);
-          const sgn = (nx2 * onx + ny2 * ony) < 0 ? -1 : 1;   // 안쪽 면이면 법선도 안쪽으로
-          const ax = nx2 * sgn, ay = ny2 * sgn;
+        // 정점 법선: 자유곡선 벽(vnrm)이면 밴드가 실어준 법선을 그대로(poly=[A1,B1,B2,A2] →
+        // 0·3=시작 정점, 1·2=끝 정점), 아니면 곡률 중심 기준 반경 방향.
+        const nOf = s.vnrm
+          ? (pi) => s.vnrm[(pi === 0 || pi === 3) ? 0 : 1]
+          : (pi) => vn(s.poly[pi][0], s.poly[pi][1]);
+        const shOf = (nrm) => {
+          const sgn = (nrm[0] * onx + nrm[1] * ony) < 0 ? -1 : 1;   // 안쪽 면이면 법선도 안쪽으로
+          const ax = nrm[0] * sgn, ay = nrm[1] * sgn;
           return litOn ? litFace(mx, my, midz, ax, ay, 0, !!s.lit) : 0.55 + 0.45 * Math.abs(ax * 0.8 + ay * 0.35);
         };
-        const sL = shOf(s.poly[i][0], s.poly[i][1]), sR = shOf(s.poly[j][0], s.poly[j][1]);
+        const sL = shOf(nOf(i)), sR = shOf(nOf(j));
         vsh = [sL, sR, sR, sL];
       }
       faces.push({ pts: quad, d: qd, color: sFc || s.color, shade: sSh, sh3: sSh3, glass: s.glass, eid: s.eid, rf: s.rf, fk: 'side', fi: i, si: s.seg != null ? s.seg : null, sz0: s.z0, ...(fe ? { fe } : {}), ...(vsh ? { vsh } : {}) });

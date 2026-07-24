@@ -2899,6 +2899,9 @@ function tests(){
       strokes.push({ id: 6, color: '#e6e1d3', hw: 8, pts: jig(bigArc, 6) });
       const bigCir = []; for (let i = 0; i <= 40; i++) { const t2 = i / 40 * Math.PI * 2.05; bigCir.push([12000 + Math.cos(t2) * 1500, 5000 + Math.sin(t2) * 1500, 0.5]); }
       strokes.push({ id: 7, color: '#e6e1d3', hw: 8, pts: jig(bigCir, 7) });
+      // 비정형 자유곡선 벽 — S자 물결 (직선·호·원 어디에도 안 맞음 → kind 'curve')
+      const wave = []; for (let i = 0; i <= 60; i++) { const x2 = i / 60 * 6000; wave.push([x2, 9000 + Math.sin(i / 60 * Math.PI * 2) * 800, 0.5]); }
+      strokes.push({ id: 8, color: '#e6e1d3', hw: 8, pts: jig(wave, 8) });
       const anal = P.analyze(strokes);
       const roles = BF.heuristic(anal);
       eqi(roles[5], 'window', '★벽 위 짧은 평행선 → 창');
@@ -2911,7 +2914,16 @@ function tests(){
       ok(win && win.bim.sill === 900, '  창 sill 900');
       const curvW = C.state.entities.slice(before).filter(e2 => e2.bim && e2.bim.kind === 'wall' && (e2.type === 'CIRCLE' || e2.type === 'ARC'));
       eqi(curvW.length, 2, '★곡선 벽 = 진짜 CIRCLE/ARC 벽 개체 (분절 직선 테셀레이션 금지 — 매끈한 곡면)');
-      eqi(counts.wall, 6, '★벽 수 = 직선 4 + 곡선 2 (분절 없음)');
+      eqi(counts.wall, 7, '★벽 수 = 직선 4 + 곡선 2 + 자유곡선 1 (분절 없음)');
+      { // 비정형(자유곡선) 벽 = 부드러운 단일 LWPOLYLINE(smooth) + 정점 법선(vnrm) 연속 셰이딩
+        const sw = C.state.entities.slice(before).find(e2 => e2.bim && e2.bim.kind === 'wall' && e2.bim.smooth && e2.type === 'LWPOLYLINE');
+        ok(!!sw, '★자유곡선 벽 = 단일 LWPOLYLINE + smooth (개별 LINE 분절 금지)');
+        if (sw) {
+          const ss3 = C.bimSolids().filter(s3 => s3.eid === sw.id);
+          ok(ss3.length >= 10 && ss3.every(s3 => s3.curv && s3.vnrm && s3.vnrm.length === 2),
+            '★자유곡선 벽 밴드 전부 curv+정점법선(vnrm) — 비정형 곡면도 연속 매끈');
+        }
+      }
       ok(curvW.every(e2 => e2.bim.h > 0 && e2.bim.t > 0), '  곡선 벽에 높이·두께 부여');
       { // 곡면 밴드 = curv + 진짜 원 중심(cc) — 구로 셰이딩이 밴드 무게중심이 아닌 원 중심 법선을 쓴다
         const cw = curvW.find(e2 => e2.type === 'CIRCLE');

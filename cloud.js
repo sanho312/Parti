@@ -414,6 +414,7 @@
     rtChan.on('broadcast', { event: 'ops' }, ({ payload }) => {
       if (!payload || payload.c === clientId) return;
       if (payload.req) { if (rtCanEdit) sendFullState(); return; } // 신규 기기의 전체상태 요청 → 현재 상태 전송
+      const hadPending = API.getRev() !== rtRev; // 내 미전송 변경 유무 (체크섬 오탐 방지용)
       if (payload.full) {
         // 전체 상태 = 권위 스냅샷. 내 '동기화 기준선(rtLast)'에 있는데 스냅샷에 없는 개체는
         // 상대가 지운 것 → 같이 삭제 (안 지우면 스테일 DB 를 로드한 기기에서 삭제 개체가 되살아남).
@@ -429,6 +430,12 @@
       rtLast = rtSnapshot(); rtRev = API.getRev();
       if (payload.blocks) rtBlocksHash = hash(API.getBlocks());
       if (payload.layers) rtLayersHash = hash(API.getDoc().data.layers);
+      // 자가 치유(완전 싱크): 적용 결과가 송신자 서명과 다르면(개체 유실·잔존) 전체상태를 재요청.
+      // 내 미전송 변경이 있을 땐 불일치가 정상이므로 건너뛴다.
+      if (!hadPending && payload.h) {
+        const mine = idSig(rtLast);
+        if (mine.n !== payload.h.n || mine.s !== payload.h.s) requestFull();
+      }
     });
     rtChan.on('presence', { event: 'sync' }, () => {
       const stt = rtChan.presenceState();
@@ -450,7 +457,17 @@
     if (rtChan) { try { rtChan.untrack(); } catch (e) {} try { sb.removeChannel(rtChan); } catch (e) {} rtChan = null; }
     setRtInfo({ count: 0, names: [] });
   }
+  // 개체 id 서명 {n:개수, s:id 합} — 송신자 상태와 수신자 적용 결과가 어긋났는지(개체 유실/잔존) 감지
+  const idSig = (m) => { let n2 = 0, s2 = 0; for (const id2 of m.keys()) { n2++; s2 = (s2 + id2) >>> 0; } return { n: n2, s: s2 }; };
+  // 자가 치유: 서명 불일치 시 전체상태 재요청 (5초 스로틀 — 재수렴 중 중복 요청 방지)
+  let lastReqAt = 0;
+  function requestFull() {
+    const now = Date.now(); if (now - lastReqAt < 5000 || !rtChan) return;
+    lastReqAt = now;
+    try { rtChan.send({ type: 'broadcast', event: 'ops', payload: { c: clientId, req: true } }); } catch (e) {}
+  }
   // 변경 감시 → 엔티티 단위 diff 방송 (편집 권한 있을 때만 송신)
+  // 200ms — rev 게이트가 있어 변경 없을 땐 스냅샷 비용 0. 체감 지연 = 200ms + 네트워크.
   setInterval(() => {
     if (!rtChan || !rtCanEdit || API.getRev() === rtRev) return;
     rtRev = API.getRev();
@@ -459,12 +476,12 @@
     for (const [id, s] of cur) if (rtLast.get(id) !== s) ups.push(JSON.parse(s));
     for (const id of rtLast.keys()) if (!cur.has(id)) dels.push(id);
     rtLast = cur;
-    const payload = { c: clientId, ups, dels };
+    const payload = { c: clientId, ups, dels, h: idSig(cur) };
     const bh = hash(API.getBlocks()); if (bh !== rtBlocksHash) { rtBlocksHash = bh; payload.blocks = API.getBlocks(); }
     const lh = hash(API.getDoc().data.layers); if (lh !== rtLayersHash) { rtLayersHash = lh; payload.layers = API.getDoc().data.layers; }
     if (ups.length || dels.length || payload.blocks || payload.layers)
       try { rtChan.send({ type: 'broadcast', event: 'ops', payload }); } catch (e) {}
-  }, 700);
+  }, 200);
 
   // ---------- 계정 실시간 세션: 한 계정의 모든 활성 기기가 '같은 활성 도면'을 공유 ----------
   // 요청: PC·모바일이 똑같은 작업물이어야 한다. 마지막에 연 도면을 모든 기기가 추종하고,
