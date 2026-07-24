@@ -308,19 +308,108 @@
       }
     } catch (e) {}
   }
-  // 접속 표시: Supabase Realtime presence — 로그인한 모든 Parti 창이 자기 이메일을 알린다.
-  let presCh = null, online = new Set();
+  // 접속 표시 + 동시접속 기기 제한: Supabase Realtime presence — 이메일을 key로 삼아
+  // 같은 계정의 기기들이 한 key에 배열로 쌓인다(기기 수 카운트에 활용).
+  let presCh = null, online = new Set(), presKey = '';
+  // 기기 식별자 — 브라우저/기기당 1개, 새로고침·다중 탭에도 유지(같은 기기는 1대로 계산)
+  function deviceId() {
+    let d = null; try { d = localStorage.getItem('webcad_device_id'); } catch (e) {}
+    if (!d) {
+      d = (self.crypto && crypto.randomUUID) ? crypto.randomUUID()
+        : 'dev-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+      try { localStorage.setItem('webcad_device_id', d); } catch (e) {}
+    }
+    return d;
+  }
+  const DEVICE = deviceId();
+  // 동시접속 한도: 프로=2대, 그 외(무료)=1대
+  function deviceLimit() {
+    try { return (window.WEBCAD_CLOUD && WEBCAD_CLOUD.plan && WEBCAD_CLOUD.plan() === 'pro') ? 2 : 1; } catch (e) { return 1; }
+  }
+  // 순수 판정(테스트용): 기기별 '가장 이른 접속시각(at)'으로 서열 → 먼저 접속한 N대만 활성,
+  // 그 뒤에 접속한 내 기기는 차단(= 기존 활성 기기 보호). 같은 dev(기기)의 여러 탭은 1대로 합침.
+  function deviceDecision(metas, myDev, limit) {
+    const byDev = new Map();
+    for (const m of (metas || [])) {
+      const dv = (m && m.dev) || (m && m.presence_ref) || 'unknown';
+      const at = (m && +m.at) || 0;
+      if (!byDev.has(dv) || at < byDev.get(dv)) byDev.set(dv, at);
+    }
+    const order = [...byDev.entries()].sort((a, b) => (a[1] - b[1]) || (a[0] < b[0] ? -1 : 1)).map(e => e[0]);
+    const active = order.slice(0, Math.max(1, limit | 0));
+    const known = byDev.has(myDev);
+    return { blocked: known && active.indexOf(myDev) < 0, devices: order.length, activeCount: active.length };
+  }
+  function evalDeviceLimit() {
+    if (!presCh) return;
+    let metas = [];
+    try {
+      const st = presCh.presenceState() || {};
+      const k = Object.keys(st).find(x => String(x).toLowerCase() === presKey);
+      metas = (k && st[k]) || [];
+    } catch (e) {}
+    const lim = deviceLimit();
+    showDeviceLock(deviceDecision(metas, DEVICE, lim).blocked, lim);
+  }
   function startPresence(session) {
     if (!session || presCh || !sb || typeof sb.channel !== 'function') return;
     try {
-      const key = String(session.user.email || 'user').toLowerCase();
-      presCh = sb.channel('webcad-online', { config: { presence: { key } } });
+      presKey = String(session.user.email || 'user').toLowerCase();
+      const myAt = Date.now();
+      presCh = sb.channel('webcad-online', { config: { presence: { key: presKey } } });
       presCh.on('presence', { event: 'sync' }, () => {
         online = new Set(Object.keys(presCh.presenceState() || {}).map(k => String(k).toLowerCase()));
         renderFriendList();
+        evalDeviceLimit();
       });
-      presCh.subscribe((st) => { if (st === 'SUBSCRIBED') { try { presCh.track({ at: Date.now() }); } catch (e) {} } });
+      presCh.subscribe((st) => { if (st === 'SUBSCRIBED') { try { presCh.track({ at: myAt, dev: DEVICE }); } catch (e) {} } });
     } catch (e) {}
+  }
+  // 플랜이 뒤늦게 로드(프로 확인)되면 한도를 다시 평가
+  window.addEventListener('webcad-cloud-ready', () => { try { evalDeviceLimit(); } catch (e) {} });
+  // 동시접속 초과 잠금 오버레이 — '새 기기 차단' 방식(기존 활성 기기를 보호)
+  let devLockEl = null;
+  function showDeviceLock(blocked, limit) {
+    if (!blocked) { if (devLockEl) devLockEl.style.display = 'none'; return; }
+    if (!devLockEl) {
+      if (!document.getElementById('devLockStyle')) {
+        const st = document.createElement('style'); st.id = 'devLockStyle';
+        st.textContent = `
+          #devLock{position:fixed;inset:0;z-index:100000;display:flex;align-items:center;justify-content:center;padding:24px;
+            background:rgba(6,10,20,0.72);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);}
+          #devLock .dlCard{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:18px;
+            box-shadow:var(--shadow-pop);width:400px;max-width:92vw;padding:30px 30px 26px;text-align:center;}
+          #devLock .dlIco{width:52px;height:52px;margin:0 auto 16px;border-radius:50%;display:flex;align-items:center;
+            justify-content:center;background:var(--glass-fill-hi);color:var(--accent-text);}
+          #devLock .dlIco svg{width:26px;height:26px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;}
+          #devLock .dlTit{font-size:18px;font-weight:650;margin:0 0 10px;letter-spacing:-0.01em;}
+          #devLock .dlMsg{font-size:13px;line-height:1.6;color:var(--muted);margin:0 0 18px;}
+          #devLock .dlMsg b{color:var(--text);font-weight:600;}
+          #devLock .dlUp{font-size:12px;line-height:1.5;color:var(--accent-text);background:var(--glass-fill);
+            border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin:0 0 18px;}
+          #devLock .dlBtn{width:100%;padding:12px;border:none;border-radius:12px;background:var(--accent);color:#fff;
+            font-size:14px;font-weight:600;cursor:pointer;transition:background .12s ease;}
+          #devLock .dlBtn:hover{background:var(--accent-hover);}`;
+        document.head.appendChild(st);
+      }
+      devLockEl = document.createElement('div'); devLockEl.id = 'devLock';
+      document.body.appendChild(devLockEl);
+    }
+    const pro = limit >= 2;
+    const line = pro ? '프로 플랜은 최대 2대까지 동시에 사용할 수 있어요.'
+      : '일반 플랜은 한 번에 한 기기에서만 사용할 수 있어요.';
+    const upsell = pro ? '' : '<div class="dlUp">여러 기기에서 동시에 이어 작업하려면 프로 플랜(2대 동시 접속)을 이용하세요.</div>';
+    devLockEl.innerHTML = `
+      <div class="dlCard">
+        <div class="dlIco"><svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg></div>
+        <h2 class="dlTit">다른 기기에서 사용 중입니다</h2>
+        <p class="dlMsg">이 계정은 이미 다른 기기에서 Parti를 사용하고 있습니다. ${line}<br>이 기기에서 이어서 작업하려면 <b>다른 기기의 Parti 창을 닫은 뒤</b> 아래 버튼을 눌러 주세요.</p>
+        ${upsell}
+        <button class="dlBtn" id="dlRetry">이 기기에서 이어서 작업</button>
+      </div>`;
+    devLockEl.style.display = 'flex';
+    const rb = devLockEl.querySelector('#dlRetry');
+    if (rb) rb.addEventListener('click', () => { try { evalDeviceLimit(); } catch (e) {} });
   }
   function renderFriendList() {
     const list = chip && chip.querySelector('#frList'); if (!list) return;
@@ -426,6 +515,8 @@
     isGateOpen: () => !gate.classList.contains('hidden'),
     signOut: async () => { if (sb) { await sb.auth.signOut(); } location.reload(); },
     _showUser: showUser, // 테스트 훅 — 마이페이지 칩/친구 패널 검증용 (세션 주입)
+    _deviceDecision: deviceDecision, // 테스트 훅 — 동시접속 기기 제한 판정(순수 함수)
+    _deviceId: () => DEVICE,
   };
 
   async function init() {

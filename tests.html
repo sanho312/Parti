@@ -3401,6 +3401,17 @@ function tests(){
       AD.dispatchEvent(new AW.PointerEvent('pointerdown', { bubbles: true }));
       ok(!menu.classList.contains('open'), '  바깥 클릭 = 닫힘');
     } else ok(true, '(auth 훅 없음)');
+    // ── 동시접속 기기 제한 (일반 1대 / 프로 2대) — '새 기기 차단' 순수 판정
+    if (AW.WEBCAD_AUTH_API && AW.WEBCAD_AUTH_API._deviceDecision) {
+      const DD = AW.WEBCAD_AUTH_API._deviceDecision;
+      ok(DD([{ dev: 'A', at: 100 }], 'A', 1).blocked === false, '★일반: 내 기기 1대만 = 허용');
+      ok(DD([{ dev: 'A', at: 100 }, { dev: 'B', at: 200 }], 'B', 1).blocked === true, '★일반: 나중에 접속한 새 기기 = 차단');
+      ok(DD([{ dev: 'A', at: 100 }, { dev: 'B', at: 200 }], 'A', 1).blocked === false, '  일반: 먼저 접속한 기기 = 유지');
+      ok(DD([{ dev: 'A', at: 100 }, { dev: 'B', at: 200 }], 'B', 2).blocked === false, '★프로: 2대 동시 = 둘 다 허용');
+      ok(DD([{ dev: 'A', at: 100 }, { dev: 'B', at: 200 }, { dev: 'C', at: 300 }], 'C', 2).blocked === true, '★프로: 3번째 기기 = 차단');
+      ok(DD([{ dev: 'A', at: 100 }, { dev: 'A', at: 150 }, { dev: 'B', at: 200 }], 'A', 1).devices === 2, '★같은 기기 여러 탭 = 1대로 계산');
+      ok(DD([{ dev: 'A', at: 100 }], 'Z', 1).blocked === false, '  내 기기 아직 미표시(propagate 전) = 차단 안 함');
+    } else ok(true, '(기기제한 훅 없음)');
     // ── 평면 칸 표시 모드 메뉴: 렌더링/레이트레이싱 선택지 노출
     C.open3D && C.open3D();
     if (C.v3 && C.v3.views) {
