@@ -366,6 +366,13 @@ try { if (localStorage.getItem('webcad_theme') === 'light') document.documentEle
   .layer.active .nm,.layer.active .eye,.layer.active .lk{color:#fff;}
   .layer.active .lrow2 select{color:#fff;background:rgba(0,0,0,.28);}
   .layer .lrow1{display:flex;align-items:center;gap:6px;}
+  /* 레이어 순서 드래그 — 도구막대(.tool.tbDragging)와 같은 규약 */
+  .layer.lyDragging{opacity:.45;outline:1.5px dashed var(--accent);outline-offset:-1px;}
+  .layer.lyOver{box-shadow:inset 0 2px 0 0 var(--accent);}
+  /* 레이어 패널 하단 토글 — 1열 나란히, 같은 크기 */
+  #layerBtns{display:flex;gap:6px;margin-top:8px;}
+  #layerBtns .miniBtn{flex:1 1 0;min-width:0;display:inline-flex;align-items:center;justify-content:center;height:28px;padding:0;}
+  #layerBtns .miniBtn svg.ic{width:15px;height:15px;}
   .layer .lrow2{display:flex;gap:4px;}
   .layer .lrow2 select{flex:1;min-width:0;background:var(--panel2);color:var(--text);
     border:none;border-radius:var(--radius-sm);font-size:11px;padding:3px 4px;}
@@ -772,7 +779,7 @@ try { if (localStorage.getItem('webcad_theme') === 'light') document.documentEle
         <h3>레이어</h3>
         <div class="body">
           <div id="layerList"></div>
-          <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;">
+          <div id="layerBtns">
             <button class="miniBtn" id="btnAddLayer" title="레이어 추가"><svg class="ic" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
             <button class="miniBtn" id="btnDelLayer" title="현재 레이어 삭제"><svg class="ic" viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/><path d="M6 7l1 13a1 1 0 0 0 1 .9h8a1 1 0 0 0 1-.9l1-13"/></svg></button>
             <button class="miniBtn" id="btnLayTplSave" title="레이어 목록 저장 — 클라우드 슬롯(프로 5·무료 1) 또는 파일(.layers.json, 공유용)"><svg class="ic" viewBox="0 0 24 24"><path d="M12 4v9"/><path d="M8.5 9.5L12 13l3.5-3.5"/><path d="M4 15v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg></button>
@@ -943,7 +950,7 @@ try { if (localStorage.getItem('webcad_theme') === 'light') document.documentEle
   </div>
 </div>
 
-<script src="cad.js?v=20260725i"></script>
+<script src="cad.js?v=20260725j"></script>
 <script src="prep.js?v=5"></script>
 <script src="bimify.js?v=8"></script>
 <script src="sketch.js?v=15"></script>

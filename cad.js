@@ -12955,9 +12955,63 @@ function renderLayers() {
         l.name = nn; renderLayers(); draw();
       }
     });
-    div.addEventListener('click', () => { state.currentLayer = l.name; renderLayers(); });
+    div.addEventListener('click', () => { if (lyDragged) return; state.currentLayer = l.name; renderLayers(); });
+    div.dataset.ly = l.name;   // 드래그 재정렬이 행↔레이어를 잇는 키
     list.appendChild(div);
   }
+}
+// ─── 레이어 순서 드래그 (도구막대와 같은 규약: 6px 이동부터 드래그, 제자리 클릭은 레이어 선택) ───
+let lyDrag = null, lyDragged = false;
+{
+  const list = document.getElementById('layerList');
+  // 행 히트테스트는 좌표 계산으로 — elementFromPoint 는 패널이 접히거나(오프스크린) 위에 뭔가
+  // 덮이면 null 을 반환해 드래그가 조용히 죽는다. 세로 위치만 보면 되므로 rect 순회가 정확하고 견고하다.
+  const rowAt = (x, y) => {
+    for (const r of list.querySelectorAll('.layer')) {
+      const b = r.getBoundingClientRect();
+      if (y >= b.top && y <= b.bottom) return r;
+    }
+    return null;
+  };
+  list.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    if (e.target.closest('.sw,.eye,.lk,.plt')) return;   // 토글·색 스와치는 자기 동작
+    const row = e.target.closest('.layer');
+    if (row) lyDrag = { row, x: e.clientX, y: e.clientY, on: false };
+  });
+  list.addEventListener('pointermove', (e) => {
+    if (!lyDrag) return;
+    if (!lyDrag.on) {
+      if (Math.hypot(e.clientX - lyDrag.x, e.clientY - lyDrag.y) <= 6) return;
+      lyDrag.on = true; lyDrag.row.classList.add('lyDragging');
+      pushUndo();   // ★순서를 바꾸기 '전' 상태를 스냅샷 — 끝난 뒤 부르면 되돌려도 바뀐 순서가 남는다
+      try { list.setPointerCapture(e.pointerId); } catch (_) {}
+    }
+    const over = rowAt(e.clientX, e.clientY);
+    for (const r of list.querySelectorAll('.lyOver')) r.classList.remove('lyOver');
+    if (!over || over === lyDrag.row) return;
+    over.classList.add('lyOver');
+    const from = state.layers.findIndex(x => x.name === lyDrag.row.dataset.ly);
+    const to = state.layers.findIndex(x => x.name === over.dataset.ly);
+    if (from < 0 || to < 0) return;
+    const [mv] = state.layers.splice(from, 1);
+    state.layers.splice(to, 0, mv);                      // 실시간 미리보기 = 최종 결과와 동일
+    const keep = lyDrag.row.dataset.ly;
+    renderLayers();
+    lyDrag.row = list.querySelector(`.layer[data-ly="${CSS.escape(keep)}"]`);
+    if (lyDrag.row) lyDrag.row.classList.add('lyDragging');
+  });
+  const lyEnd = () => {
+    if (!lyDrag) return;
+    if (lyDrag.on) {
+      lyDragged = true; setTimeout(() => { lyDragged = false; }, 0);   // 직후 click 1회만 차단
+      renderLayers(); draw();
+    }
+    for (const r of document.querySelectorAll('#layerList .lyOver,#layerList .lyDragging')) r.classList.remove('lyOver', 'lyDragging');
+    lyDrag = null;
+  };
+  list.addEventListener('pointerup', lyEnd);
+  list.addEventListener('pointercancel', lyEnd);
 }
 
 // ─── 레이어 설정 팝업 (옵션 메뉴) — 행에서 뺀 세부 속성(선·재질·역할·단면·창호·높이/두께) 편집 ───
@@ -15749,7 +15803,7 @@ window.__CADTEST__ = {
   bimSolids, pushLitPoly, lineClipPoly, genSectionView, stairSolids, stairSteps, railingSolids, railingPath, cmdRailingTag, lightEmitters, lightGizmos, renderLightList, cmdSetAsLight, cmdUnsetLight, cmdLighting, cmdRaytrace, rtBuildScene, rtTrisByEntity, rtSyncCamera, rtGeoSig, rtSupported, rtPreview, rtFullRes, rtLightsChanged, litCacheSig, rtSetEnv, rtEnvWanted, cmdRtEnv, parseIES, iesCandelaAt, iesSummary, iesToTexture, iesFluxFactor, lightCandela, cmdIes, selectedLights, cmdRtDenoise, rtExposure, cmdExposure, RT_EXPOSURE, RT_EXPOSURE_DAY,
   vpIsPlan, vpPlanIndex, vpRect, vpRectCss, planCvRect, syncPlanCv, open3D, close3D, is3DActive, resize, worldToScreen, screenToWorld,
   rview, rviewFrame, rviewBuildScene, rviewSyncSun, rviewSig, cmdRendered,
-  MAT_PRESETS, MAT_ALIAS, matOf, matKey, matHex, matBoxUV, matGeo, matBuild, matTextures, matDrawTex, cmdMaterial, rtGeoSig, bimSolidColor, secHatchFor, computePatternSegs, owWt, OPENING_TYPES, owSaveDef, owPlaced, layerAutoBim, applyLayerRoleTo, addEntity,
+  MAT_PRESETS, MAT_ALIAS, matOf, matKey, matHex, matBoxUV, matGeo, matBuild, matTextures, matDrawTex, cmdMaterial, rtGeoSig, bimSolidColor, secHatchFor, computePatternSegs, owWt, OPENING_TYPES, owSaveDef, owPlaced, layerAutoBim, applyLayerRoleTo, addEntity, renderLayers,
   runCommandInput, feedCmdArg,
   skyCloud, sunDirectIlluminanceClear, skyBlend, SKY_OVERCAST_E, SKY_OVERCAST_RGB,
   skyCloudMask, skySolve, skyCtxCompute, _skyFbm, SKY_CLOUD_TILE,
