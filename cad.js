@@ -12906,7 +12906,7 @@ function renderLayers() {
   for (const l of state.layers) {
     const div = document.createElement('div');
     div.className = 'layer' + (l.name === state.currentLayer ? ' active' : '');
-    const ltOpts = Object.keys(LINETYPES).map(k => `<option value="${k}" ${(l.linetype || 'continuous') === k ? 'selected' : ''}>${LINETYPE_KO[k]}</option>`).join('');
+    // 행은 5요소만 — 색·이름·인쇄·잠금·눈. 선종류/재질/역할 등 세부는 옵션 → 레이어 설정에서 (2026-07-25 요청)
     div.innerHTML =
       `<div class="lrow1">
         <span class="sw" style="background:${l.color}"></span>
@@ -12914,37 +12914,6 @@ function renderLayers() {
         <span class="plt${l.noplot ? ' off' : ''}" title="인쇄·내보내기 포함/제외 — 끄면 화면엔 보이되 플롯 PDF·SVG·PNG 에서 빠집니다">${l.noplot ? LAYIC.plotOff : LAYIC.plot}</span>
         <span class="lk${l.locked ? ' on' : ''}" title="잠금(수정 불가)">${l.locked ? LAYIC.lock : LAYIC.unlock}</span>
         <span class="eye${l.visible ? '' : ' off'}" title="표시/숨김">${l.visible ? LAYIC.eye : LAYIC.eyeOff}</span>
-       </div>
-       <div class="lrow2" onclick="event.stopPropagation()">
-        <select class="llt" title="선종류">${ltOpts}</select>
-        <select class="llw" title="선굵기(mm)">
-          ${[['', '기본'], ['0', '가는'], ['25', '0.25'], ['50', '0.50'], ['70', '0.70'], ['100', '1.00'], ['200', '2.00']]
-            .map(([v, t]) => `<option value="${v}" ${String(l.lineweight ?? '') === v ? 'selected' : ''}>${t}</option>`).join('')}
-        </select>
-        <select class="lmat" title="레이어 재질 — 이 레이어의 srf·솔리드가 자동으로 입습니다 (개체에 직접 지정한 재질이 우선)">
-          ${['<option value="">재질 없음</option>']
-            .concat(Object.keys(state.matlib || {}).map(k => `<option value="${MAT_LIB_PREFIX}${escapeHtml(k)}" ${l.mat === MAT_LIB_PREFIX + k ? 'selected' : ''}>${escapeHtml(k)}</option>`))
-            .concat(Object.keys(MAT_PRESETS).map(k => `<option value="${k}" ${l.mat === k ? 'selected' : ''}>${MAT_PRESETS[k].ko}</option>`)).join('')}
-        </select>
-       </div>
-       <div class="lrow2" onclick="event.stopPropagation()">
-        <select class="lrole" title="건물화 역할 — 스케치를 건물로 바꿀 때 이 레이어 도형의 역할 (자동 = 이름·모양으로 판정)">
-          ${LAYER_ROLE_OPTS.map(([v, t]) => `<option value="${v}" ${(l.role || '') === v ? 'selected' : ''}>${t}</option>`).join('')}
-        </select>
-        <select class="lsec" title="단면 재료표시 — 단면(section)을 자르면 이 레이어 개체의 절단면에 자동으로 채워지는 KS 재료 해치 (자동 = 재질에서 유도)">
-          ${[['', '재료: 자동'], ['none', '해치 없음'], ['concrete', '콘크리트'], ['ansi31', '사선(벽돌·목재·지반)'], ['ansi37', '콘크리트블럭'], ['steel', '강재'], ['insul', '단열재'], ['rubble', '잡석'], ['xbox', '목구조재'], ['dots', '모르타르·모래'], ['grid', '타일'], ['solid', '단색']]
-            .map(([v, t]) => `<option value="${v}" ${(l.secHatch || '') === v ? 'selected' : ''}>${t}</option>`).join('')}
-        </select>
-       </div>
-       <div class="lrow2" onclick="event.stopPropagation()">
-        <input class="ldh" type="number" min="0" step="50" placeholder="높이" value="${l.defH ?? ''}" title="기본 높이(mm) — 건물화 시 이 레이어 벽·기둥의 높이 (비우면 전체 기본 2400)">
-        <input class="ldt" type="number" min="0" step="10" placeholder="두께" value="${l.defT ?? ''}" title="기본 두께(mm) — 건물화 시 이 레이어 벽의 두께 (비우면 전체 기본 200)">
-        <select class="lwt" title="기본 창호 — 이 레이어에 만드는 문/창의 표시기호 유형 (개체에 직접 지정한 유형이 우선)">
-          <option value="">창호: 자동</option>
-          <optgroup label="문">${OPENING_TYPES.door.map(([v, t]) => `<option value="${v}" ${l.defWt === v ? 'selected' : ''}>${t}</option>`).join('')}</optgroup>
-          <optgroup label="창">${OPENING_TYPES.window.map(([v, t]) => `<option value="${v}" ${l.defWt === v ? 'selected' : ''}>${t}</option>`).join('')}</optgroup>
-          ${Object.keys(state.owlib || {}).length ? '<optgroup label="내 기호">' + Object.keys(state.owlib).map(n2 => `<option value="@${escapeHtml(n2)}" ${l.defWt === '@' + n2 ? 'selected' : ''}>@${escapeHtml(n2)}</option>`).join('') + '</optgroup>' : ''}
-        </select>
        </div>`;
     div.addEventListener('contextmenu', (e) => { // 우클릭: 선택한 객체를 이 레이어로 이동 (라이노식)
       e.preventDefault(); e.stopPropagation();
@@ -12974,42 +12943,8 @@ function renderLayers() {
       if (l.locked) { state.entities.forEach(en => { if (en.layer === l.name) state.selection.delete(en.id); }); renderProps(); }
       renderLayers(); propRefresh();   // 잠금 시 선택 해제가 3D 강조에도 반영되게
     });
-    div.querySelector('.llt').addEventListener('change', (e) => { e.stopPropagation(); l.linetype = e.target.value; draw(); });
-    div.querySelector('.llw').addEventListener('change', (e) => { e.stopPropagation(); l.lineweight = e.target.value === '' ? undefined : parseInt(e.target.value, 10); draw(); });
-    div.querySelector('.lmat').addEventListener('change', (e) => {
-      e.stopPropagation();
-      pushUndo();                                          // 재질은 렌더 결과를 바꾸므로 undo 대상
-      l.mat = e.target.value || undefined;
-      propRefresh();                                       // 2D + 3D(솔리드 색·렌더 재질) 즉시 반영
-    });
     div.querySelector('.plt').addEventListener('click', (e) => {
       e.stopPropagation(); l.noplot = !l.noplot; renderLayers();   // 출력 시점에만 걸러지므로 재렌더 불필요
-    });
-    div.querySelector('.lrole').addEventListener('change', (e) => {
-      e.stopPropagation(); pushUndo(); l.role = e.target.value || undefined;
-      // 라이브 반영: 이 레이어의 기존 도형에도 즉시 적용/해제 (수동 지정 BIM 은 보존)
-      let nA = 0;
-      for (const en of state.entities) if (en.layer === l.name && (!en.bim || en.bim.auto)) { const had = !!en.bim; applyLayerRoleTo(en); if (!!en.bim !== had || en.bim) nA++; }
-      logLine(`  레이어 "${l.name}" 역할 ${l.role ? LAYER_ROLE_OPTS.find(o2 => o2[0] === l.role)[1] + ' 지정' : '해제'} — 기존 도형 ${nA}개 반영`, 'info');
-      propRefresh();
-    });
-    div.querySelector('.lsec').addEventListener('change', (e) => {
-      e.stopPropagation(); pushUndo(); l.secHatch = e.target.value || undefined;
-    });
-    div.querySelector('.lwt').addEventListener('change', (e) => {
-      e.stopPropagation(); pushUndo(); l.defWt = e.target.value || undefined; draw(); // wt 미지정 개구부 기호가 즉시 바뀜
-    });
-    div.querySelector('.ldh').addEventListener('change', (e) => {
-      e.stopPropagation(); pushUndo();
-      const v = parseFloat(e.target.value); l.defH = (isFinite(v) && v > 0) ? v : undefined;
-      for (const en of state.entities) if (en.layer === l.name && en.bim && en.bim.auto) layerAutoBim(en, l); // 자동 BIM 높이 즉시 갱신
-      propRefresh();
-    });
-    div.querySelector('.ldt').addEventListener('change', (e) => {
-      e.stopPropagation(); pushUndo();
-      const v = parseFloat(e.target.value); l.defT = (isFinite(v) && v > 0) ? v : undefined;
-      for (const en of state.entities) if (en.layer === l.name && en.bim && en.bim.auto) layerAutoBim(en, l); // 자동 BIM 두께 즉시 갱신
-      propRefresh();
     });
     div.querySelector('.nm').addEventListener('dblclick', (e) => {
       e.stopPropagation();
@@ -13025,7 +12960,85 @@ function renderLayers() {
   }
 }
 
-document.getElementById('btnAllVis').addEventListener('click', () => { state.layers.forEach(l => { l.visible = true; l.locked = false; }); renderLayers(); propRefresh(); });
+// ─── 레이어 설정 팝업 (옵션 메뉴) — 행에서 뺀 세부 속성(선·재질·역할·단면·창호·높이/두께) 편집 ───
+let layerCfgEl = null;
+function layerCfgForm(l) {
+  const ltOpts = Object.keys(LINETYPES).map(k => `<option value="${k}" ${(l.linetype || 'continuous') === k ? 'selected' : ''}>${LINETYPE_KO[k]}</option>`).join('');
+  const matOpts = ['<option value="">재질 없음</option>']
+    .concat(Object.keys(state.matlib || {}).map(k => `<option value="${MAT_LIB_PREFIX}${escapeHtml(k)}" ${l.mat === MAT_LIB_PREFIX + k ? 'selected' : ''}>${escapeHtml(k)}</option>`))
+    .concat(Object.keys(MAT_PRESETS).map(k => `<option value="${k}" ${l.mat === k ? 'selected' : ''}>${MAT_PRESETS[k].ko}</option>`)).join('');
+  const secOpts = [['', '자동(재질 따름)'], ['none', '해치 없음'], ['concrete', '콘크리트'], ['ansi31', '사선(벽돌·목재·지반)'], ['ansi37', '콘크리트블럭'], ['steel', '강재'], ['insul', '단열재'], ['rubble', '잡석'], ['xbox', '목구조재'], ['dots', '모르타르·모래'], ['grid', '타일'], ['solid', '단색']]
+    .map(([v, t]) => `<option value="${v}" ${(l.secHatch || '') === v ? 'selected' : ''}>${t}</option>`).join('');
+  const wtOpts = '<option value="">자동</option>'
+    + `<optgroup label="문">${OPENING_TYPES.door.map(([v, t]) => `<option value="${v}" ${l.defWt === v ? 'selected' : ''}>${t}</option>`).join('')}</optgroup>`
+    + `<optgroup label="창">${OPENING_TYPES.window.map(([v, t]) => `<option value="${v}" ${l.defWt === v ? 'selected' : ''}>${t}</option>`).join('')}</optgroup>`
+    + (Object.keys(state.owlib || {}).length ? `<optgroup label="내 기호">${Object.keys(state.owlib).map(n2 => `<option value="@${escapeHtml(n2)}" ${l.defWt === '@' + n2 ? 'selected' : ''}>@${escapeHtml(n2)}</option>`).join('')}</optgroup>` : '');
+  return `
+    <label>선종류</label><select id="lcLt">${ltOpts}</select>
+    <label>선굵기</label><select id="lcLw">${[['', '기본'], ['0', '가는'], ['25', '0.25'], ['50', '0.50'], ['70', '0.70'], ['100', '1.00'], ['200', '2.00']]
+      .map(([v, t]) => `<option value="${v}" ${String(l.lineweight ?? '') === v ? 'selected' : ''}>${t}</option>`).join('')}</select>
+    <label>재질</label><select id="lcMat" title="이 레이어의 srf·솔리드가 자동으로 입는 재질 (개체 직접 지정이 우선)">${matOpts}</select>
+    <label>단면재료</label><select id="lcSec" title="단면을 자르면 절단면에 자동으로 채워지는 KS 재료 해치">${secOpts}</select>
+    <label>역할</label><select id="lcRole" title="이 레이어에 그리면 즉시 생성되는 모델 (벽·기둥·슬래브·문·창)">${LAYER_ROLE_OPTS.map(([v, t]) => `<option value="${v}" ${(l.role || '') === v ? 'selected' : ''}>${t}</option>`).join('')}</select>
+    <label>창호</label><select id="lcWt" title="이 레이어 문/창의 기본 표시기호">${wtOpts}</select>
+    <label>높이(mm)</label><input id="lcH" type="number" min="0" step="50" placeholder="기본 2400" value="${l.defH ?? ''}">
+    <label>두께(mm)</label><input id="lcT" type="number" min="0" step="10" placeholder="기본 200" value="${l.defT ?? ''}">`;
+}
+function openLayerCfg(selName) {
+  if (!layerCfgEl) {
+    layerCfgEl = document.createElement('div');
+    layerCfgEl.id = 'layerCfgDlg';
+    layerCfgEl.style.cssText = 'position:absolute;left:50%;top:64px;transform:translateX(-50%);z-index:41;display:none;';
+    const host = document.getElementById('uiEditDlg');
+    (host ? host.parentElement : document.body).appendChild(layerCfgEl);
+  }
+  const cur = getLayer(selName) || getLayer(state.currentLayer) || state.layers[0];
+  layerCfgEl.innerHTML = `
+    <div class="dlgBox" style="width:340px;max-width:92vw;padding:0;overflow:hidden;display:flex;flex-direction:column;">
+      <div id="lcHead" style="display:flex;align-items:center;gap:10px;padding:14px 16px 10px;cursor:move;">
+        <svg class="ic" style="width:17px;height:17px;color:var(--accent-text);" viewBox="0 0 24 24"><path d="M12 3l8 4.5-8 4.5-8-4.5z"/><path d="M4 12l8 4.5 8-4.5"/><path d="M4 16.5L12 21l8-4.5"/></svg>
+        <span style="font-size:15px;font-weight:650;letter-spacing:-0.01em;flex:1;">레이어 설정</span>
+        <button id="lcClose" style="display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;background:transparent;border:none;color:var(--muted);cursor:pointer;border-radius:var(--radius-sm);"><svg class="ic" style="width:15px;height:15px;" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      </div>
+      <div style="padding:0 16px 16px;display:flex;flex-direction:column;gap:9px;">
+        <select id="lcLayer" style="font-weight:600;">${state.layers.map(x => `<option value="${escapeHtml(x.name)}" ${x.name === cur.name ? 'selected' : ''}>${escapeHtml(x.name)}</option>`).join('')}</select>
+        <div id="lcGrid" style="display:grid;grid-template-columns:64px 1fr;gap:7px 9px;align-items:center;font-size:12.5px;color:var(--muted);">${layerCfgForm(cur)}</div>
+        <div class="dlgHint" style="font-size:11.5px;">변경은 즉시 적용·저장됩니다. 역할·높이·두께는 이 레이어의 자동 생성 모델에 곧바로 반영됩니다.</div>
+      </div>
+    </div>`;
+  layerCfgEl.style.display = 'block';
+  if (window.webcadPopupDrag) window.webcadPopupDrag(layerCfgEl, layerCfgEl.querySelector('#lcHead'));
+  layerCfgEl.querySelector('#lcClose').addEventListener('click', () => { layerCfgEl.style.display = 'none'; });
+  const L = () => getLayer(layerCfgEl.querySelector('#lcLayer').value) || cur;
+  layerCfgEl.querySelector('#lcLayer').addEventListener('change', () => { layerCfgEl.querySelector('#lcGrid').innerHTML = layerCfgForm(L()); wire(); });
+  const wire = () => {
+    const $ = (id) => layerCfgEl.querySelector('#' + id);
+    $('lcLt').addEventListener('change', (e) => { L().linetype = e.target.value; draw(); });
+    $('lcLw').addEventListener('change', (e) => { L().lineweight = e.target.value === '' ? undefined : parseInt(e.target.value, 10); draw(); });
+    $('lcMat').addEventListener('change', (e) => { pushUndo(); L().mat = e.target.value || undefined; propRefresh(); });
+    $('lcSec').addEventListener('change', (e) => { pushUndo(); L().secHatch = e.target.value || undefined; });
+    $('lcWt').addEventListener('change', (e) => { pushUndo(); L().defWt = e.target.value || undefined; draw(); });
+    $('lcRole').addEventListener('change', (e) => {
+      pushUndo(); const l = L(); l.role = e.target.value || undefined;
+      let nA = 0;
+      for (const en of state.entities) if (en.layer === l.name && (!en.bim || en.bim.auto)) { applyLayerRoleTo(en); if (en.bim) nA++; }
+      logLine(`  레이어 "${l.name}" 역할 ${l.role ? LAYER_ROLE_OPTS.find(o2 => o2[0] === l.role)[1] + ' 지정' : '해제'} — 기존 도형 ${nA}개 반영`, 'info');
+      propRefresh();
+    });
+    $('lcH').addEventListener('change', (e) => {
+      pushUndo(); const l = L(); const v = parseFloat(e.target.value); l.defH = (isFinite(v) && v > 0) ? v : undefined;
+      for (const en of state.entities) if (en.layer === l.name && en.bim && en.bim.auto) layerAutoBim(en, l);
+      propRefresh();
+    });
+    $('lcT').addEventListener('change', (e) => {
+      pushUndo(); const l = L(); const v = parseFloat(e.target.value); l.defT = (isFinite(v) && v > 0) ? v : undefined;
+      for (const en of state.entities) if (en.layer === l.name && en.bim && en.bim.auto) layerAutoBim(en, l);
+      propRefresh();
+    });
+  };
+  wire();
+}
+document.getElementById('moLayerCfg')?.addEventListener('click', () => { document.getElementById('optMenu').classList.remove('open'); openLayerCfg(state.currentLayer); });
 // 레이어 목록 저장/불러오기 — 로그인 상태면 cloud.js 의 슬롯 다이얼로그, 아니면 파일로
 document.getElementById('btnLayTplSave').addEventListener('click', () => { if (window.PARTI_LAYERTPL) PARTI_LAYERTPL.save(); else exportLayersTpl(); });
 document.getElementById('btnLayTplLoad').addEventListener('click', () => { if (window.PARTI_LAYERTPL) PARTI_LAYERTPL.load(); else importLayersTplFile(); });

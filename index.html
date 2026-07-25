@@ -446,6 +446,7 @@ try { if (localStorage.getItem('webcad_theme') === 'light') document.documentEle
         <button class="menuItem" id="moUnits"><svg class="ic" viewBox="0 0 24 24"><rect x="2.5" y="8" width="19" height="8" rx="1"/><path d="M6.5 8v3M10 8v4M13.5 8v3M17 8v4"/></svg>단위 설정…</button>
         <div class="menuSep"></div>
         <button class="menuItem" id="moUiEdit"><svg class="ic" viewBox="0 0 24 24"><path d="M5 4v5m0 4.5V20M12 4v9m0 4.5V20M19 4v3m0 4.5V20"/><path d="M2.8 11.5h4.4M9.8 15h4.4M16.8 9.5h4.4"/></svg>인터페이스 편집…</button>
+        <button class="menuItem" id="moLayerCfg"><svg class="ic" viewBox="0 0 24 24"><path d="M12 3l8 4.5-8 4.5-8-4.5z"/><path d="M4 12l8 4.5 8-4.5"/><path d="M4 16.5L12 21l8-4.5"/></svg>레이어 설정…</button>
       </div>
     </div>
     <button class="tbtn" id="btnUndo" title="실행 취소 (Ctrl+Z)"><svg class="ic" viewBox="0 0 24 24"><polyline points="3.5 4.5 3.5 10.5 9.5 10.5"/><path d="M5.8 15.5a8 8 0 1 0 1.7-8.7L3.5 10.5"/></svg></button>
@@ -772,11 +773,10 @@ try { if (localStorage.getItem('webcad_theme') === 'light') document.documentEle
         <div class="body">
           <div id="layerList"></div>
           <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;">
-            <button class="miniBtn" id="btnAddLayer">+ 추가</button>
-            <button class="miniBtn" id="btnDelLayer">삭제</button>
-            <button class="miniBtn" id="btnAllVis" title="모든 레이어 표시+잠금해제"><svg class="ic" viewBox="0 0 24 24"><path d="M2.5 12S6 5.8 12 5.8 21.5 12 21.5 12 18 18.2 12 18.2 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.6"/></svg> 전체</button>
-            <button class="miniBtn" id="btnLayTplSave" title="지금 레이어 목록을 저장 — 클라우드 슬롯(프로 5·무료 1) 또는 파일(.layers.json, 공유용)">목록 저장</button>
-            <button class="miniBtn" id="btnLayTplLoad" title="저장한 레이어 목록 불러오기 — 기존 목록을 대체(도형이 쓰는 레이어는 유지)">불러오기</button>
+            <button class="miniBtn" id="btnAddLayer" title="레이어 추가"><svg class="ic" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+            <button class="miniBtn" id="btnDelLayer" title="현재 레이어 삭제"><svg class="ic" viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/><path d="M6 7l1 13a1 1 0 0 0 1 .9h8a1 1 0 0 0 1-.9l1-13"/></svg></button>
+            <button class="miniBtn" id="btnLayTplSave" title="레이어 목록 저장 — 클라우드 슬롯(프로 5·무료 1) 또는 파일(.layers.json, 공유용)"><svg class="ic" viewBox="0 0 24 24"><path d="M12 4v9"/><path d="M8.5 9.5L12 13l3.5-3.5"/><path d="M4 15v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg></button>
+            <button class="miniBtn" id="btnLayTplLoad" title="레이어 목록 불러오기 — 기존 목록을 대체(도형이 쓰는 레이어는 유지)"><svg class="ic" viewBox="0 0 24 24"><path d="M12 13V4"/><path d="M8.5 7.5L12 4l3.5 3.5"/><path d="M4 15v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg></button>
           </div>
         </div>
       </div>
@@ -943,7 +943,7 @@ try { if (localStorage.getItem('webcad_theme') === 'light') document.documentEle
   </div>
 </div>
 
-<script src="cad.js?v=20260725h"></script>
+<script src="cad.js?v=20260725i"></script>
 <script src="prep.js?v=5"></script>
 <script src="bimify.js?v=8"></script>
 <script src="sketch.js?v=15"></script>

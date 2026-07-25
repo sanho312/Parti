@@ -3455,7 +3455,8 @@ function tests(){
     ok(!!AD.querySelector('#aiFab svg.ic'), 'AI 코워커 = 봇 라인 아이콘');
     ok(!!AD.querySelector('#layerList .lk svg.ic') && !!AD.querySelector('#layerList .eye svg.ic'),
       '★레이어 잠금·표시 = 라인 아이콘 (이모지 제거)');
-    ok(!!AD.querySelector('#btnAllVis svg.ic'), '레이어 전체표시 = 눈 아이콘');
+    ok(!AD.getElementById('btnAllVis') && !!AD.querySelector('#btnAddLayer svg.ic') && !!AD.querySelector('#btnLayTplSave svg.ic'),
+      '레이어 하단 버튼 = 아이콘화 (전체 버튼 제거, 추가/저장 등 svg 아이콘)');
     ok(!!AD.querySelector('#btnUndo svg.ic') && AD.getElementById('btnUndo').textContent.trim() === '',
       '취소/복구 = 아이콘 전용');
     // ② 토글 라벨 접기 — 비활성=아이콘만, 열림/활성=아이콘+라벨
@@ -3975,10 +3976,10 @@ function tests(){
       eqi(after, 0, '★3D 화면에서도 실제로 사라진다 (클릭만으로 갱신)');
       rowOf('0').querySelector('.eye').click();
       ok(px() > 100, '  다시 표시하면 3D 에 돌아온다');
-      // 전체 표시 버튼
+      // 눈 토글로 복귀 (전체 버튼은 UI 정리로 제거 — 2026-07-25)
       S0.layers.find(l => l.name === '0').visible = false;
-      AD.getElementById('btnAllVis').click();
-      ok(V.solids.length > 0, '★[전체] 버튼도 3D 를 되살린다');
+      rowOf('0').querySelector('.eye').click();
+      ok(V.solids.length > 0, '★눈 토글이 3D 를 되살린다');
       // isolate / uniso 도 3D 반영
       S0.selection.clear(); S0.selection.add(S0.entities[0].id);
       C.INSTANT_CMDS.isolate && C.INSTANT_CMDS.isolate();
