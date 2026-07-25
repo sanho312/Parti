@@ -20,24 +20,21 @@
   style.textContent = `
   #lobby{position:fixed;inset:0;z-index:300;overflow:auto;color:var(--text);
     --lb-sel:var(--panel3);
-    background:radial-gradient(1200px 700px at 50% -20%, rgba(20,60,150,0.38), transparent 60%),
-      linear-gradient(180deg,#070b18 0%,#0a1224 55%,#070a16 100%);
+    background:var(--bg);   /* 작업환경과 같은 플랫 배경 — 그라디언트 제거 (2026-07-26 톤 통일) */
     -webkit-user-select:none;user-select:none;}
-  html.light #lobby{--lb-sel:#ffffff;
-    background:radial-gradient(1200px 700px at 50% -20%, rgba(120,160,255,0.35), transparent 60%),
-      linear-gradient(180deg,#eef2fa 0%,#e5ecf7 60%,#eef2fa 100%);}
+  html.light #lobby{--lb-sel:#ffffff;}
   #lobby.hidden{display:none;}
   #lobby button{font-family:inherit;color:inherit;border:none;background:none;cursor:pointer;letter-spacing:inherit;}
   #lobby :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px;}
   @media (prefers-reduced-motion:reduce){ #lobby *{transition:none!important;animation:none!important;} }
 
   /* 상단 크롬 */
-  #lobby .lbChrome{position:sticky;top:0;z-index:40;background:var(--glass-chrome);
-    -webkit-backdrop-filter:var(--glass);backdrop-filter:var(--glass);border-bottom:0.5px solid var(--line);}
+  #lobby .lbChrome{position:sticky;top:0;z-index:40;background:var(--panel);
+    border-bottom:0.5px solid var(--line);}   /* 작업환경 상단바와 같은 플랫 패널 */
   #lobby .lbChromeIn{max-width:1240px;margin:0 auto;padding:11px 24px;display:flex;align-items:center;gap:14px;}
   #lobby .lbIcoBtn{width:36px;height:36px;border-radius:var(--radius);display:grid;place-items:center;
-    background:var(--glass-fill);box-shadow:var(--spec);transition:background .12s ease;flex:none;}
-  #lobby .lbIcoBtn:hover{background:var(--glass-fill-hi);}
+    background:var(--panel2);box-shadow:var(--spec);transition:background .12s ease;flex:none;}
+  #lobby .lbIcoBtn:hover{background:var(--panel3);}
   #lobby .lbIcoBtn svg{width:17px;height:17px;stroke:currentColor;stroke-width:1.7;fill:none;stroke-linecap:round;}
   #lobby .lbWord{font-size:15.5px;font-weight:680;letter-spacing:-0.025em;white-space:nowrap;flex:none;
     display:flex;align-items:center;gap:7px;}
@@ -47,14 +44,14 @@
   #lobby .lbSearch svg{position:absolute;left:12px;top:50%;transform:translateY(-50%);width:15px;height:15px;
     stroke:var(--muted2);stroke-width:1.8;fill:none;pointer-events:none;}
   #lobby .lbSearch input{width:100%;height:36px;padding:0 14px 0 34px;border-radius:var(--radius-pill);
-    background:var(--glass-fill);box-shadow:var(--spec);color:var(--text);font-size:13px;font-family:inherit;
+    background:var(--panel2);box-shadow:var(--spec);color:var(--text);font-size:13px;font-family:inherit;
     border:0.5px solid transparent;transition:border-color .12s,background .12s;-webkit-user-select:text;user-select:text;}
   #lobby .lbSearch input::placeholder{color:var(--muted2);}
-  #lobby .lbSearch input:focus{outline:none;border-color:var(--accent);background:var(--glass-fill-hi);}
+  #lobby .lbSearch input:focus{outline:none;border-color:var(--accent);background:var(--panel3);}
 
   #lobby .lbPcard{display:flex;align-items:center;gap:9px;padding:5px 10px 5px 5px;border-radius:var(--radius-pill);
-    background:var(--glass-fill);box-shadow:var(--spec);transition:background .12s ease;flex:none;}
-  #lobby .lbPcard:hover,#lobby .lbPcard[aria-expanded="true"]{background:var(--glass-fill-hi);}
+    background:var(--panel2);box-shadow:var(--spec);transition:background .12s ease;flex:none;}
+  #lobby .lbPcard:hover,#lobby .lbPcard[aria-expanded="true"]{background:var(--panel3);}
   #lobby .lbAv{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;flex:none;
     font-size:11.5px;font-weight:700;color:#fff;letter-spacing:0;background:linear-gradient(145deg,var(--accent),#6f4bff);}
   #lobby .lbPtxt{display:flex;flex-direction:column;gap:1px;align-items:flex-start;line-height:1.15;}
@@ -75,15 +72,15 @@
   #lobby .lbNew{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:8px;
     padding:16px;border-radius:var(--radius-lg);text-align:left;border:1.5px dashed var(--line-strong);
     background:transparent;transition:border-color .12s,background .12s;}
-  #lobby .lbNew:hover{border-color:var(--accent);background:var(--glass-fill);}
+  #lobby .lbNew:hover{border-color:var(--accent);background:var(--panel2);}
   #lobby .lbNew .plus{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;
     background:var(--accent);color:#fff;font-size:17px;line-height:1;}
   #lobby .lbNew .nt{font-size:13.5px;font-weight:640;}
   #lobby .lbNew .nd{font-size:11px;color:var(--muted);line-height:1.4;}
 
   #lobby .lbRcard{display:flex;flex-direction:column;border-radius:var(--radius-lg);overflow:hidden;text-align:left;
-    background:var(--glass-fill);box-shadow:var(--spec);transition:transform .12s ease,background .12s ease;}
-  #lobby .lbRcard:hover{transform:translateY(-2px);background:var(--glass-fill-hi);}
+    background:var(--panel2);box-shadow:var(--spec);transition:transform .12s ease,background .12s ease;}
+  #lobby .lbRcard:hover{transform:translateY(-2px);background:var(--panel3);}
   #lobby .lbThumb{width:100%;height:112px;display:block;object-fit:cover;background:var(--panel2);
     border-bottom:0.5px solid var(--line);}
   #lobby .lbNoThumb{width:100%;height:112px;display:grid;place-items:center;background:var(--panel2);
@@ -94,7 +91,7 @@
     font-variant-numeric:tabular-nums;min-width:0;}
   #lobby .lbCmeta .sep{color:var(--muted2);}
   #lobby .lbChip{display:inline-flex;align-items:center;gap:4px;padding:2px 7px;border-radius:var(--radius-pill);
-    font-size:10px;font-weight:600;background:var(--glass-fill-hi);color:var(--muted);white-space:nowrap;
+    font-size:10px;font-weight:600;background:var(--panel3);color:var(--muted);white-space:nowrap;
     max-width:100%;overflow:hidden;text-overflow:ellipsis;}
   #lobby .lbChip.shared{color:var(--accent-text);background:rgba(10,132,255,0.15);}
 
@@ -102,30 +99,30 @@
   #lobby .lbBrowser{display:flex;flex-direction:column;gap:12px;}
   #lobby .lbTabsRow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
   #lobby .lbTabs{display:flex;gap:4px;overflow-x:auto;padding:3px;flex:1;min-width:0;
-    background:var(--glass-fill);border-radius:var(--radius-pill);box-shadow:var(--spec);scrollbar-width:none;}
+    background:var(--panel2);border-radius:var(--radius-pill);box-shadow:var(--spec);scrollbar-width:none;}
   #lobby .lbTabs::-webkit-scrollbar{display:none;}
   #lobby .lbTab{display:inline-flex;align-items:center;gap:6px;padding:6px 13px;border-radius:var(--radius-pill);
     font-size:12.5px;font-weight:560;color:var(--muted);white-space:nowrap;transition:background .12s,color .12s;}
-  #lobby .lbTab:hover{color:var(--text);background:var(--glass-fill);}
+  #lobby .lbTab:hover{color:var(--text);background:var(--panel2);}
   #lobby .lbTab[aria-selected="true"]{background:var(--lb-sel);color:var(--text);font-weight:640;}
   #lobby .lbTab .cnt{font-size:10.5px;color:var(--muted2);font-variant-numeric:tabular-nums;}
   #lobby .lbTab[aria-selected="true"] .cnt{color:var(--accent-text);}
   #lobby .lbTab.add{color:var(--muted2);font-weight:400;}
   #lobby .lbTools{display:flex;align-items:center;gap:8px;flex:none;}
   #lobby .lbBtn2{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;
-    border-radius:var(--radius-pill);background:var(--glass-fill);box-shadow:var(--spec);
+    border-radius:var(--radius-pill);background:var(--panel2);box-shadow:var(--spec);
     font-size:12px;font-weight:560;transition:background .12s;}
-  #lobby .lbBtn2:hover{background:var(--glass-fill-hi);}
+  #lobby .lbBtn2:hover{background:var(--panel3);}
   #lobby .lbBtn2 svg{width:13px;height:13px;stroke:currentColor;stroke-width:1.8;fill:none;stroke-linecap:round;}
   #lobby .lbViewTog{display:flex;gap:2px;padding:2px;border-radius:var(--radius-pill);
-    background:var(--glass-fill);box-shadow:var(--spec);}
+    background:var(--panel2);box-shadow:var(--spec);}
   #lobby .lbViewTog button{width:30px;height:28px;border-radius:var(--radius-pill);display:grid;place-items:center;
     color:var(--muted2);transition:background .12s,color .12s;}
   #lobby .lbViewTog button svg{width:14px;height:14px;stroke:currentColor;stroke-width:1.8;fill:none;stroke-linecap:round;}
   #lobby .lbViewTog button[aria-pressed="true"]{background:var(--lb-sel);color:var(--text);}
 
   /* 목록형 */
-  #lobby .lbListWrap{border-radius:var(--radius-lg);background:var(--glass-fill);box-shadow:var(--spec);overflow:hidden;}
+  #lobby .lbListWrap{border-radius:var(--radius-lg);background:var(--panel2);box-shadow:var(--spec);overflow:hidden;}
   #lobby .lbGrid{display:grid;grid-template-columns:34px minmax(200px,2.4fr) 120px 132px minmax(110px,1fr) 36px;
     align-items:center;gap:10px;padding:0 12px;}
   #lobby .lbHead{border-bottom:0.5px solid var(--line);height:36px;}
@@ -136,7 +133,7 @@
   #lobby .lbCol[data-dir] .arrow{opacity:1;color:var(--accent-text);}
   #lobby .lbRow{height:52px;border-bottom:0.5px solid var(--line);transition:background .1s;text-align:left;width:100%;}
   #lobby .lbRow:last-child{border-bottom:none;}
-  #lobby .lbRow:hover{background:var(--glass-fill-hi);}
+  #lobby .lbRow:hover{background:var(--panel3);}
   #lobby .lbRow[data-checked="true"]{background:rgba(10,132,255,0.12);}
   #lobby .lbCbox{width:16px;height:16px;border-radius:5px;border:1.5px solid var(--line-strong);display:grid;
     place-items:center;opacity:0;transition:opacity .1s;background:var(--panel);cursor:pointer;}
@@ -152,29 +149,30 @@
   #lobby .lbRowMenu{width:26px;height:26px;border-radius:7px;display:grid;place-items:center;color:var(--muted2);
     opacity:0;transition:opacity .1s,background .12s;justify-self:end;}
   #lobby .lbRow:hover .lbRowMenu{opacity:1;}
-  #lobby .lbRowMenu:hover{background:var(--glass-fill-hi);color:var(--text);}
+  #lobby .lbRowMenu:hover{background:var(--panel3);color:var(--text);}
 
   /* 카드형 */
   #lobby .lbCards{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px;}
   #lobby .lbFcard{display:flex;flex-direction:column;border-radius:var(--radius-lg);overflow:hidden;text-align:left;
-    background:var(--glass-fill);box-shadow:var(--spec);transition:transform .12s,background .12s;position:relative;}
-  #lobby .lbFcard:hover{transform:translateY(-2px);background:var(--glass-fill-hi);}
+    background:var(--panel2);box-shadow:var(--spec);transition:transform .12s,background .12s;position:relative;}
+  #lobby .lbFcard:hover{transform:translateY(-2px);background:var(--panel3);}
   #lobby .lbFcard .lbThumb,#lobby .lbFcard .lbNoThumb{height:104px;}
   #lobby .lbEmpty{padding:52px 20px;text-align:center;color:var(--muted2);font-size:12.5px;line-height:1.7;}
   #lobby .lbEmpty .lbGo{margin-top:12px;display:inline-block;background:var(--accent);color:#fff;
     border-radius:var(--radius-pill);padding:9px 18px;font-size:13px;font-weight:600;}
 
   /* 선택 액션 바 */
-  #lobby .lbBulk{position:fixed;left:50%;bottom:22px;transform:translateX(-50%) translateY(140%);z-index:45;
+  #lobby .lbBulk{position:fixed;left:50%;bottom:22px;transform:translateX(-50%) translateY(200%);z-index:45;
+    visibility:hidden;   /* 140% 이동으로는 상단 몇 px 가 화면 하단에 걸려 '이상한 바'로 보였다 (2026-07-26) */
     display:flex;align-items:center;gap:6px;padding:7px 8px 7px 15px;border-radius:var(--radius-pill);
-    background:var(--glass-pop);box-shadow:var(--shadow-pop);-webkit-backdrop-filter:var(--glass);backdrop-filter:var(--glass);
-    transition:transform .2s cubic-bezier(.2,.9,.3,1);}
-  #lobby .lbBulk[data-open="true"]{transform:translateX(-50%) translateY(0);}
+    background:var(--panel);border:1px solid var(--line);box-shadow:var(--shadow-pop);
+    transition:transform .2s cubic-bezier(.2,.9,.3,1),visibility .2s;}
+  #lobby .lbBulk[data-open="true"]{transform:translateX(-50%) translateY(0);visibility:visible;}
   #lobby .lbBulk .n{font-size:12.5px;font-weight:620;white-space:nowrap;}
   #lobby .lbBulk .div{width:0.5px;height:18px;background:var(--line-strong);margin:0 4px;}
   #lobby .lbBulk button{padding:6px 11px;border-radius:var(--radius-pill);font-size:12px;font-weight:560;
     transition:background .12s;white-space:nowrap;}
-  #lobby .lbBulk button:hover{background:var(--glass-fill-hi);}
+  #lobby .lbBulk button:hover{background:var(--panel3);}
   #lobby .lbBulk button.danger{color:var(--danger);}
 
   /* 햄버거 서랍 */
@@ -182,8 +180,7 @@
     transition:opacity .2s;}
   #lobby .lbScrim[data-open="true"]{opacity:1;pointer-events:auto;}
   #lobby .lbDrawer{position:fixed;left:0;top:0;bottom:0;z-index:51;width:min(88vw,320px);overflow-y:auto;
-    background:var(--glass-pop);-webkit-backdrop-filter:var(--glass);backdrop-filter:var(--glass);
-    border-right:0.5px solid var(--line);box-shadow:var(--shadow-pop);
+    background:var(--panel);border-right:1px solid var(--line);box-shadow:var(--shadow-pop);
     transform:translateX(-102%);transition:transform .24s cubic-bezier(.2,.9,.3,1);
     display:flex;flex-direction:column;gap:2px;padding:14px 12px 24px;}
   #lobby .lbDrawer[data-open="true"]{transform:translateX(0);}
@@ -191,24 +188,24 @@
   #lobby .lbDsec{font-size:9.5px;font-weight:700;letter-spacing:0.08em;color:var(--muted2);padding:16px 10px 6px;}
   #lobby .lbDitem{display:flex;align-items:center;gap:11px;padding:9px 10px;border-radius:var(--radius);
     font-size:13px;font-weight:530;text-align:left;width:100%;transition:background .1s;}
-  #lobby .lbDitem:hover{background:var(--glass-fill-hi);}
+  #lobby .lbDitem:hover{background:var(--panel3);}
   #lobby .lbDitem svg{width:17px;height:17px;stroke:var(--muted);stroke-width:1.7;fill:none;flex:none;stroke-linecap:round;}
   #lobby .lbDitem .dsub{font-size:10.5px;color:var(--muted2);font-weight:400;margin-left:auto;}
   #lobby .lbDitem .badge{margin-left:auto;font-size:9px;font-weight:700;padding:2px 6px;border-radius:var(--radius-pill);
     background:rgba(255,212,38,0.16);color:var(--warn);}
-  #lobby .lbDnote{margin:6px 10px 0;padding:9px 11px;border-radius:var(--radius);background:var(--glass-fill);
+  #lobby .lbDnote{margin:6px 10px 0;padding:9px 11px;border-radius:var(--radius);background:var(--panel2);
     font-size:10.5px;color:var(--muted);line-height:1.5;}
 
   /* 팝오버 */
   #lobby .lbPop{position:fixed;z-index:60;min-width:250px;padding:6px;border-radius:var(--radius-lg);
-    background:var(--glass-pop);-webkit-backdrop-filter:var(--glass);backdrop-filter:var(--glass);
+    background:var(--panel);border:1px solid var(--line);
     box-shadow:var(--shadow-pop);opacity:0;transform:translateY(-6px) scale(.98);pointer-events:none;
     transition:opacity .13s,transform .13s;transform-origin:top right;}
   #lobby .lbPop[data-open="true"]{opacity:1;transform:none;pointer-events:auto;}
   #lobby .lbPop hr{border:none;border-top:0.5px solid var(--line);margin:5px 8px;}
   #lobby .lbPitem{display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;border-radius:var(--radius-sm);
     font-size:12.5px;font-weight:520;text-align:left;transition:background .1s;}
-  #lobby .lbPitem:hover{background:var(--glass-fill-hi);}
+  #lobby .lbPitem:hover{background:var(--panel3);}
   #lobby .lbPitem svg{width:15px;height:15px;stroke:var(--muted);stroke-width:1.7;fill:none;flex:none;stroke-linecap:round;}
   #lobby .lbPitem.danger{color:var(--danger);}
   #lobby .lbPitem.danger svg{stroke:var(--danger);}
@@ -217,7 +214,7 @@
   #lobby .lbPheadT{min-width:0;}
   #lobby .lbPheadN{font-size:13.5px;font-weight:650;}
   #lobby .lbPheadE{font-size:11px;color:var(--muted2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-  #lobby .lbPlan{margin:0 10px 4px;padding:11px 12px;border-radius:var(--radius);background:var(--glass-fill);
+  #lobby .lbPlan{margin:0 10px 4px;padding:11px 12px;border-radius:var(--radius);background:var(--panel2);
     box-shadow:var(--spec);display:flex;flex-direction:column;gap:8px;}
   #lobby .lbPlanTop{display:flex;align-items:center;justify-content:space-between;gap:8px;}
   #lobby .lbPlanN{font-size:12px;font-weight:650;display:flex;align-items:center;gap:6px;}
@@ -230,18 +227,19 @@
     justify-content:space-between;}
 
   /* 토스트 */
-  #lobby .lbToast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%) translateY(160%);z-index:70;
-    padding:10px 18px;border-radius:var(--radius-pill);background:var(--glass-pop);box-shadow:var(--shadow-pop);
-    -webkit-backdrop-filter:var(--glass);backdrop-filter:var(--glass);font-size:12.5px;font-weight:560;
-    transition:transform .22s cubic-bezier(.2,.9,.3,1);max-width:80vw;}
-  #lobby .lbToast[data-open="true"]{transform:translateX(-50%) translateY(0);}
+  #lobby .lbToast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%) translateY(200%);z-index:70;
+    visibility:hidden;
+    padding:10px 18px;border-radius:var(--radius-pill);background:var(--panel);border:1px solid var(--line);
+    box-shadow:var(--shadow-pop);font-size:12.5px;font-weight:560;
+    transition:transform .22s cubic-bezier(.2,.9,.3,1),visibility .22s;max-width:80vw;}
+  #lobby .lbToast[data-open="true"]{transform:translateX(-50%) translateY(0);visibility:visible;}
 
   /* 공용 모달 (사용법·에셋·플랜) */
   #lbModalWrap{position:fixed;inset:0;z-index:320;display:none;align-items:center;justify-content:center;padding:20px;
-    background:rgba(4,7,16,0.6);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);}
+    background:rgba(0,0,0,0.5);}   /* 블러 제거 — 작업환경 다이얼로그(helpDlg)와 같은 문법 */
   #lbModalWrap.open{display:flex;}
-  #lbModal{width:min(94vw,560px);max-height:86vh;overflow:auto;background:var(--glass-pop);
-    border-radius:24px;padding:24px 24px 20px;color:var(--text);box-shadow:var(--shadow-pop);
+  #lbModal{width:min(94vw,560px);max-height:86vh;overflow:auto;background:var(--panel);
+    border:1px solid var(--line);border-radius:14px;padding:24px 24px 20px;color:var(--text);box-shadow:var(--shadow-pop);
     -webkit-user-select:none;user-select:none;}
   #lbModal h2{margin:0 0 4px;font-size:20px;font-weight:650;letter-spacing:-0.02em;}
   #lbModal .lbMsub{margin:0 0 16px;font-size:13px;color:var(--muted);line-height:1.5;}
@@ -250,17 +248,18 @@
   #lbModal .lbClose:hover{opacity:1;}
   #lbModal .lbBtn{display:inline-block;margin-top:6px;background:var(--accent);color:#fff;border:none;
     border-radius:var(--radius-pill);padding:10px 18px;font-size:14px;font-weight:600;cursor:pointer;}
-  #lbModal .lbBtn.ghost{background:var(--glass-fill-hi);color:inherit;font-weight:500;}
+  #lbModal .lbBtn.ghost{background:var(--panel3);color:inherit;font-weight:500;}
   #lbModal .lbBtn:hover{filter:brightness(1.08);}
   #lbModal .lbRow{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;}
   .lbCards2{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px;margin-top:6px;}
-  .lbCard2{background:var(--glass-fill);border-radius:14px;padding:14px 12px;text-align:center;font-size:12.5px;}
-  .lbCard2 .ci{font-size:26px;display:block;margin-bottom:6px;}
+  .lbCard2{background:var(--panel2);border-radius:14px;padding:14px 12px;text-align:center;font-size:12.5px;}
+  .lbCard2 .ci{display:block;margin-bottom:6px;color:var(--accent-text);}
+  .lbCard2 .ci svg{width:24px;height:24px;stroke:currentColor;stroke-width:1.5;fill:none;stroke-linecap:round;stroke-linejoin:round;}
   .lbCard2 .cs{display:block;margin-top:3px;font-size:10.5px;color:var(--muted2);}
   .lbSoon{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:var(--radius-pill);font-size:9.5px;
     font-weight:700;background:rgba(255,212,38,0.16);color:var(--warn);vertical-align:middle;}
   .lbPlans{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:6px;}
-  .lbPlanBox{background:var(--glass-fill);border-radius:18px;padding:18px 16px;}
+  .lbPlanBox{background:var(--panel2);border-radius:18px;padding:18px 16px;}
   .lbPlanBox.pro{box-shadow:0 0 0 1px var(--accent) inset;}
   .lbPlanBox h3{margin:0 0 2px;font-size:16px;}
   .lbPlanBox .price{font-size:22px;font-weight:750;margin:4px 0 10px;letter-spacing:-0.02em;}
@@ -268,7 +267,7 @@
   .lbPlanBox ul{margin:0;padding-left:16px;font-size:12.5px;line-height:1.7;color:var(--muted);}
   .lbGuide{font-size:13px;line-height:1.65;}
   .lbGuide h4{margin:16px 0 6px;font-size:14px;color:var(--accent-text);}
-  .lbGuide code{background:var(--glass-fill-hi);border-radius:6px;padding:1px 6px;font-family:var(--mono);font-size:12px;}
+  .lbGuide code{background:var(--panel3);border-radius:6px;padding:1px 6px;font-family:var(--mono);font-size:12px;}
   .lbGuide .kv{display:grid;grid-template-columns:120px 1fr;gap:4px 10px;margin:4px 0;}
   .lbGuide .kv b{font-weight:600;}
 
@@ -774,12 +773,12 @@
     openModal(`<h2>에셋스토어 <span class="lbSoon">오픈 예정</span></h2>
       <p class="lbMsub">자주 쓰는 블록·심볼·도면 템플릿을 받아 바로 배치할 수 있는 라이브러리입니다. 카테고리를 준비 중이며, 지금은 작업 공간의 <b>블록 라이브러리</b>에서 내 블록을 저장·재사용할 수 있습니다.</p>
       <div class="lbCards2">
-        <div class="lbCard2"><span class="ci">🏛️</span>건축<span class="cs">문·창·계단</span></div>
-        <div class="lbCard2"><span class="ci">🛋️</span>가구/집기<span class="cs">평면 심볼</span></div>
-        <div class="lbCard2"><span class="ci">🌳</span>조경<span class="cs">수목·포장</span></div>
-        <div class="lbCard2"><span class="ci">🔌</span>전기/설비<span class="cs">콘센트·조명</span></div>
-        <div class="lbCard2"><span class="ci">📐</span>템플릿<span class="cs">도곽·표제란</span></div>
-        <div class="lbCard2"><span class="ci">🧱</span>구조<span class="cs">기둥·보</span></div>
+        <div class="lbCard2"><span class="ci"><svg viewBox="0 0 24 24"><path d="M4 20h16"/><path d="M5 20V9l7-5 7 5v11"/><path d="M9 20v-6h6v6"/></svg></span>건축<span class="cs">문·창·계단</span></div>
+        <div class="lbCard2"><span class="ci"><svg viewBox="0 0 24 24"><path d="M5 11V8a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v3"/><path d="M3 13a2 2 0 0 1 4 0v1h10v-1a2 2 0 0 1 4 0v3a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/><path d="M6 18v2M18 18v2"/></svg></span>가구/집기<span class="cs">평면 심볼</span></div>
+        <div class="lbCard2"><span class="ci"><svg viewBox="0 0 24 24"><path d="M12 21v-6"/><path d="M12 15a5.5 5.5 0 0 1-5.5-5.5A5.5 5.5 0 0 1 12 4a5.5 5.5 0 0 1 5.5 5.5A5.5 5.5 0 0 1 12 15z"/><path d="M8.5 21h7"/></svg></span>조경<span class="cs">수목·포장</span></div>
+        <div class="lbCard2"><span class="ci"><svg viewBox="0 0 24 24"><path d="M9 3v5M15 3v5"/><path d="M6 8h12v3a6 6 0 0 1-5 5.9V21h-2v-4.1A6 6 0 0 1 6 11z"/></svg></span>전기/설비<span class="cs">콘센트·조명</span></div>
+        <div class="lbCard2"><span class="ci"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="1.5"/><path d="M4 16h16"/><path d="M13 16v4"/></svg></span>템플릿<span class="cs">도곽·표제란</span></div>
+        <div class="lbCard2"><span class="ci"><svg viewBox="0 0 24 24"><path d="M3 20h18"/><rect x="6" y="8" width="4" height="12"/><rect x="14" y="8" width="4" height="12"/><path d="M4 8h16V5H4z"/></svg></span>구조<span class="cs">기둥·보</span></div>
       </div>
       <div class="lbRow"><button class="lbBtn" data-go="work">작업 공간에서 블록 라이브러리 열기</button></div>`);
     modalEl.querySelector('[data-go="work"]').onclick = () => { closeModal(); enterWorkspace(); hintMenu('블록 라이브러리는 상단 [옵션] 메뉴에서 열 수 있습니다.'); };
