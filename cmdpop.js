@@ -36,8 +36,10 @@ css.textContent = `
      막대는 불투명색이라 4분할 활성 칸의 파란 테두리가 막대를 관통해 보이지 않는다. */
   #cmdDockTab{position:absolute;left:50%;transform:translateX(-50%);width:76px;height:12px;z-index:60;
     background:transparent;cursor:pointer;user-select:none;touch-action:manipulation;}
-  #cmdDockTab::after{content:'';position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
-    width:44px;height:3px;border-radius:2px;background:var(--line-strong,#6a7488);
+  /* 막대는 트랙 위쪽 3px 지점 — 좌우 손잡이의 left/right:3px 규칙을 가로로 옮긴 것.
+     콘솔 경계선을 걸치지 않고 그 위로 살짝 떠 보인다. 색·농도도 좌우와 동일(--line). */
+  #cmdDockTab::after{content:'';position:absolute;left:50%;top:3px;transform:translateX(-50%);
+    width:44px;height:3px;border-radius:2px;background:var(--line,rgba(120,140,180,.45));
     transition:background .15s ease,width .15s ease;}
   #cmdDockTab:hover::after{background:var(--accent,#0A84FF);width:64px;}
   /* 닫힘 = 투명+클릭 통과 (display:none 이면 안의 입력창이 포커스 불가라 '글자=명령'이 죽는다) */

@@ -3476,7 +3476,8 @@ function tests(){
       const pb2 = AD.getElementById('pTabL') ? AW.getComputedStyle(AD.getElementById('pTabL'), '::after') : null;
       ok(bar2.borderRadius === '2px' && (parseFloat(bar2.width) === 44 || parseFloat(bar2.height) === 3),
         '  막대 규격 = 좌우 패널 손잡이와 동일(44×3·radius 2)');
-      if (pb2) ok(bar2.backgroundColor === pb2.backgroundColor || bar2.borderRadius === pb2.borderRadius, '  같은 색 계열');
+      if (pb2) eqi(bar2.backgroundColor, pb2.backgroundColor, '  좌우 손잡이와 같은 색·농도(--line)');
+      ok(parseFloat(bar2.top) === 3, '  막대가 트랙 위쪽 3px — 경계선 위로 살짝 뜸(좌우의 3px 규칙)');
     }
     { // 하단 토글 1열 — 4개가 같은 y(한 줄) + 같은 폭
       const bs = [...AD.querySelectorAll('#layerBtns .miniBtn')].map(b2 => b2.getBoundingClientRect());
