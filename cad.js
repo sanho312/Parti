@@ -1527,7 +1527,15 @@ function doFillet(line1, line2, radius, keep1, keep2) {
   setNear(line1, near1, t1); setNear(line2, near2, t2);
   let sa = ang(cen[0], cen[1], t1[0], t1[1]), ea = ang(cen[0], cen[1], t2[0], t2[1]);
   if (norm360(ea - sa) > 180) { const tmp = sa; sa = ea; ea = tmp; }
-  addEntity({ type: 'ARC', layer: state.currentLayer, cx: cen[0], cy: cen[1], r: radius, startAngle: sa, endAngle: ea });
+  // 호는 모깎기한 '선들의 레이어'를 따른다 (예전엔 현재 레이어 — 벽 레이어의 모깎기가 딴 레이어로 샜다)
+  const fa = addEntity({ type: 'ARC', layer: line1.layer || state.currentLayer, cx: cen[0], cy: cen[1], r: radius, startAngle: sa, endAngle: ea });
+  // 벽끼리의 모깎기 → 호도 같은 벽으로: 3D 에서 곡면 벽(curv)이 두 벽을 매끈하게 잇는다 (2026-07-25 사용자).
+  // addEntity 가 역할 레이어면 자동 부여하지만, wall 명령으로 직접 지정한 벽도 이어지도록 명시 승계.
+  if (!fa.bim && line1.bim && line1.bim.kind === 'wall' && line2.bim && line2.bim.kind === 'wall') {
+    fa.bim = { kind: 'wall', h: line1.bim.h, t: line1.bim.t, base: line1.bim.base || 0 };
+    if (line1.bim.auto) fa.bim.auto = 1;
+  }
+  if (fa.bim) scheduleBimRefresh();
   return true;
 }
 // 폴리라인에서 클릭 지점에 가장 가까운 변(세그먼트) 인덱스 — 세그먼트 i는 points[i]~points[(i+1)%n]
@@ -2767,7 +2775,8 @@ function drawBimOverlay(e) {
       ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
     } else {
       e.points.forEach((p, i) => { const q = worldToScreen(p[0], p[1]); i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y); });
-      if (e.closed) ctx.closePath();
+      const n2 = e.points.length; // 끝점=시작점 고리도 닫아 그린다 (3D 마이터 판정과 동일 허용치)
+      if (e.closed || (n2 > 3 && Math.hypot(e.points[0][0] - e.points[n2 - 1][0], e.points[0][1] - e.points[n2 - 1][1]) < 0.5)) ctx.closePath();
     }
     ctx.stroke();
   } else if (k === 'opening' && e.type === 'LINE') {
@@ -3047,7 +3056,12 @@ function bimSolids() {
       closedW = false;
     }
     else if (w.type === 'LINE') { V = [[w.x1, w.y1], [w.x2, w.y2]]; closedW = false; }
-    else { V = (w.points || []).map(p => [p[0], p[1]]); closedW = !!w.closed && V.length > 2; }
+    else {
+      V = (w.points || []).map(p => [p[0], p[1]]); closedW = !!w.closed && V.length > 2;
+      // 폴리 도구로 끝점을 시작점에 '맞물려' 그린 고리: closed 플래그가 없어도 닫힌 벽으로 —
+      // 안 그러면 마지막 모서리만 마이터 없이 맞대져 이음선이 보인다 (2026-07-25 사용자).
+      if (!closedW && V.length > 3 && Math.hypot(V[0][0] - V[V.length - 1][0], V[0][1] - V[V.length - 1][1]) < 0.5) { V.pop(); closedW = true; }
+    }
     const n = V.length; if (n < 2) continue;
     const nE = closedW ? n : n - 1;
     // 변별 단위 법선

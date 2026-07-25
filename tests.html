@@ -3067,6 +3067,30 @@ function tests(){
         C.state.entities = C.state.entities.filter(x => x !== le && x !== me && x !== ce);
         C.state.layers = C.state.layers.filter(x => x.name !== '외벽롤');
       }
+      { // 벽 모서리 완결성 — 끝점=시작점 고리의 마지막 모서리 마이터 + 벽 모깎기 호 승계
+        // ① 폴리 도구로 시작점에 맞물려 닫은 사각(closed 플래그 없음, 5점) → 닫힌 벽 = 4모서리 전부 마이터
+        const pw = { id: 999970, type: 'LWPOLYLINE', closed: false, layer: '0',
+          points: [[0, 60000], [3000, 60000], [3000, 62000], [0, 62000], [0, 60000]],
+          bim: { kind: 'wall', h: 2400, t: 200, base: 0 } };
+        C.state.entities.push(pw);
+        const pb = C.bimSolids().filter(s3 => s3.eid === 999970);
+        const hasMiter = pb.some(s3 => s3.poly.some(p2 => Math.abs(Math.abs(p2[0]) - 100) < 1 && Math.abs(Math.abs(p2[1] - 60000) - 100) < 1));
+        ok(pb.length === 4 && hasMiter, '★끝점=시작점 고리 벽 = 닫힌 벽 (시작 모서리도 마이터, 밴드 ' + pb.length + ')');
+        // ② 안 만나는 두 벽 선을 모깎기 → 호가 레이어·벽 bim 승계 → 3D 곡면 벽으로 이어짐
+        C.state.layers.push({ name: '필렛벽', color: '#ffffff', visible: true });
+        const f1 = { id: 999971, type: 'LINE', x1: 0, y1: 65000, x2: 2000, y2: 65000, layer: '필렛벽', bim: { kind: 'wall', h: 2400, t: 200, base: 0 } };
+        const f2 = { id: 999972, type: 'LINE', x1: 3000, y1: 66000, x2: 3000, y2: 68000, layer: '필렛벽', bim: { kind: 'wall', h: 2400, t: 200, base: 0 } };
+        C.state.entities.push(f1, f2);
+        const before9 = C.state.entities.length;
+        ok(C.doFillet(f1, f2, 500), '  모깎기 실행(반지름 500)');
+        const fArc = C.state.entities.slice(before9).find(x => x.type === 'ARC');
+        ok(fArc && fArc.layer === '필렛벽' && fArc.bim && fArc.bim.kind === 'wall' && fArc.bim.h === 2400 && fArc.bim.t === 200,
+          '★모깎기 호 = 선들의 레이어 + 벽 bim 승계');
+        const fb = C.bimSolids().filter(s3 => s3.eid === fArc.id);
+        ok(fb.length >= 2 && fb.every(s3 => s3.curv), '★호 벽 = 3D 곡면 밴드(curv)로 두 벽을 매끈하게 이음 (' + fb.length + ')');
+        C.state.entities = C.state.entities.filter(x => x.id < 999970 || x.id > 999972).filter(x => x !== fArc);
+        C.state.layers = C.state.layers.filter(x => x.name !== '필렛벽');
+      }
       { // B1 — 인쇄 제외(noplot): 화면엔 보이되 SVG/PDF 출력에서 빠진다
         C.state.layers.push({ name: '보조출력층', color: '#ffffff', visible: true, noplot: true });
         const pe = { id: 999903, type: 'LINE', x1: 77771, y1: 0, x2: 77772, y2: 100, layer: '보조출력층' };
