@@ -142,6 +142,9 @@ button.tbtn{ display:inline-flex; align-items:center; gap:6px; }
 
 /* ── 아이콘+텍스트 토글: 비활성 = 아이콘만, 활성(.on/.active) = 아이콘+라벨 ── */
 .tglc:not(.on):not(.active) .tl{ display:none; }
+/* 메뉴 트리거(파일·옵션)는 열릴 때도 라벨을 안 꺼낸다 — 버튼이 37→82px 로 늘며
+   상단바 전체가 밀리던 원인 (2026-07-25 사용자). 열림 표시는 배경 하이라이트로 충분 */
+#btnFile .tl, #btnOpts .tl{ display:none !important; }
 .tglc .tl{ white-space:nowrap; }
 .tbtn.on{ background:var(--panel3); color:var(--text); }
 

@@ -24,12 +24,17 @@ css.textContent = `
   #console { order: 4 !important; border-top: 0.5px solid var(--line); border-bottom: none !important; }
   #statusBar { order: 5 !important; }
   #console.dockHidden { display: none !important; }
+  /* ★구식 '기록 접기'(F2·hideBottom) 무력화 — 토글 버튼(#tgBottom)은 이미 숨겼는데 F2 를
+     실수로 누르면 cmdLog 가 localStorage 로 영구 숨김되어 "로그가 사라졌다"가 된다(2026-07-25).
+     도크 체제에서 로그는 항상 콘솔과 함께 보인다. */
+  #app.hideBottom #cmdLog { display: block !important; }
   /* 하단 콘솔이므로 제안(자동완성)은 입력줄 '위'로 */
   #console #cmdSuggest { bottom: calc(100% + 8px) !important; top: auto !important; }
   #tgBottom { display: none !important; }
   /* 콘솔 접기/펼치기 손잡이 — 도구창 손잡이(.rz 알약)와 같은 비주얼, 가로 방향 */
-  #cmdDockTab{position:absolute;left:50%;transform:translateX(-50%);width:76px;height:12px;z-index:57;
-    background:transparent;cursor:pointer;user-select:none;touch-action:manipulation;}
+  #cmdDockTab{position:absolute;left:50%;transform:translateX(-50%);width:76px;height:12px;z-index:60;
+    background:var(--canvas-bg,#0a1020);border-radius:7px;cursor:pointer;user-select:none;touch-action:manipulation;}
+  /* 불투명 칩 배경 — 4분할 활성 칸의 파란 테두리가 손잡이를 관통해 보이지 않게(테두리가 버튼 '밑'으로) */
   #cmdDockTab::after{content:'';position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
     width:44px;height:3px;border-radius:2px;background:var(--line-strong,rgba(120,140,180,.45));
     transition:background .15s ease,width .15s ease;}
@@ -192,7 +197,11 @@ function showToast(text) {
 }
 if (cmdLog) {
   new MutationObserver(() => {
-    if (dockOpen) return;                        // 콘솔이 보이면 로그가 곧 화면 — 토스트 중복 금지
+    // 콘솔(로그)이 '실제로 보일' 때만 토스트 억제 — dockOpen 플래그만 믿으면 다른 코드가
+    // 콘솔·로그를 숨겼을 때 로그가 어디에도 안 보이는 사각지대가 생긴다 (2026-07-25 회귀의 교훈)
+    const logVisible = dockOpen && consoleEl && consoleEl.offsetParent !== null
+      && cmdLog.offsetParent !== null;
+    if (logVisible) return;
     const last = cmdLog.lastElementChild;
     if (last && last.textContent) showToast(last.textContent.trim());
   }).observe(cmdLog, { childList: true });

@@ -3457,6 +3457,22 @@ function tests(){
       '★레이어 잠금·표시 = 라인 아이콘 (이모지 제거)');
     ok(!AD.getElementById('btnAllVis') && !!AD.querySelector('#btnAddLayer svg.ic') && !!AD.querySelector('#btnLayTplSave svg.ic'),
       '레이어 하단 버튼 = 아이콘화 (전체 버튼 제거, 추가/저장 등 svg 아이콘)');
+    { // 상단바 밀림·로그 실종·손잡이 가림 3종 수정 (2026-07-25)
+      // ① 메뉴 버튼: 열림(.on)에도 폭 불변 — 라벨 확장이 상단바를 밀던 원인
+      const bf2 = AD.getElementById('btnFile');
+      const wA2 = bf2.getBoundingClientRect().width;
+      bf2.classList.add('on');
+      ok(Math.abs(bf2.getBoundingClientRect().width - wA2) < 0.5, '★메뉴 버튼 열림 = 폭 불변 (상단바 밀림 해소)');
+      bf2.classList.remove('on');
+      // ② 구식 F2 접기(hideBottom)가 로그를 못 죽인다
+      AD.getElementById('app').classList.add('hideBottom');
+      ok(AW.getComputedStyle(AD.getElementById('cmdLog')).display !== 'none', '★F2 접기 상태에도 명령어 로그 표시 (실종 회귀 수정)');
+      AD.getElementById('app').classList.remove('hideBottom');
+      // ③ 명령창 손잡이 = 불투명 칩 (활성 칸 파란 테두리가 관통 못 함)
+      const tb2 = AD.getElementById('cmdDockTab');
+      const bg2 = AW.getComputedStyle(tb2).backgroundColor;
+      ok(bg2 !== 'rgba(0, 0, 0, 0)' && bg2 !== 'transparent', '★명령창 손잡이 불투명 배경 — 테두리가 버튼 밑으로');
+    }
     { // 하단 토글 1열 — 4개가 같은 y(한 줄) + 같은 폭
       const bs = [...AD.querySelectorAll('#layerBtns .miniBtn')].map(b2 => b2.getBoundingClientRect());
       eqi(bs.length, 4, '  하단 토글 4개');
@@ -3483,11 +3499,11 @@ function tests(){
     }
     ok(!!AD.querySelector('#btnUndo svg.ic') && AD.getElementById('btnUndo').textContent.trim() === '',
       '취소/복구 = 아이콘 전용');
-    // ② 토글 라벨 접기 — 비활성=아이콘만, 열림/활성=아이콘+라벨
+    // ② 메뉴 버튼 라벨 — 열려도 항상 숨김(아이콘만): 라벨 확장이 상단바를 밀던 원인 (2026-07-25 개정)
     const bf = AD.getElementById('btnFile');
     eqi(AW.getComputedStyle(bf.querySelector('.tl')).display, 'none', '★파일 라벨: 메뉴 닫힘 = 숨김(아이콘만)');
     bf.dispatchEvent(new AW.PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
-    ok(AW.getComputedStyle(bf.querySelector('.tl')).display !== 'none', '  메뉴 열림 = 라벨 표시(.on)');
+    eqi(AW.getComputedStyle(bf.querySelector('.tl')).display, 'none', '  메뉴 열림에도 라벨 숨김 = 폭 불변(밀림 방지)');
     bf.dispatchEvent(new AW.PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
     ok(!bf.classList.contains('on'), '  다시 닫힘 = .on 해제');
     const bs = AD.getElementById('btnSketch'), SK2 = AW.WEBCAD_SKETCH;
