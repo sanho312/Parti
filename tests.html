@@ -3468,10 +3468,15 @@ function tests(){
       AD.getElementById('app').classList.add('hideBottom');
       ok(AW.getComputedStyle(AD.getElementById('cmdLog')).display !== 'none', '★F2 접기 상태에도 명령어 로그 표시 (실종 회귀 수정)');
       AD.getElementById('app').classList.remove('hideBottom');
-      // ③ 명령창 손잡이 = 불투명 칩 (활성 칸 파란 테두리가 관통 못 함)
+      // ③ 명령창 손잡이 = 좌우 패널 손잡이(.pTab)와 같은 문법 — 트랙 투명 + 막대 하나만
       const tb2 = AD.getElementById('cmdDockTab');
       const bg2 = AW.getComputedStyle(tb2).backgroundColor;
-      ok(bg2 !== 'rgba(0, 0, 0, 0)' && bg2 !== 'transparent', '★명령창 손잡이 불투명 배경 — 테두리가 버튼 밑으로');
+      ok(bg2 === 'rgba(0, 0, 0, 0)' || bg2 === 'transparent', '★명령창 손잡이 트랙 = 투명 (테두리·칩 없음)');
+      const bar2 = AW.getComputedStyle(tb2, '::after');
+      const pb2 = AD.getElementById('pTabL') ? AW.getComputedStyle(AD.getElementById('pTabL'), '::after') : null;
+      ok(bar2.borderRadius === '2px' && (parseFloat(bar2.width) === 44 || parseFloat(bar2.height) === 3),
+        '  막대 규격 = 좌우 패널 손잡이와 동일(44×3·radius 2)');
+      if (pb2) ok(bar2.backgroundColor === pb2.backgroundColor || bar2.borderRadius === pb2.borderRadius, '  같은 색 계열');
     }
     { // 하단 토글 1열 — 4개가 같은 y(한 줄) + 같은 폭
       const bs = [...AD.querySelectorAll('#layerBtns .miniBtn')].map(b2 => b2.getBoundingClientRect());

@@ -32,11 +32,12 @@ css.textContent = `
   #console #cmdSuggest { bottom: calc(100% + 8px) !important; top: auto !important; }
   #tgBottom { display: none !important; }
   /* 콘솔 접기/펼치기 손잡이 — 도구창 손잡이(.rz 알약)와 같은 비주얼, 가로 방향 */
+  /* 좌우 패널 손잡이(.pTab)와 같은 문법 — 트랙은 투명, 막대(알약) 하나만. 가로 방향.
+     막대는 불투명색이라 4분할 활성 칸의 파란 테두리가 막대를 관통해 보이지 않는다. */
   #cmdDockTab{position:absolute;left:50%;transform:translateX(-50%);width:76px;height:12px;z-index:60;
-    background:var(--canvas-bg,#0a1020);border-radius:7px;cursor:pointer;user-select:none;touch-action:manipulation;}
-  /* 불투명 칩 배경 — 4분할 활성 칸의 파란 테두리가 손잡이를 관통해 보이지 않게(테두리가 버튼 '밑'으로) */
+    background:transparent;cursor:pointer;user-select:none;touch-action:manipulation;}
   #cmdDockTab::after{content:'';position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
-    width:44px;height:3px;border-radius:2px;background:var(--line-strong,rgba(120,140,180,.45));
+    width:44px;height:3px;border-radius:2px;background:var(--line-strong,#6a7488);
     transition:background .15s ease,width .15s ease;}
   #cmdDockTab:hover::after{background:var(--accent,#0A84FF);width:64px;}
   /* 닫힘 = 투명+클릭 통과 (display:none 이면 안의 입력창이 포커스 불가라 '글자=명령'이 죽는다) */
