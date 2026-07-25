@@ -3037,6 +3037,36 @@ function tests(){
         C.state.entities = C.state.entities.filter(x => x.id !== 999960 && x.id !== 999961);
         delete C.state.owlib['테스트기호'];
       }
+      { // 레이어 역할 라이브 — 선을 그리자마자 BIM 자동 부여 (2026-07-25)
+        const ly3 = { name: '외벽롤', color: '#ffffff', visible: true, role: 'wall', defH: 3000, defT: 300 };
+        C.state.layers.push(ly3);
+        const prevLayer = C.state.currentLayer; C.state.currentLayer = '외벽롤';
+        // ① 그리는 순간: addEntity 로 선 → 즉시 벽 BIM(레이어 h/t)
+        const le = C.addEntity({ type: 'LINE', x1: 0, y1: 50000, x2: 3000, y2: 50000 });
+        ok(le.bim && le.bim.kind === 'wall' && le.bim.h === 3000 && le.bim.t === 300 && le.bim.auto === 1,
+          '★역할=벽 레이어에 선을 그리면 즉시 자동 벽(h3000·t300·auto)');
+        ok(C.bimSolids().some(s3 => s3.eid === le.id), '★3D 솔리드도 곧바로 생성');
+        // ② 수동 BIM 보존: 직접 지정 벽은 레이어 변경에 안 덮임
+        const me = C.addEntity({ type: 'LINE', x1: 0, y1: 51000, x2: 3000, y2: 51000 });
+        me.bim = { kind: 'wall', h: 2700, t: 150 };  // 수동 (auto 없음)
+        C.layerAutoBim(me, ly3);
+        ok(me.bim.h === 2700 && me.bim.t === 150 && !me.bim.auto, '★수동 지정 BIM 은 자동이 덮지 않음');
+        // ③ 레이어 defH 변경 → 자동 벽 즉시 갱신
+        ly3.defH = 3600; C.layerAutoBim(le, ly3);
+        ok(le.bim.h === 3600, '★레이어 높이 변경 → 자동 벽 높이 갱신');
+        // ④ 역할 없는 레이어로 이동 → 자동 BIM 해제 / 수동은 유지
+        le.layer = '0'; C.applyLayerRoleTo(le);
+        ok(!le.bim, '★역할 없는 레이어로 이동 = 자동 BIM 해제');
+        me.layer = '0'; C.applyLayerRoleTo(me);
+        ok(me.bim && me.bim.h === 2700, '  수동 BIM 은 이동해도 유지');
+        // ⑤ 닫힌 원 → 기둥 / 슬래브 역할
+        ly3.role = 'column';
+        const ce = C.addEntity({ type: 'CIRCLE', cx: 0, cy: 52000, r: 300, layer: '외벽롤' });
+        ok(ce.bim && ce.bim.kind === 'column' && ce.bim.h === 3600, '★역할=기둥 + 원 = 자동 기둥');
+        C.state.currentLayer = prevLayer;
+        C.state.entities = C.state.entities.filter(x => x !== le && x !== me && x !== ce);
+        C.state.layers = C.state.layers.filter(x => x.name !== '외벽롤');
+      }
       { // B1 — 인쇄 제외(noplot): 화면엔 보이되 SVG/PDF 출력에서 빠진다
         C.state.layers.push({ name: '보조출력층', color: '#ffffff', visible: true, noplot: true });
         const pe = { id: 999903, type: 'LINE', x1: 77771, y1: 0, x2: 77772, y2: 100, layer: '보조출력층' };

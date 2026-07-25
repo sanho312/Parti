@@ -250,6 +250,13 @@ function build(analysis, roles, opts) {
       continue;
     }
     if (role === 'door' || role === 'window') { later.push([role, s]); continue; }
+    if (role === 'slab') {   // 레이어 role=슬래브 (닫힌 도형만)
+      let e2 = null;
+      if (s.kind === 'circle') e2 = br.addEntity({ type: 'CIRCLE', layer: '슬래브', cx: s.cx, cy: s.cy, r: s.r });
+      else if (s.pts && (s.closed || s.kind === 'rect' || s.kind === 'polygon')) e2 = br.addEntity({ type: 'LWPOLYLINE', layer: '슬래브', points: s.pts.map(p => [p[0], p[1]]), closed: true });
+      if (e2) { e2.bim = { kind: 'slab', t: (+ld.defT > 0) ? +ld.defT : o.slabT, top: 0 }; counts.slab++; }
+      continue;
+    }
     if (role === 'column') {
       let e = null;
       if (s.kind === 'circle') e = br.addEntity({ type: 'CIRCLE', layer: '기둥', cx: s.cx, cy: s.cy, r: s.r });

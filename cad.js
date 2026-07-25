@@ -406,6 +406,37 @@ function entityLineWeight(e) {
 }
 
 // ---------- 도형 생성 ----------
+// ─── 레이어 역할 라이브 반영 — 역할 레이어에 그리는 순간 BIM(벽/기둥/슬래브/문/창) 자동 부여 ───
+// "선을 그리면 모델링이 레이어 설정대로 생성돼야 한다" (2026-07-25 요청).
+// bim.auto=1 로 표시 — 사용자가 wall 명령 등으로 직접 지정한 BIM 은 절대 덮지 않는다.
+function layerAutoBim(e, ly) {
+  if (!ly || !ly.role || (e.bim && !e.bim.auto)) return false;
+  const h = (+ly.defH > 0) ? +ly.defH : ((settings.bim && settings.bim.wallH) || 2400);
+  const t = (+ly.defT > 0) ? +ly.defT : ((settings.bim && settings.bim.wallT) || 200);
+  const closed = (e.type === 'LWPOLYLINE' && e.closed) || e.type === 'CIRCLE';
+  let bim = null;
+  if (ly.role === 'wall' && ['LINE', 'LWPOLYLINE', 'CIRCLE', 'ARC'].includes(e.type)) bim = { kind: 'wall', h, t, base: lvElev(), auto: 1 };
+  else if (ly.role === 'column' && closed) bim = { kind: 'column', h, base: lvElev(), auto: 1 };
+  else if (ly.role === 'slab' && closed) bim = { kind: 'slab', t: (+ly.defT > 0) ? +ly.defT : 150, top: lvElev(), auto: 1 };
+  else if ((ly.role === 'door' || ly.role === 'window') && e.type === 'LINE')
+    bim = ly.role === 'door' ? { kind: 'opening', ot: 'door', h: Math.min(h, 2100), sill: 0, t, auto: 1 }
+                             : { kind: 'opening', ot: 'window', h: 1200, sill: 900, t, auto: 1 };
+  if (!bim) return false;
+  e.bim = bim; return true;
+}
+// 레이어 이동·역할 변경 후 자동 BIM 재평가 (수동 지정 BIM 보존, 역할 없어지면 자동 BIM 해제)
+function applyLayerRoleTo(en) {
+  if (en.bim && !en.bim.auto) return;
+  const ly = getLayer(en.layer);
+  if (ly && ly.role) { if (!layerAutoBim(en, ly) && en.bim && en.bim.auto) delete en.bim; }
+  else if (en.bim && en.bim.auto) delete en.bim;
+}
+// 자동 BIM 이 생기면 3D 도 곧바로 — 연속 드로잉을 한 번에 묶는 30ms 디바운스
+let _abT = null;
+function scheduleBimRefresh() {
+  if (_abT) return;
+  _abT = setTimeout(() => { _abT = null; if (is3DActive() && typeof v3 !== 'undefined' && v3) { v3.solids = bimSolids(); render3D(); } }, 30);
+}
 function addEntity(e) {
   e.id = state.nextId++;
   e.layer = e.layer || state.currentLayer;
@@ -417,6 +448,8 @@ function addEntity(e) {
       e.zo = v3.cplane - lvElev();
   }
   state.entities.push(e);
+  // 레이어 역할 라이브: 역할 레이어면 그리는 순간 BIM 자동 부여 (이미 bim 있으면 유지 — bimify 등)
+  if (!e.bim) { const lyA = getLayer(e.layer); if (lyA && lyA.role && layerAutoBim(e, lyA)) scheduleBimRefresh(); }
   return e;
 }
 // 현재 층 요소인가 (lv 없는 옛 도형 = 1층)
@@ -2552,8 +2585,9 @@ function bimAskNum(msg, def) {
 function cmdWallTag() {
   const sel = selectedEntities().filter(e => e.type === 'LINE' || e.type === 'LWPOLYLINE');
   if (!sel.length) { logLine('  벽: 선/폴리라인을 선택한 뒤 실행하세요.', 'warn'); return; }
-  const h = bimAskNum('벽 높이 (mm):', settings.bim.wallH); if (h == null) return;
-  const t = bimAskNum('벽 두께 (mm):', settings.bim.wallT); if (t == null) return;
+  const lyW = getLayer(sel[0].layer); // 레이어 기본 높이/두께가 있으면 그것부터 제안 — 모델링도 레이어 설정을 따른다
+  const h = bimAskNum('벽 높이 (mm):', (lyW && +lyW.defH > 0) ? +lyW.defH : settings.bim.wallH); if (h == null) return;
+  const t = bimAskNum('벽 두께 (mm):', (lyW && +lyW.defT > 0) ? +lyW.defT : settings.bim.wallT); if (t == null) return;
   settings.bim.wallH = h; settings.bim.wallT = t; saveSettings();
   pushUndo();
   for (const e of sel) e.bim = { kind: 'wall', h, t, base: (e.bim && e.bim.base != null) ? e.bim.base : lvElev() };
@@ -12753,7 +12787,7 @@ const LAYIC = {
   plotOff: '<svg class="ic" viewBox="0 0 24 24"><path d="M7 9V4h10v5"/><path d="M7 18H5a1 1 0 0 1-1-1v-5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v5a1 1 0 0 1-1 1h-2"/><rect x="7" y="15" width="10" height="5" rx="1"/><line x1="4.5" y1="4.5" x2="19.5" y2="19.5"/></svg>',
 };
 // 건물화 역할 선택지 — 레이어 속성으로 명시 지정(자동 = 이름·모양 판정). bimify.js 가 최우선 참조.
-const LAYER_ROLE_OPTS = [['', '자동'], ['wall', '벽'], ['column', '기둥'], ['door', '문'], ['window', '창'], ['furniture', '가구'], ['ignore', '제외']];
+const LAYER_ROLE_OPTS = [['', '자동'], ['wall', '벽'], ['column', '기둥'], ['slab', '슬래브'], ['door', '문'], ['window', '창'], ['furniture', '가구'], ['ignore', '제외']];
 function renderLayers() {
   const list = document.getElementById('layerList');
   list.innerHTML = '';
@@ -12806,7 +12840,7 @@ function renderLayers() {
       if (!sel.length) { logLine('  레이어 이동: 먼저 객체를 선택한 뒤 대상 레이어를 우클릭하세요.', 'warn'); return; }
       if (!confirm(`선택한 개체 ${sel.length}개를 '${l.name}' 레이어로 바꾸겠습니까?`)) return;
       pushUndo();
-      for (const en of sel) en.layer = l.name;
+      for (const en of sel) { en.layer = l.name; applyLayerRoleTo(en); } // 역할 레이어로 옮기면 BIM 도 따라감
       logLine(`  ✔ 선택 ${sel.length}개 객체를 '${l.name}' 레이어로 이동`, 'ok');
       renderProps(); renderLayers(); draw();
       if (typeof v3 !== 'undefined' && v3 && document.getElementById('bim3d') && document.getElementById('bim3d').style.display !== 'none') { v3.solids = bimSolids(); render3D(); }
@@ -12841,6 +12875,11 @@ function renderLayers() {
     });
     div.querySelector('.lrole').addEventListener('change', (e) => {
       e.stopPropagation(); pushUndo(); l.role = e.target.value || undefined;
+      // 라이브 반영: 이 레이어의 기존 도형에도 즉시 적용/해제 (수동 지정 BIM 은 보존)
+      let nA = 0;
+      for (const en of state.entities) if (en.layer === l.name && (!en.bim || en.bim.auto)) { const had = !!en.bim; applyLayerRoleTo(en); if (!!en.bim !== had || en.bim) nA++; }
+      logLine(`  레이어 "${l.name}" 역할 ${l.role ? LAYER_ROLE_OPTS.find(o2 => o2[0] === l.role)[1] + ' 지정' : '해제'} — 기존 도형 ${nA}개 반영`, 'info');
+      propRefresh();
     });
     div.querySelector('.lsec').addEventListener('change', (e) => {
       e.stopPropagation(); pushUndo(); l.secHatch = e.target.value || undefined;
@@ -12851,10 +12890,14 @@ function renderLayers() {
     div.querySelector('.ldh').addEventListener('change', (e) => {
       e.stopPropagation(); pushUndo();
       const v = parseFloat(e.target.value); l.defH = (isFinite(v) && v > 0) ? v : undefined;
+      for (const en of state.entities) if (en.layer === l.name && en.bim && en.bim.auto) layerAutoBim(en, l); // 자동 BIM 높이 즉시 갱신
+      propRefresh();
     });
     div.querySelector('.ldt').addEventListener('change', (e) => {
       e.stopPropagation(); pushUndo();
       const v = parseFloat(e.target.value); l.defT = (isFinite(v) && v > 0) ? v : undefined;
+      for (const en of state.entities) if (en.layer === l.name && en.bim && en.bim.auto) layerAutoBim(en, l); // 자동 BIM 두께 즉시 갱신
+      propRefresh();
     });
     div.querySelector('.nm').addEventListener('dblclick', (e) => {
       e.stopPropagation();
@@ -13271,7 +13314,7 @@ function renderProps() {
     }));
   const pHatch = document.getElementById('pHatch');
   if (pHatch) pHatch.addEventListener('change', () => { pushUndo(); e.pattern = pHatch.value; hatchDirty(e); draw(); logLine(`  해치 패턴 → ${HATCH_PATTERNS[e.pattern].ko}`, 'info'); });
-  document.getElementById('pLayer').addEventListener('change', (ev) => { pushUndo(); e.layer = ev.target.value; propRefresh(); });
+  document.getElementById('pLayer').addEventListener('change', (ev) => { pushUndo(); e.layer = ev.target.value; applyLayerRoleTo(e); renderProps(); propRefresh(); });
   document.getElementById('pColor')?.addEventListener('input', (ev) => { pushUndo(); e.color = ev.target.value; propRefresh(); }); // 이미지엔 색상 행 없음
   document.getElementById('pColClear')?.addEventListener('click', () => { pushUndo(); delete e.color; renderProps(); propRefresh(); });
   // 이미지 효과 슬라이더 — 드래그 중엔 draw()만(슬라이더 포커스 유지), 드래그 1회 = undo 1회
@@ -15578,7 +15621,7 @@ window.__CADTEST__ = {
   bimSolids, pushLitPoly, lineClipPoly, genSectionView, stairSolids, stairSteps, railingSolids, railingPath, cmdRailingTag, lightEmitters, lightGizmos, renderLightList, cmdSetAsLight, cmdUnsetLight, cmdLighting, cmdRaytrace, rtBuildScene, rtTrisByEntity, rtSyncCamera, rtGeoSig, rtSupported, rtPreview, rtFullRes, rtLightsChanged, litCacheSig, rtSetEnv, rtEnvWanted, cmdRtEnv, parseIES, iesCandelaAt, iesSummary, iesToTexture, iesFluxFactor, lightCandela, cmdIes, selectedLights, cmdRtDenoise, rtExposure, cmdExposure, RT_EXPOSURE, RT_EXPOSURE_DAY,
   vpIsPlan, vpPlanIndex, vpRect, vpRectCss, planCvRect, syncPlanCv, open3D, close3D, is3DActive, resize, worldToScreen, screenToWorld,
   rview, rviewFrame, rviewBuildScene, rviewSyncSun, rviewSig, cmdRendered,
-  MAT_PRESETS, MAT_ALIAS, matOf, matKey, matHex, matBoxUV, matGeo, matBuild, matTextures, matDrawTex, cmdMaterial, rtGeoSig, bimSolidColor, secHatchFor, computePatternSegs, owWt, OPENING_TYPES, owSaveDef, owPlaced,
+  MAT_PRESETS, MAT_ALIAS, matOf, matKey, matHex, matBoxUV, matGeo, matBuild, matTextures, matDrawTex, cmdMaterial, rtGeoSig, bimSolidColor, secHatchFor, computePatternSegs, owWt, OPENING_TYPES, owSaveDef, owPlaced, layerAutoBim, applyLayerRoleTo, addEntity,
   runCommandInput, feedCmdArg,
   skyCloud, sunDirectIlluminanceClear, skyBlend, SKY_OVERCAST_E, SKY_OVERCAST_RGB,
   skyCloudMask, skySolve, skyCtxCompute, _skyFbm, SKY_CLOUD_TILE,
