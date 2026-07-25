@@ -2719,6 +2719,46 @@ function cmdOwSave() {
   logLine(`  ✔ 창호 기호 "${name}" ${part === 'plan' ? '평면' : part === 'elev' ? '입면' : '3D'} 저장 — 속성/레이어의 창호 선택에서 "@${name}" 으로 지정`, 'ok');
   renderProps(); renderLayers();
 }
+// ─── 레이어 목록 템플릿 — 저장/불러오기/파일 공유 (클라우드 슬롯 UI 는 cloud.js) ───
+const LAYER_TPL_KEYS = ['name', 'color', 'linetype', 'lineweight', 'mat', 'role', 'defH', 'defT', 'defWt', 'secHatch', 'noplot'];
+function layersTplData() {
+  return state.layers.map(l => { const o = {}; for (const k of LAYER_TPL_KEYS) if (l[k] !== undefined) o[k] = l[k]; return o; });
+}
+function applyLayersTpl(layers) {
+  if (!Array.isArray(layers) || !layers.length || !layers.every(l => l && l.name)) return false;
+  pushUndo();
+  const next = layers.map(l => Object.assign({ visible: true }, l));
+  // 도형이 실제로 쓰는 레이어는 잃지 않는다 — 템플릿에 없으면 기존 것을 뒤에 보존
+  const used = new Set(state.entities.map(e => e.layer));
+  for (const nm of used) if (nm && !next.some(l => l.name === nm)) { const old = getLayer(nm); next.push(old ? { ...old } : { name: nm, color: '#ffffff', visible: true }); }
+  if (!next.some(l => l.name === '0')) next.unshift({ name: '0', color: '#ffffff', visible: true });
+  state.layers = next;
+  if (!getLayer(state.currentLayer)) state.currentLayer = '0';
+  for (const en of state.entities) applyLayerRoleTo(en);   // 새 목록의 역할·기본값 라이브 반영
+  renderLayers(); propRefresh();
+  return true;
+}
+function exportLayersTpl() {
+  const nm = prompt('내보낼 목록 이름:', currentFileName || '내 레이어') || '레이어목록';
+  saveBlob(new Blob([JSON.stringify({ parti_layers: 1, name: nm, layers: layersTplData() }, null, 1)], { type: 'application/json' }), nm + '.layers.json');
+  logLine('  ✔ 레이어 목록을 파일로 내보냄 (.layers.json — 다른 사람과 공유 가능, 불러오기 → 파일에서 가져오기)', 'ok');
+}
+function importLayersTplFile() {
+  const inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.json,application/json';
+  inp.addEventListener('change', () => {
+    const f = inp.files[0]; if (!f) return;
+    const r = new FileReader();
+    r.onload = () => {
+      try {
+        const d = JSON.parse(r.result);
+        if (!d || d.parti_layers !== 1 || !Array.isArray(d.layers)) throw 0;
+        if (applyLayersTpl(d.layers)) logLine(`  ✔ 레이어 목록 "${d.name || f.name}" 적용 (${d.layers.length}개) — 기존 목록 대체(도형이 쓰는 레이어는 유지)`, 'ok');
+      } catch (e2) { logLine('  레이어 목록 파일이 아닙니다 (.layers.json)', 'warn'); }
+    };
+    r.readAsText(f);
+  });
+  inp.click();
+}
 function cmdOwList() {
   const ks = Object.keys(state.owlib || {});
   if (!ks.length) { logLine('  저장된 창호 기호가 없습니다. 기호를 그리고 선택 → 창호저장', 'info'); return; }
@@ -3038,6 +3078,54 @@ function bimSolids() {
       solids.push({ poly, z0: e.bim.base || 0, z1: (e.bim.base || 0) + e.bim.h, color: bimSolidColor(e, '#8fa3c8'), eid: e.id, curv: isC });
     }
   }
+  // ── LINE 벽 네트워크: 2D 는 분리된 선(따로 편집·삭제)이지만 3D 는 이어진 벽처럼 ──
+  // ① 두 벽의 끝점이 맞닿음(0.5mm) → 폴리라인 코너와 같은 마이터
+  // ② 벽 끝이 다른 벽 '몸통'에 닿음(T자) → 상대 두께 절반만큼 파묻어 합집합처럼
+  // (3D 는 매 프레임 파생 — 선 하나를 지우면 그 벽 srf 만 사라지고 남은 벽은 자기 마이터로 복원)
+  const lineWalls = walls.filter(w2 => w2.type === 'LINE' && !wallBaseZs(w2));
+  const wallJoin = new Map();    // "id:end" -> {mo,mi}(마이터) | {ext:[dx,dy]}(T 파묻기)
+  {
+    const cornerMap = new Map();
+    const ck = (x, y) => (Math.round(x * 2) / 2) + ',' + (Math.round(y * 2) / 2);
+    for (const w2 of lineWalls) {
+      const pts2 = [[w2.x1, w2.y1], [w2.x2, w2.y2]];
+      for (let en2 = 0; en2 < 2; en2++) {
+        const k2 = ck(pts2[en2][0], pts2[en2][1]);
+        if (!cornerMap.has(k2)) cornerMap.set(k2, []);
+        cornerMap.get(k2).push({ w: w2, end: en2, P: pts2[en2], far: pts2[1 - en2] });
+      }
+    }
+    for (const list of cornerMap.values()) {
+      if (list.length !== 2 || list[0].w === list[1].w) continue;   // 3벽 합류·자기 자신 = 맞댐 유지
+      const [A, B] = list;
+      const t2 = A.w.bim.t; if (Math.abs(t2 - B.w.bim.t) > 0.5) continue; // 두께 다르면 마이터 불가
+      const P = A.P;
+      const e1x = P[0] - B.far[0], e1y = P[1] - B.far[1], L1 = Math.hypot(e1x, e1y) || 1;
+      const e2x = A.far[0] - P[0], e2y = A.far[1] - P[1], L2 = Math.hypot(e2x, e2y) || 1;
+      const n1 = [-e1y / L1, e1x / L1], n2 = [-e2y / L2, e2x / L2];
+      let mx2 = n1[0] + n2[0], my2 = n1[1] + n2[1]; const ml2 = Math.hypot(mx2, my2);
+      if (ml2 < 1e-6) continue;                                    // 일직선 = 맞댐 그대로
+      mx2 /= ml2; my2 /= ml2;
+      const cosH = Math.max(0.25, mx2 * n2[0] + my2 * n2[1]);
+      const ox2 = mx2 * (t2 / 2) / cosH, oy2 = my2 * (t2 / 2) / cosH;
+      const j2 = { mo: [P[0] + ox2, P[1] + oy2], mi: [P[0] - ox2, P[1] - oy2] };
+      wallJoin.set(A.w.id + ':' + A.end, j2); wallJoin.set(B.w.id + ':' + B.end, j2);
+    }
+    for (const list of cornerMap.values()) {                       // T자: 짝 없는 끝 → 상대 몸통에 파묻기
+      if (list.length !== 1) continue;
+      const A = list[0]; if (wallJoin.has(A.w.id + ':' + A.end)) continue;
+      for (const hb of lineWalls) {
+        if (hb === A.w) continue;
+        const dx = hb.x2 - hb.x1, dy = hb.y2 - hb.y1, LL = Math.hypot(dx, dy) || 1;
+        const tt = ((A.P[0] - hb.x1) * dx + (A.P[1] - hb.y1) * dy) / (LL * LL);
+        if (tt < 0.02 || tt > 0.98) continue;
+        if (Math.hypot(A.P[0] - (hb.x1 + dx * tt), A.P[1] - (hb.y1 + dy * tt)) > (hb.bim.t || 200) / 2 + 0.5) continue;
+        const ux3 = A.P[0] - A.far[0], uy3 = A.P[1] - A.far[1]; const uL = Math.hypot(ux3, uy3) || 1;
+        wallJoin.set(A.w.id + ':' + A.end, { ext: [ux3 / uL * (hb.bim.t || 200) / 2, uy3 / uL * (hb.bim.t || 200) / 2] });
+        break;
+      }
+    }
+  }
   for (const w of walls) {
     const t = w.bim.t, h = w.bim.h, base = w.bim.base || 0;
     // 곡선을 따라 세운 벽: 경로가 표면 위 곡선(zs)이거나 3D 선(z1/z2)이면 바닥이 그 높이를 따라간다.
@@ -3087,6 +3175,16 @@ function bimSolids() {
       } else { ox = eN[ce][0] * t / 2; oy = eN[ce][1] * t / 2; } // 열린 끝: 수직 맞댐
       mitO.push([V[i][0] + ox, V[i][1] + oy]);
       mitI.push([V[i][0] - ox, V[i][1] - oy]);
+    }
+    // LINE 벽 네트워크 이어붙임: 끝점 마이터/T 파묻기 — 이 벽의 +eN 쪽이 mo 가 되도록 정렬(quad 꼬임 방지)
+    if (w.type === 'LINE') {
+      for (let en2 = 0; en2 < 2; en2++) {
+        const j2 = wallJoin.get(w.id + ':' + en2);
+        if (!j2) continue;
+        if (j2.ext) { mitO[en2] = [mitO[en2][0] + j2.ext[0], mitO[en2][1] + j2.ext[1]]; mitI[en2] = [mitI[en2][0] + j2.ext[0], mitI[en2][1] + j2.ext[1]]; continue; }
+        if ((j2.mo[0] - V[en2][0]) * eN[0][0] + (j2.mo[1] - V[en2][1]) * eN[0][1] >= 0) { mitO[en2] = j2.mo.slice(); mitI[en2] = j2.mi.slice(); }
+        else { mitO[en2] = j2.mi.slice(); mitI[en2] = j2.mo.slice(); }
+      }
     }
     // 자유곡선(비정형) 벽: bim.smooth 플래그 — 정점 법선(마이터 바깥 방향)으로 연속 구로 셰이딩
     const smoothW = !!(w.bim && w.bim.smooth) && w.type !== 'CIRCLE' && w.type !== 'ARC' && n > 2;
@@ -12928,6 +13026,9 @@ function renderLayers() {
 }
 
 document.getElementById('btnAllVis').addEventListener('click', () => { state.layers.forEach(l => { l.visible = true; l.locked = false; }); renderLayers(); propRefresh(); });
+// 레이어 목록 저장/불러오기 — 로그인 상태면 cloud.js 의 슬롯 다이얼로그, 아니면 파일로
+document.getElementById('btnLayTplSave').addEventListener('click', () => { if (window.PARTI_LAYERTPL) PARTI_LAYERTPL.save(); else exportLayersTpl(); });
+document.getElementById('btnLayTplLoad').addEventListener('click', () => { if (window.PARTI_LAYERTPL) PARTI_LAYERTPL.load(); else importLayersTplFile(); });
 document.getElementById('blkScale').addEventListener('change', e => { insertScale = parseFloat(e.target.value) || 1; });
 document.getElementById('blkRot').addEventListener('change', e => { insertRot = parseFloat(e.target.value) || 0; });
 // ─── 태양 패널 ───
@@ -15745,6 +15846,7 @@ window.WEBCAD_API = {
   },
   zoomFit: () => zoomFit(true),
   redraw: () => { draw(); if (is3DActive() && typeof v3 !== 'undefined' && v3) render3D(); }, // 테마 전환 등 전체 갱신 시 4분할 3D 칸도 새 캔버스색으로 다시 칠함(안 그러면 직전 테마 색이 남아 반대로 보임)
+  layersTpl: { get: layersTplData, apply: applyLayersTpl, exportFile: exportLayersTpl, importFile: importLayersTplFile }, // 레이어 목록 템플릿 (cloud.js 슬롯 UI 가 사용)
   // 블록 라이브러리
   getBlocks: () => state.blocks,
   addBlock: (name, def) => { state.blocks[name] = def; refreshBlockList(); logLine(`  ✔ 라이브러리에서 블록 "${name}" 가져옴 — 삽입(insert)으로 배치`, 'ok'); },

@@ -3091,6 +3091,50 @@ function tests(){
         C.state.entities = C.state.entities.filter(x => x.id < 999970 || x.id > 999972).filter(x => x !== fArc);
         C.state.layers = C.state.layers.filter(x => x.name !== '필렛벽');
       }
+      { // LINE 벽 네트워크 — 분리된 선들이 3D 에선 이어진 벽처럼 (마이터·T물림·삭제 시 자동 복원)
+        const wA = { id: 999980, type: 'LINE', x1: 0, y1: 70000, x2: 3000, y2: 70000, layer: '0', bim: { kind: 'wall', h: 2400, t: 200, base: 0 } };
+        const wB = { id: 999981, type: 'LINE', x1: 3000, y1: 70000, x2: 3000, y2: 72000, layer: '0', bim: { kind: 'wall', h: 2400, t: 200, base: 0 } };
+        C.state.entities.push(wA, wB);
+        const miterAt = (sols, X, Y) => sols.some(s3 => s3.poly.some(p2 => Math.abs(Math.abs(p2[0] - X) - 100) < 1 && Math.abs(Math.abs(p2[1] - Y) - 100) < 1));
+        let sols = C.bimSolids().filter(s3 => s3.eid === 999980 || s3.eid === 999981);
+        ok(miterAt(sols, 3000, 70000), '★따로 그린 두 선 벽 — 끝점 맞닿음 = 폴리라인처럼 마이터 코너');
+        // 한쪽 삭제 → 남은 벽은 자기 마이터 없이(맞댐) srf 유지
+        C.state.entities = C.state.entities.filter(x => x !== wB);
+        sols = C.bimSolids().filter(s3 => s3.eid === 999980);
+        ok(sols.length >= 1 && !miterAt(sols, 3000, 70000), '★한 선을 지우면 그 벽 srf 만 제거 — 남은 벽은 맞댐으로 복원');
+        C.state.entities.push(wB);
+        // 3벽 합류 = 마이터 없음(맞댐 유지)
+        const wC = { id: 999982, type: 'LINE', x1: 3000, y1: 70000, x2: 5000, y2: 70000, layer: '0', bim: { kind: 'wall', h: 2400, t: 200, base: 0 } };
+        C.state.entities.push(wC);
+        sols = C.bimSolids().filter(s3 => [999980, 999981, 999982].includes(s3.eid));
+        ok(!miterAt(sols, 3000, 70000), '  3개 벽 합류점 = 마이터 없이 맞댐(안전)');
+        C.state.entities = C.state.entities.filter(x => x !== wC);
+        // T자: 세로 벽 끝이 가로 벽 몸통 면(0,70000~3000,70000 의 y=70100)에 닿음 → 반두께 파묻기
+        const wT = { id: 999983, type: 'LINE', x1: 1500, y1: 70100, x2: 1500, y2: 72000, layer: '0', bim: { kind: 'wall', h: 2400, t: 200, base: 0 } };
+        C.state.entities.push(wT);
+        sols = C.bimSolids().filter(s3 => s3.eid === 999983);
+        ok(sols.some(s3 => s3.poly.some(p2 => Math.abs(p2[1] - 70000) < 1)), '★T자 — 벽 끝이 상대 몸통에 반두께만큼 파묻힘(합집합처럼)');
+        C.state.entities = C.state.entities.filter(x => x.id < 999980 || x.id > 999983);
+      }
+      { // 레이어 목록 템플릿 — 수집/적용/보존/역할 라이브
+        const savedLayers = C.state.layers.map(x => ({ ...x }));   // 원복용
+        C.state.layers.push({ name: '템플릿전용', color: '#ff0000', visible: true, role: 'wall', defH: 2800, mat: 'brick', noplot: true });
+        const tpl = AW.WEBCAD_API.layersTpl.get();
+        const tl = tpl.find(x => x.name === '템플릿전용');
+        ok(tl && tl.role === 'wall' && tl.defH === 2800 && tl.mat === 'brick' && tl.noplot === true && tl.visible === undefined,
+          '★목록 수집 — 속성 전부 포함(표시 상태 등 휘발 필드 제외)');
+        // 사용 중 레이어 보존: '치수' 레이어를 쓰는 도형을 두고 치수 없는 템플릿 적용
+        const ue = C.addEntity({ type: 'LINE', x1: 0, y1: 75000, x2: 100, y2: 75000, layer: '치수' });
+        ok(AW.WEBCAD_API.layersTpl.apply([{ name: '새벽층', color: '#00ff00', role: 'wall', defH: 3300, defT: 250 }]), '  템플릿 적용');
+        ok(!!C.state.layers.find(x => x.name === '새벽층') && !!C.state.layers.find(x => x.name === '치수') && !!C.state.layers.find(x => x.name === '0'),
+          '★적용 = 대체 + 도형이 쓰는 레이어·0 은 보존');
+        // 역할 라이브: 적용 후 새벽층에 그리면 즉시 벽
+        C.state.currentLayer = '새벽층';
+        const we2 = C.addEntity({ type: 'LINE', x1: 0, y1: 76000, x2: 2000, y2: 76000 });
+        ok(we2.bim && we2.bim.kind === 'wall' && we2.bim.h === 3300, '★불러온 목록의 역할·기본값이 곧바로 살아있음');
+        C.state.entities = C.state.entities.filter(x => x !== ue && x !== we2);
+        C.state.layers = savedLayers; C.state.currentLayer = '0';
+      }
       { // B1 — 인쇄 제외(noplot): 화면엔 보이되 SVG/PDF 출력에서 빠진다
         C.state.layers.push({ name: '보조출력층', color: '#ffffff', visible: true, noplot: true });
         const pe = { id: 999903, type: 'LINE', x1: 77771, y1: 0, x2: 77772, y2: 100, layer: '보조출력층' };

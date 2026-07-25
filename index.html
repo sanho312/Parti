@@ -775,6 +775,8 @@ try { if (localStorage.getItem('webcad_theme') === 'light') document.documentEle
             <button class="miniBtn" id="btnAddLayer">+ 추가</button>
             <button class="miniBtn" id="btnDelLayer">삭제</button>
             <button class="miniBtn" id="btnAllVis" title="모든 레이어 표시+잠금해제"><svg class="ic" viewBox="0 0 24 24"><path d="M2.5 12S6 5.8 12 5.8 21.5 12 21.5 12 18 18.2 12 18.2 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.6"/></svg> 전체</button>
+            <button class="miniBtn" id="btnLayTplSave" title="지금 레이어 목록을 저장 — 클라우드 슬롯(프로 5·무료 1) 또는 파일(.layers.json, 공유용)">목록 저장</button>
+            <button class="miniBtn" id="btnLayTplLoad" title="저장한 레이어 목록 불러오기 — 기존 목록을 대체(도형이 쓰는 레이어는 유지)">불러오기</button>
           </div>
         </div>
       </div>
@@ -941,7 +943,7 @@ try { if (localStorage.getItem('webcad_theme') === 'light') document.documentEle
   </div>
 </div>
 
-<script src="cad.js?v=20260725g"></script>
+<script src="cad.js?v=20260725h"></script>
 <script src="prep.js?v=5"></script>
 <script src="bimify.js?v=8"></script>
 <script src="sketch.js?v=15"></script>
@@ -952,7 +954,7 @@ try { if (localStorage.getItem('webcad_theme') === 'light') document.documentEle
 <script src="nodes.js?v=15"></script>
 <script src="auth-config.js?v=2"></script>
 <script src="auth.js?v=14"></script>
-<script src="cloud.js?v=15"></script>
+<script src="cloud.js?v=16"></script>
 <script src="lobby.js?v=5"></script>
 <script>
 // UI 배치: 하단 명령창 접기(화살표) + 좌우 패널 폭 드래그 조절(오토캐드식) — localStorage에 저장

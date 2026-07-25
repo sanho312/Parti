@@ -583,6 +583,72 @@
   // ---------- 도면 전환 시 클라우드 연결 해제 ----------
   API.onDocChange = () => { cloudId = null; lastSavedRev = -1; leaveRealtime(); };
 
+  // ---------- 레이어 목록 템플릿 (클라우드 슬롯: 프로 5 · 무료 1 + 파일 공유) ----------
+  // user_metadata.layer_tpls 에 저장 — 별도 DB 테이블 없이 계정에 귀속, 어느 도면에서든 사용.
+  const tplStore = () => (user && user.user_metadata && user.user_metadata.layer_tpls) || {};
+  async function tplSaveMeta(tpls) {
+    await sb.auth.updateUser({ data: { layer_tpls: tpls } });
+    if (user) user.user_metadata = Object.assign({}, user.user_metadata, { layer_tpls: tpls });
+  }
+  const tplLimit = () => (plan === 'pro' ? 5 : 1);
+  function layerTplSaveUI() {
+    const A = window.WEBCAD_API;
+    if (!user) { A.layersTpl.exportFile(); return; }                 // 비로그인 = 파일로만
+    const names = Object.keys(tplStore());
+    dlg('레이어 목록 저장', `
+      <div class="cdRow"><input class="cdIn" id="ltName" placeholder="목록 이름 (예: 사무소 표준)"></div>
+      <div class="cdMuted">클라우드 슬롯 ${names.length}/${tplLimit()} — ${plan === 'pro' ? '프로: 5개' : '무료: 1개 (새로 저장하면 기존 목록을 밀어냅니다)'}</div>
+      ${names.length ? `<div class="cdMuted" style="margin-top:4px;">저장됨: ${names.map(escapeHtml).join(' · ')}</div>` : ''}
+      <div class="cdRow" style="margin-top:10px;">
+        <button class="cdBtn pri" id="ltSave">클라우드에 저장</button>
+        <button class="cdBtn" id="ltFile">파일로 내보내기 (공유용)</button></div>`, (o) => {
+      o.querySelector('#ltFile').addEventListener('click', () => { closeDlg(); A.layersTpl.exportFile(); });
+      o.querySelector('#ltSave').addEventListener('click', async () => {
+        const nm = (o.querySelector('#ltName').value || '').trim();
+        if (!nm) { o.querySelector('.cdErr').textContent = '이름을 입력하세요.'; return; }
+        let t2 = Object.assign({}, tplStore());
+        if (!t2[nm] && Object.keys(t2).length >= tplLimit()) {       // 슬롯 초과 = 밀어내기
+          if (tplLimit() === 1) {
+            const old = Object.keys(t2)[0];
+            if (!confirm(`무료 플랜은 슬롯 1개 — 기존 "${old}" 목록을 밀어내고 저장할까요?`)) return;
+            t2 = {};
+          } else {
+            const old = prompt('슬롯 5개가 가득 찼습니다. 밀어낼 목록 이름:', Object.keys(t2)[0]);
+            if (!old || !t2[old]) return;
+            delete t2[old];
+          }
+        }
+        t2[nm] = { at: Date.now(), layers: A.layersTpl.get() };
+        try { await tplSaveMeta(t2); API.log(`  ✔ 레이어 목록 "${nm}" 클라우드 저장 (${Object.keys(t2).length}/${tplLimit()})`, 'ok'); closeDlg(); }
+        catch (e2) { o.querySelector('.cdErr').textContent = '저장 실패: ' + koErr(e2); }
+      });
+    });
+  }
+  function layerTplLoadUI() {
+    const A = window.WEBCAD_API;
+    if (!user) { A.layersTpl.importFile(); return; }
+    const tpls = tplStore(); const names = Object.keys(tpls);
+    dlg('레이어 목록 불러오기', `
+      ${names.length ? names.map(n2 => `<div class="cdRow"><span style="flex:1">${escapeHtml(n2)} <span class="cdMuted">(레이어 ${(tpls[n2].layers || []).length}개)</span></span>
+        <button class="cdBtn pri" data-load="${escapeHtml(n2)}">적용</button><button class="cdBtn" data-del="${escapeHtml(n2)}">삭제</button></div>`).join('')
+      : '<div class="cdMuted">클라우드에 저장된 목록이 없습니다. [목록 저장]으로 올리거나 파일에서 가져오세요.</div>'}
+      <div class="cdRow" style="margin-top:10px;"><button class="cdBtn" id="ltImp">파일에서 가져오기 (.layers.json)</button></div>`, (o) => {
+      o.querySelector('#ltImp').addEventListener('click', () => { closeDlg(); A.layersTpl.importFile(); });
+      o.querySelectorAll('[data-load]').forEach(b2 => b2.addEventListener('click', () => {
+        const nm = b2.dataset.load;
+        if (A.layersTpl.apply((tpls[nm] || {}).layers)) API.log(`  ✔ 레이어 목록 "${nm}" 적용 — 기존 목록 대체 (도형이 쓰는 레이어는 유지)`, 'ok');
+        closeDlg();
+      }));
+      o.querySelectorAll('[data-del]').forEach(b2 => b2.addEventListener('click', async () => {
+        const nm = b2.dataset.del;
+        if (!confirm(`"${nm}" 목록을 클라우드에서 삭제할까요?`)) return;
+        const t2 = Object.assign({}, tplStore()); delete t2[nm];
+        try { await tplSaveMeta(t2); closeDlg(); layerTplLoadUI(); } catch (e2) { API.log('  삭제 실패: ' + koErr(e2), 'warn'); }
+      }));
+    });
+  }
+  window.PARTI_LAYERTPL = { save: layerTplSaveUI, load: layerTplLoadUI };
+
   // ---------- 메뉴 통합 ----------
   function addMenuItem(menuId, html, fn) {
     const menu = document.getElementById(menuId); if (!menu) return;
