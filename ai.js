@@ -915,7 +915,9 @@
       if (window.__syncBottomTabs) window.__syncBottomTabs();
     } else document.body.appendChild(fab); // 폴백
     document.body.appendChild(panel);
-    setupEl.style.display = cfg.key ? 'none' : 'flex';
+    // 키 입력 패널은 항상 접어 둔다 — 키 없이도 로컬 모드로 쓰는 게 기본이라, 패널이 펼쳐져
+    // 있으면 "API 키를 요구하는 프로그램"으로 보인다. 필요할 때 ⚙ 로 연다. (2026-07-26 사용자)
+    setupEl.style.display = 'none';
     if (history.length) renderHistory(); else greet();
   }
   function renderHistory() { // 저장된 대화 복원 (localStorage)
