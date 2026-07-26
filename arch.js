@@ -281,150 +281,218 @@ function buildComplex(spec) {
   br.pushUndo();
   br.ensureLayer('벽', '#cfc7ba'); br.ensureLayer('개구부', '#ff9f0a');
   br.ensureLayer('지붕', '#b8695a'); br.ensureLayer('조경', '#6aa84f'); br.ensureLayer('문자', '#8fa3c8');
-  br.ensureLayer('유리', '#7ea6d1'); br.ensureLayer('조경길', '#e0dacc');
-  const counts = { wall: 0, window: 0, roof: 0, court: 0 };
-  const RIDGE_F = 0.42;                                // 비대칭 박공 — 앞(마당) 경사가 짧고 가파르다
-  const OVH = 450;                                     // 처마 내밀기
+  br.ensureLayer('유리', '#7ea6d1'); br.ensureLayer('조경길', '#e0dacc'); br.ensureLayer('바닥', '#bdb6a8');
+  const counts = { wall: 0, window: 0, door: 0, roof: 0, court: 0, slab: 0 };
+  // ── 치수 근거(웹 조사) ──
+  // · 주거 박공 물매 4:12~9:12 (18.4~36.9°) — KCS 41 56 05 아스팔트 싱글 적용범위 1/3~3/4
+  // · 처마(eave) 내밀기 305~610mm, 박공측(rake/verge) 152~305mm — IRC R804 / 실무 표준
+  // · 방화벽은 지붕면 위로 500mm 이상 돌출 — 건축물의 피난·방화구조 규칙 제21조
+  //   (나란한 박공동 사이에 연속된 골(valley)을 만들지 않는 실무 해법이기도 하다)
+  const RIDGE_F = 0.42;      // 비대칭 박공 — 용마루가 폭의 42% 지점 (스케치의 치우친 봉우리)
+  const RAKE = 300;          // 박공측(앞뒤) 내밀기
+  const EAVE = 500;          // 처마측(양 끝동 바깥) 내밀기
+  const OVH = RAKE;
+  const PARTY = 200;         // 세대분리벽(측벽) 두께
+  const FIREW = 500;         // 방화벽이 지붕면 위로 솟는 높이
 
   // 동별 폭·지붕 높이 — 스케치에서 읽은 비율이 있으면 그대로, 없으면 균일
   const ml = (o.massList && o.massList.length === n) ? o.massList : null;
   const hMax = ml ? Math.max.apply(null, ml.map(m => m.hFrac || 1)) || 1 : 1;
-  const Ws = [], rises = [];
+  const Ws = [], pitches = [];
   for (let i = 0; i < n; i++) {
     const wf = ml ? (ml[i].wFrac || 1 / n) * n : 1;
     Ws.push(Math.max(3000, Math.round(o.w * Math.min(2.2, Math.max(0.45, wf)))));
     const hf = ml ? (ml[i].hFrac || 1) / hMax : 1;
-    rises.push(Math.round(Math.min(o.w, o.d) * 0.35 * (0.6 + 0.8 * hf)));
+    // 물매를 스케치의 봉우리 높이 비율로 정하되 4:12~9:12 안에 가둔다
+    pitches.push(0.40 + 0.30 * hf);
   }
+  // 용마루 높이 = (스팬/2) × 물매. 스팬은 용마루와 직교하는 방향의 폭.
+  const riseOf = (i, span) => Math.round(Math.max(600, span / 2 * pitches[i]));
   const gap = o.attached ? 0 : Math.round(o.w * 0.45);
   const L = Ws.reduce((a, v) => a + v, 0) + gap * (n - 1);   // 늘어선 전체 길이
 
-  const wall = (p, q) => {
+  const wall = (p, q, t2, h2) => {
     const e = br.addEntity({ type: 'LINE', layer: '벽',
       x1: Math.round(p[0]), y1: Math.round(p[1]), x2: Math.round(q[0]), y2: Math.round(q[1]) });
-    e.bim = { kind: 'wall', h: H, t: STD.wallExt, base: 0 }; counts.wall++;
+    e.bim = { kind: 'wall', h: h2 || H, t: t2 || STD.wallExt, base: 0 }; counts.wall++;
+    return e;
   };
-  // 동 하나: 중심 C, 접선 t(폭 방향), 법선 u(마당 반대쪽이 +u) → 회전된 사각형
-  const place = (i, C, t, u) => {
-    const W2 = Ws[i] / 2, D2 = o.d / 2;
-    const P = [
-      [C[0] - t[0] * W2 - u[0] * D2, C[1] - t[1] * W2 - u[1] * D2],   // 앞-좌 (마당 쪽)
-      [C[0] + t[0] * W2 - u[0] * D2, C[1] + t[1] * W2 - u[1] * D2],   // 앞-우
-      [C[0] + t[0] * W2 + u[0] * D2, C[1] + t[1] * W2 + u[1] * D2],   // 뒤-우
-      [C[0] - t[0] * W2 + u[0] * D2, C[1] - t[1] * W2 + u[1] * D2],   // 뒤-좌
-    ];
-    for (let k = 0; k < 4; k++) wall(P[k], P[(k + 1) % 4]);
-    const gableRidge = o.roof === 'gable';
-    if (o.roof && o.roof !== 'none') {
-      // 지붕 — 처마(OVH)만큼 사방으로 내밀고, 용마루는 앞쪽 42% 지점(비대칭 박공)
-      const W2o = W2 + OVH, D2o = D2 + OVH;
-      const RP = [
-        [C[0] - t[0] * W2o - u[0] * D2o, C[1] - t[1] * W2o - u[1] * D2o],
-        [C[0] + t[0] * W2o - u[0] * D2o, C[1] + t[1] * W2o - u[1] * D2o],
-        [C[0] + t[0] * W2o + u[0] * D2o, C[1] + t[1] * W2o + u[1] * D2o],
-        [C[0] - t[0] * W2o + u[0] * D2o, C[1] - t[1] * W2o + u[1] * D2o],
-      ];
-      const r2 = br.addEntity({ type: 'LWPOLYLINE', layer: '지붕', closed: true,
-        points: RP.map(p => [Math.round(p[0]), Math.round(p[1])]) });
-      // 용마루는 깊이 방향(정면에서 박공 삼각형이 보인다) — 사각이 깊이가 길면 자동, 아니면 rdir 로 강제
-      r2.bim = { kind: 'roof', rtype: o.roof, eave: H, rise: rises[i], ridgeF: RIDGE_F,
-        rdir: (o.d + OVH * 2 >= Ws[i] + OVH * 2 ? undefined : 'short') };
-      counts.roof++;
+  const poly = (pts, layer, bim) => {
+    const e = br.addEntity({ type: 'LWPOLYLINE', layer, closed: true,
+      points: pts.map(p => [Math.round(p[0]), Math.round(p[1])]) });
+    e.bim = bim; return e;
+  };
+  // 앞면 커튼월 — 멀리언로 나뉜 유리 패널. 가운데 동 한가운데 패널은 출입문.
+  const curtain = (FL, FR, isEntry) => {
+    const chord = Math.hypot(FR[0] - FL[0], FR[1] - FL[1]);
+    const m = PARTY / 2 + 250;                    // 측벽을 침범하지 않도록 양끝 여유
+    const span = chord - m * 2; if (span < 900) return;
+    const ux = (FR[0] - FL[0]) / chord, uy = (FR[1] - FL[1]) / chord;
+    const nP = Math.max(2, Math.round(span / 1600));   // 멀리언 간격 ~1.6m
+    const mull = 80;
+    const pw = (span - mull * (nP - 1)) / nP;
+    const dIdx = isEntry ? (nP >> 1) : -1;
+    for (let k = 0; k < nP; k++) {
+      const s0 = m + k * (pw + mull);
+      const e = br.addEntity({ type: 'LINE', layer: '개구부',
+        x1: Math.round(FL[0] + ux * s0), y1: Math.round(FL[1] + uy * s0),
+        x2: Math.round(FL[0] + ux * (s0 + pw)), y2: Math.round(FL[1] + uy * (s0 + pw)) });
+      if (k === dIdx) { e.bim = { kind: 'opening', ot: 'door', wt: 'single', h: 2100, sill: 0, t: STD.wallExt }; counts.door++; }
+      else { e.bim = { kind: 'opening', ot: 'window', wt: 'fix', h: H - 400, sill: 150, t: STD.wallExt }; counts.window++; }
     }
-    // 박공벽 — 처마 밑 삼각형을 막는 마감. 앞면은 유리(스케치의 통유리 박공), 뒷면은 벽.
-    // 지붕과 같은 프로필(rdir short + 같은 ridgeF·rise)의 얇은 띠라 정확히 맞물린다.
-    if (gableRidge) {
-      const gw = (face, layer) => {                   // face: -1 앞 / +1 뒤
-        const off = face * (D2 - 120);
-        const Q = [
-          [C[0] - t[0] * W2 + u[0] * (off - 120), C[1] - t[1] * W2 + u[1] * (off - 120)],
-          [C[0] + t[0] * W2 + u[0] * (off - 120), C[1] + t[1] * W2 + u[1] * (off - 120)],
-          [C[0] + t[0] * W2 + u[0] * (off + 120), C[1] + t[1] * W2 + u[1] * (off + 120)],
-          [C[0] - t[0] * W2 + u[0] * (off + 120), C[1] - t[1] * W2 + u[1] * (off + 120)],
-        ];
-        const g2 = br.addEntity({ type: 'LWPOLYLINE', layer, closed: true,
-          points: Q.map(p => [Math.round(p[0]), Math.round(p[1])]) });
-        g2.bim = { kind: 'roof', rtype: 'gable', eave: H, rise: rises[i], ridgeF: RIDGE_F, rdir: 'short' };
-      };
-      gw(-1, o.glass ? '유리' : '벽');
-      gw(1, '벽');
-    }
-    if (o.glass) {                                    // 앞면 커튼월 — 멀리언로 나뉜 통유리 패널
-      const m = 500, a = P[0], b = P[1];
-      const dx = b[0] - a[0], dy = b[1] - a[1], Lf = Math.hypot(dx, dy) || 1;
-      const ux = dx / Lf, uy = dy / Lf;
-      const span = Lf - m * 2;
-      const nP = Math.max(2, Math.round(span / 1700));  // 패널 폭 ~1.7m
-      const mull = 90;                                  // 멀리언 폭
-      const pw = (span - mull * (nP - 1)) / nP;
-      for (let k2 = 0; k2 < nP; k2++) {
-        const s0 = m + k2 * (pw + mull);
-        const e = br.addEntity({ type: 'LINE', layer: '개구부',
-          x1: Math.round(a[0] + ux * s0), y1: Math.round(a[1] + uy * s0),
-          x2: Math.round(a[0] + ux * (s0 + pw)), y2: Math.round(a[1] + uy * (s0 + pw)) });
-        e.bim = { kind: 'opening', ot: 'window', wt: 'fix', h: H - 400, sill: 150, t: STD.wallExt };
-        counts.window++;
-      }
-      // 동 앞 잔디 띠 — 스케치의 전면 조경
-      const li = 700;
-      const LW0 = [a[0] + ux * li - u[0] * 900, a[1] + uy * li - u[1] * 900];
-      const LW1 = [b[0] - ux * li - u[0] * 900, b[1] - uy * li - u[1] * 900];
-      const LW2 = [b[0] - ux * li - u[0] * 3200, b[1] - uy * li - u[1] * 3200];
-      const LW3 = [a[0] + ux * li - u[0] * 3200, a[1] + uy * li - u[1] * 3200];
-      const lw = br.addEntity({ type: 'LWPOLYLINE', layer: '조경', closed: true,
-        points: [LW0, LW1, LW2, LW3].map(p => [Math.round(p[0]), Math.round(p[1])]) });
-      lw.bim = { kind: 'slab', t: 80, top: 20 };
-    }
-    br.addEntity({ type: 'TEXT', layer: '문자', x: Math.round(C[0]), y: Math.round(C[1]), h: 400, text: (i + 1) + '동' });
   };
 
   let R = 0, courtC = [o.ox, o.oy];
-  if (o.arrange === 'row') {
-    let s = 0;
+
+  if (o.arrange === 'arc') {
+    // ── 방사 분할 쐐기(사다리꼴) 배치 ──
+    // ★회전된 '직사각형'을 호 위에 늘어놓으면, 간격을 중심 반경의 호길이로 잡기 때문에
+    //   반경이 더 작은 앞쪽에서 이웃끼리 파고든다(외벽·커튼월이 옆 동을 관통 — 실사용 보고).
+    //   부채 중심 O 에서 방사로 자른 쐐기로 만들면 이웃과 측벽이 '정확히 같은 선'이 되어
+    //   겹침이 원천적으로 0 이고, 그 선이 곧 세대분리벽(party wall)이 된다.
+    const SPAN = Math.PI * (n <= 2 ? 0.12 : 0.26);     // 부채 전체 각 (약 22~47°)
+    const r0 = L / SPAN;                               // 앞(마당 쪽) 반지름
+    const r1 = r0 + o.d;                               // 뒤 반지름
+    const rm = (r0 + r1) / 2;
+    const shiftY = o.oy - rm;                          // 부채 중앙이 (ox,oy) 에 오도록 평행이동
+    const PT = (a, r) => [o.ox + Math.cos(a) * r, shiftY + Math.sin(a) * r];
+    // ★각도는 감소 방향으로 — 각이 클수록 화면 왼쪽이므로, 그림 왼쪽 동이 1동이 되게 한다.
+    const bays = [];
+    let a0 = Math.PI / 2 + SPAN / 2;
     for (let i = 0; i < n; i++) {
-      const C = [o.ox + s + Ws[i] / 2, o.oy];
-      place(i, C, [1, 0], [0, 1]);                    // 앞면은 -y (아래) 방향
-      s += Ws[i] + (gap || Math.round(o.w * 0.5));
+      const th = Ws[i] / r0;
+      bays.push([a0, a0 - th]);        // [aL(큰 각=왼쪽), aR(작은 각=오른쪽)]
+      a0 -= th + gap / r0;
     }
-  } else if (o.arrange === 'circle') {
-    const foot = Math.max(o.w, o.d);
-    R = o.courtyardR || Math.max(6000, Math.round((n * (foot + 3000)) / (2 * Math.PI)));
-    const ring = R + o.d / 2 + 2500;
+    const dth = EAVE / rm;                              // 처마를 각도로 환산
+    const mid = n >> 1;
     for (let i = 0; i < n; i++) {
-      const a = -Math.PI / 2 + (i * 2 * Math.PI) / n;
-      const u = [Math.cos(a), Math.sin(a)];           // 바깥 방향
-      const C = [o.ox + ring * u[0], o.oy + ring * u[1]];
-      place(i, C, [-u[1], u[0]], u);
+      const aL = bays[i][0], aR = bays[i][1];
+      const FL = PT(aL, r0), FR = PT(aR, r0), BR = PT(aR, r1), BL = PT(aL, r1);
+      const chord = Math.hypot(FR[0] - FL[0], FR[1] - FL[1]);
+      const rise = riseOf(i, chord);          // 용마루는 방사 방향 → 스팬은 앞면 폭
+      // 벽 — 앞/뒤는 각 동마다, 측벽은 이웃과 공유하므로 한 번만 만든다(중복 벽 금지).
+      // 이웃과 맞닿는 측벽은 방화벽 → 지붕면(=이 선에서는 처마 높이) 위로 500 솟는다.
+      const shared = gap === 0 && i < n - 1;
+      wall(FL, FR); wall(BR, BL);
+      if (i === 0 || gap > 0) wall(BL, FL, PARTY);
+      wall(FR, BR, PARTY, shared ? H + FIREW : H);
+      poly([FL, FR, BR, BL], '바닥', { kind: 'slab', t: STD.slabT, top: 0 }); counts.slab++;
+      // 지붕 — 처마는 앞뒤로만. 측면은 이웃과 맞닿으므로 내밀면 지붕끼리 겹친다.
+      if (o.roof && o.roof !== 'none') {
+        // 처마측(양 끝동 바깥)만 내밀고, 이웃과 닿는 쪽은 0 — 내밀면 지붕끼리 겹친다.
+        const sgn = aL >= aR ? 1 : -1;               // 바깥쪽으로 내밀도록 부호를 맞춘다
+        const oL = aL + sgn * ((i === 0 || gap > 0) ? dth : 0);
+        const oR = aR - sgn * ((i === n - 1 || gap > 0) ? dth : 0);
+        const RP = [PT(oL, r0 - RAKE), PT(oR, r0 - RAKE), PT(oR, r1 + RAKE), PT(oL, r1 + RAKE)];
+        poly(RP, '지붕', { kind: 'roof', rtype: o.roof, eave: H, rise, ridgeF: RIDGE_F,
+          rdir: chord >= o.d + RAKE * 2 ? 'short' : undefined });   // 용마루는 항상 방사(앞뒤) 방향
+        counts.roof++;
+      }
+      // 박공면 — 마당 쪽은 유리(통유리 박공), 뒤쪽은 벽. 지붕과 같은 프로필의 얇은 띠.
+      if (o.roof === 'gable') {
+        const prof = { kind: 'roof', rtype: 'gable', eave: H, rise, ridgeF: RIDGE_F, rdir: 'short' };
+        poly([PT(aL, r0), PT(aR, r0), PT(aR, r0 + 240), PT(aL, r0 + 240)], o.glass ? '유리' : '벽', prof);
+        poly([PT(aL, r1 - 240), PT(aR, r1 - 240), PT(aR, r1), PT(aL, r1)], '벽', prof);
+      }
+      if (o.glass) curtain(FL, FR, i === mid);
+      // 처마돌림(fascia) — 처마 끝을 마감하는 띠. 얇은 벽으로 표현하면 3D 에서 지붕 가장자리가
+      // '두께 있는 면'으로 보여 종잇장 같지 않다. 앞/뒤 처마선에만.
+      const sgn2 = aL >= aR ? 1 : -1;
+      const fL = aL + sgn2 * ((i === 0 || gap > 0) ? dth : 0);
+      const fR = aR - sgn2 * ((i === n - 1 || gap > 0) ? dth : 0);
+      for (const rr of [r0 - RAKE, r1 + RAKE]) {
+        const fa = br.addEntity({ type: 'LINE', layer: '지붕',
+          x1: Math.round(PT(fL, rr)[0]), y1: Math.round(PT(fL, rr)[1]),
+          x2: Math.round(PT(fR, rr)[0]), y2: Math.round(PT(fR, rr)[1]) });
+        fa.bim = { kind: 'wall', h: 260, t: 120, base: H - 60 };
+      }
+      const cM = PT((aL + aR) / 2, rm);
+      br.addEntity({ type: 'TEXT', layer: '문자', x: Math.round(cM[0]), y: Math.round(cM[1]), h: 400, text: (i + 1) + '동' });
     }
-  } else {                                            // 'arc' — 완만한 부채꼴, 마당은 그 앞
-    // 스케치의 부채는 완만하다 — 크게 휘면 '마당을 두른 링'처럼 보여 원본과 달라진다(실측 후 조정)
-    const span = Math.PI * (n <= 2 ? 0.16 : 0.32);    // 약 29~58°
-    const ring = Math.max(L / span, o.d * 1.6);
-    let s = 0;
-    for (let i = 0; i < n; i++) {
-      const sc = s + Ws[i] / 2;                       // 이 동의 호 위 위치(중앙)
-      // ★부호는 '-' — 그림 왼쪽 동이 도면에서도 왼쪽에 와야 한다(뒤집혀 나오던 것 수정).
-      // 중앙 동이 원점에 오도록 ring 만큼 내려 배치 → 양 끝이 아래로 벌어지는 완만한 부채꼴.
-      const a = Math.PI / 2 - (sc - L / 2) / ring;
-      const u = [Math.cos(a), Math.sin(a)];
-      const C = [o.ox + ring * u[0], o.oy + ring * u[1] - ring];
-      place(i, C, [-u[1], u[0]], u);
-      s += Ws[i] + gap;
+    // 기단 — 건물군 외곽을 300 내밀어 한 장으로 (건물이 땅에 앉은 느낌)
+    if (o.attached) {
+      const pts = [PT(bays[0][0], r0 - 300)];
+      for (let i = 0; i < n; i++) pts.push(PT(bays[i][1], r0 - 300));
+      for (let i = n - 1; i >= 0; i--) pts.push(PT(bays[i][1], r1 + 300));
+      pts.push(PT(bays[0][0], r1 + 300));
+      poly(pts, '바닥', { kind: 'slab', t: 400, top: 150 }); counts.slab++;
     }
-    // 마당은 '호의 중심'이 아니라 '늘어선 줄 바로 앞'에 놓는다.
-    // 호가 완만할수록 중심은 아득히 멀어서, 중심에 두면 마당이 건물에서 수십 m 떨어진다(실측).
+    // 전면 잔디 띠 — 부채를 따라 연속으로
+    const ang = [bays[0][0]].concat(bays.map(b2 => b2[1]));
+    const lb = [];
+    for (const aa of ang) lb.push(PT(aa, r0 - 900));
+    for (let i = ang.length - 1; i >= 0; i--) lb.push(PT(ang[i], r0 - 2700));
+    poly(lb, '조경', { kind: 'slab', t: 80, top: 20 });
     R = Math.max(3000, Math.round(L / 5));
-    courtC = [o.ox, o.oy - o.d / 2 - R - 3000];
+    courtC = [o.ox, o.oy - o.d / 2 - 2700 - 2200 - R];
+  } else {
+    // 회전 없는 배치 — 일렬 / 마당을 두른 링 (동끼리 떨어져 있어 겹침 없음)
+    const place = (i, C, t, u) => {
+      const W2 = Ws[i] / 2, D2 = o.d / 2;
+      const P = [
+        [C[0] - t[0] * W2 - u[0] * D2, C[1] - t[1] * W2 - u[1] * D2],
+        [C[0] + t[0] * W2 - u[0] * D2, C[1] + t[1] * W2 - u[1] * D2],
+        [C[0] + t[0] * W2 + u[0] * D2, C[1] + t[1] * W2 + u[1] * D2],
+        [C[0] - t[0] * W2 + u[0] * D2, C[1] - t[1] * W2 + u[1] * D2],
+      ];
+      for (let k = 0; k < 4; k++) wall(P[k], P[(k + 1) % 4]);
+      poly(P, '바닥', { kind: 'slab', t: STD.slabT, top: 0 }); counts.slab++;
+      if (o.roof && o.roof !== 'none') {
+        const W2o = W2 + OVH, D2o = D2 + OVH;
+        const RP = [
+          [C[0] - t[0] * W2o - u[0] * D2o, C[1] - t[1] * W2o - u[1] * D2o],
+          [C[0] + t[0] * W2o - u[0] * D2o, C[1] + t[1] * W2o - u[1] * D2o],
+          [C[0] + t[0] * W2o + u[0] * D2o, C[1] + t[1] * W2o + u[1] * D2o],
+          [C[0] - t[0] * W2o + u[0] * D2o, C[1] - t[1] * W2o + u[1] * D2o],
+        ];
+        poly(RP, '지붕', { kind: 'roof', rtype: o.roof, eave: H, rise: riseOf(i, Math.min(Ws[i], o.d)), ridgeF: RIDGE_F,
+          rdir: Ws[i] >= o.d ? 'short' : undefined });
+        counts.roof++;
+      }
+      if (o.roof === 'gable') {
+        const prof = { kind: 'roof', rtype: 'gable', eave: H, rise: riseOf(i, Math.min(Ws[i], o.d)), ridgeF: RIDGE_F, rdir: 'short' };
+        const band = (sgn, layer) => {
+          const f0 = sgn * D2, f1 = sgn * (D2 - 240);
+          poly([
+            [C[0] - t[0] * W2 + u[0] * f0, C[1] - t[1] * W2 + u[1] * f0],
+            [C[0] + t[0] * W2 + u[0] * f0, C[1] + t[1] * W2 + u[1] * f0],
+            [C[0] + t[0] * W2 + u[0] * f1, C[1] + t[1] * W2 + u[1] * f1],
+            [C[0] - t[0] * W2 + u[0] * f1, C[1] - t[1] * W2 + u[1] * f1],
+          ], layer, prof);
+        };
+        band(-1, o.glass ? '유리' : '벽');
+        band(1, '벽');
+      }
+      if (o.glass) curtain(P[0], P[1], i === (n >> 1));
+      br.addEntity({ type: 'TEXT', layer: '문자', x: Math.round(C[0]), y: Math.round(C[1]), h: 400, text: (i + 1) + '동' });
+    };
+    if (o.arrange === 'row') {
+      let s = 0;
+      for (let i = 0; i < n; i++) {
+        place(i, [o.ox + s + Ws[i] / 2, o.oy], [1, 0], [0, 1]);
+        s += Ws[i] + (gap || Math.round(o.w * 0.5));
+      }
+    } else {
+      const foot = Math.max(o.w, o.d);
+      R = o.courtyardR || Math.max(6000, Math.round((n * (foot + 3000)) / (2 * Math.PI)));
+      const ring = R + o.d / 2 + 2500;
+      for (let i = 0; i < n; i++) {
+        const a = -Math.PI / 2 + (i * 2 * Math.PI) / n;
+        const u = [Math.cos(a), Math.sin(a)];
+        place(i, [o.ox + ring * u[0], o.oy + ring * u[1]], [-u[1], u[0]], u);
+      }
+    }
   }
-  if (R > 0) {                                        // 마당 — 방사형 수레바퀴 잔디 (스케치의 원형 조경)
+
+  if (R > 0) {                                        // 마당 — 방사형 수레바퀴 잔디
     const cx = Math.round(courtC[0]), cy = Math.round(courtC[1]), Rr = Math.round(R);
     const ct = br.addEntity({ type: 'CIRCLE', layer: '조경', cx, cy, r: Rr });
     ct.bim = { kind: 'slab', t: 100, top: 0 }; counts.court = 1;
     const inner = br.addEntity({ type: 'CIRCLE', layer: '조경길', cx, cy, r: Math.round(Rr * 0.26) });
-    inner.bim = { kind: 'slab', t: 100, top: 30 };    // 가운데 포장 — 잔디보다 살짝 위
-    const SPOKES = 8;                                  // 방사형 길 — 평면 표현(2D 선)
-    for (let k2 = 0; k2 < SPOKES; k2++) {
-      const a2 = (k2 * 2 * Math.PI) / SPOKES;
+    inner.bim = { kind: 'slab', t: 100, top: 30 };
+    for (let k = 0; k < 8; k++) {
+      const a2 = (k * 2 * Math.PI) / 8;
       br.addEntity({ type: 'LINE', layer: '조경길',
         x1: Math.round(cx + Math.cos(a2) * Rr * 0.26), y1: Math.round(cy + Math.sin(a2) * Rr * 0.26),
         x2: Math.round(cx + Math.cos(a2) * Rr * 0.97), y2: Math.round(cy + Math.sin(a2) * Rr * 0.97) });

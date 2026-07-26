@@ -3223,6 +3223,56 @@ function tests(){
               const a2 = s6 => { let a3 = 0; const PP = s6.poly; for (let i7 = 0; i7 < PP.length; i7++) { const q7 = PP[(i7 + 1) % PP.length]; a3 += PP[i7][0] * q7[1] - q7[0] * PP[i7][1]; } return Math.abs(a3 / 2); };
               const one = ars.filter(s6 => s6.zt && s6.eid === ars[0].eid);
               ok(one.length === 2 && Math.abs(a2(one[0]) / (a2(one[0]) + a2(one[1])) - 0.42) < 0.03, '★비대칭 박공 — 앞 경사 42% (스케치의 짧고 가파른 앞면)');
+              // ★★건물로서 성립하는가 — 동끼리 겹치면 외벽·창이 이웃 내부를 관통한다(실사용 최대 불만).
+              //   방사 쐐기 배치는 측벽을 '같은 선'으로 공유하므로 겹침이 원천적으로 0이어야 한다.
+              const inPoly = (P8, x8, y8) => { let c8 = false;
+                for (let i8 = 0, j8 = P8.length - 1; i8 < P8.length; j8 = i8++) {
+                  const xi = P8[i8][0], yi = P8[i8][1], xj = P8[j8][0], yj = P8[j8][1];
+                  if (((yi > y8) !== (yj > y8)) && (x8 < (xj - xi) * (y8 - yi) / (yj - yi) + xi)) c8 = !c8; }
+                return c8; };
+              const ovl = (list) => { let worst = 0;
+                for (let i8 = 0; i8 < list.length; i8++) for (let j8 = i8 + 1; j8 < list.length; j8++) {
+                  const A8 = list[i8].points, B8 = list[j8].points;
+                  let mnX = 1e9, mxX = -1e9, mnY = 1e9, mxY = -1e9;
+                  for (const p8 of A8.concat(B8)) { mnX = Math.min(mnX, p8[0]); mxX = Math.max(mxX, p8[0]); mnY = Math.min(mnY, p8[1]); mxY = Math.max(mxY, p8[1]); }
+                  const N8 = 90; let hit = 0;
+                  for (let u8 = 0; u8 < N8; u8++) for (let v8 = 0; v8 < N8; v8++) {
+                    const x8 = mnX + (mxX - mnX) * (u8 + 0.5) / N8, y8 = mnY + (mxY - mnY) * (v8 + 0.5) / N8;
+                    if (inPoly(A8, x8, y8) && inPoly(B8, x8, y8)) hit++; }
+                  worst = Math.max(worst, hit / (N8 * N8) * (mxX - mnX) * (mxY - mnY)); }
+                return worst / 1e6; };
+              const bays8 = ae.filter(e8 => e8.type === 'LWPOLYLINE' && e8.bim && e8.bim.kind === 'slab' && e8.bim.t === 150);
+              const roofs8 = ae.filter(e8 => e8.bim && e8.bim.kind === 'roof' && e8.layer === '지붕');
+              eqi(bays8.length, 5, '  동마다 바닥판');
+              ok(ovl(bays8) < 0.5, '★★동끼리 바닥 겹침 0 — 측벽을 공유하는 방사 쐐기 (' + ovl(bays8).toFixed(2) + '㎡)');
+              ok(ovl(roofs8) < 0.5, '★★지붕끼리 겹침 0 — 처마는 앞뒤로만 내민다 (' + ovl(roofs8).toFixed(2) + '㎡)');
+              eqi(ae.filter(e8 => e8.type === 'LINE' && e8.layer === '벽').length, 16, '★측벽 공유 — 벽 16매(앞5+뒤5+방사6), 중복 벽 없음');
+              // 개구부가 '한쪽만 실내'인가 — 양쪽 다 실내면 두 동을 관통한 것, 양쪽 다 실외면 허공
+              let bad8 = 0;
+              for (const q8 of ae.filter(e8 => e8.bim && e8.bim.kind === 'opening')) {
+                const mx = (q8.x1 + q8.x2) / 2, my = (q8.y1 + q8.y2) / 2;
+                const dd = Math.hypot(q8.x2 - q8.x1, q8.y2 - q8.y1) || 1;
+                const nx = -(q8.y2 - q8.y1) / dd, ny = (q8.x2 - q8.x1) / dd;
+                const inA = bays8.some(f8 => inPoly(f8.points, mx + nx * 400, my + ny * 400));
+                const inB = bays8.some(f8 => inPoly(f8.points, mx - nx * 400, my - ny * 400));
+                if (inA === inB) bad8++;
+              }
+              eqi(bad8, 0, '★★커튼월이 이웃 동을 관통하지 않는다 (한쪽만 실내)');
+              ok(ae.filter(e8 => e8.bim && e8.bim.kind === 'opening' && e8.bim.ot === 'door').length === 1, '  가운데 동에 출입문');
+              ok(ae.filter(e8 => e8.bim && e8.bim.kind === 'slab' && e8.bim.t === 400).length === 1, '  기단(건물군 외곽 한 장)');
+              // ── 웹 조사로 얻은 건축 규범값을 코드에 고정 ──
+              // 주거 박공 물매 4:12~9:12 (18.4~36.9°) — KCS 41 56 05 아스팔트 싱글 적용범위
+              const pit = roofs8.map(rf => { const P9 = rf.points;
+                return rf.bim.rise / (Math.hypot(P9[1][0] - P9[0][0], P9[1][1] - P9[0][1]) / 2); });
+              ok(pit.every(p9 => p9 >= 0.333 && p9 <= 0.75),
+                '★물매 4:12~9:12 준수 (' + pit.map(p9 => (Math.atan(p9) * 180 / Math.PI).toFixed(0) + '도').join('/') + ')');
+              // 방화벽은 지붕면(이 선에서는 처마 높이) 위로 500 돌출 — 피난·방화구조 규칙 제21조.
+              // 나란한 박공동 사이에 연속 골(valley)을 만들지 않는 실무 해법이기도 하다.
+              const fw = ae.filter(e8 => e8.type === 'LINE' && e8.layer === '벽' && e8.bim.h > 3000);
+              eqi(fw.length, 4, '★방화벽 — 이웃과 맞닿는 측벽 4개(=n-1)');
+              ok(fw.every(w9 => w9.bim.h === 3500), '  지붕면 위로 500 돌출 (건축법)');
+              ok(ae.some(e8 => e8.type === 'LINE' && e8.layer === '지붕' && e8.bim && e8.bim.kind === 'wall'),
+                '★처마돌림(fascia) — 지붕 끝이 두께를 갖는다');
               C.state.entities.length = b6;
               return VZ.traceFacade(facadeUrl, { floorH: 3000 });
             })
