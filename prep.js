@@ -387,5 +387,53 @@ function analyze(strokes, userOpts) {
   return { shapes, regions, counts, summary, opts };
 }
 
-return { analyze, _internal: { rdp, fitCircle, fitStroke, detectRegions, perpDist } };
+// ---------- 즉석 교정 (S3) ----------
+// 자동 판정이 틀렸을 때, 스트로크를 사용자가 고른 종류로 '강제' 재적합한다 (미리보기 탭 → 후보 순환).
+function refitAs(stroke, kind, userOpts) {
+  const opts = Object.assign({ orthoTolDeg: 7, fitK: 1 }, userOpts || {});
+  const raw = stroke.pts.map(p => [p[0], p[1]]);
+  if (raw.length < 2) return null;
+  const base = { strokeId: stroke.id, color: stroke.color, widthMM: (stroke.hw || 3) * 2, layer: stroke.layer || '' };
+  const bb = bboxOf(raw);
+  const eps = Math.min(80 * Math.max(1, opts.fitK), Math.max(1, bb.diag * 0.02 * opts.fitK));
+  const closed = dist(raw[0], raw[raw.length - 1]) < Math.max(bb.diag * 0.12, 40);
+  const lenOf = (ps, cl) => { let L = 0; for (let i = 1; i < ps.length; i++) L += dist(ps[i - 1], ps[i]); if (cl) L += dist(ps[ps.length - 1], ps[0]); return L; };
+  if (kind === 'line') {
+    let a = raw[0], b = raw[raw.length - 1];
+    const sn = snapLineOrtho(a, b, opts.orthoTolDeg);
+    if (sn) { a = sn[0]; b = sn[1]; }
+    return { ...base, kind: 'line', a, b, bbox: bb, lengthMM: dist(a, b), closed: false, ortho: !!sn };
+  }
+  if (kind === 'arc') {
+    const cf = fitCircle(raw);
+    if (!cf) return refitAs(stroke, 'curve', userOpts);
+    const swS = sweepOf(raw, cf.cx, cf.cy), sw = Math.abs(swS);
+    if (sw < 0.15) return refitAs(stroke, 'line', userOpts);
+    const sgn = swS > 0;
+    const aS = Math.atan2(raw[0][1] - cf.cy, raw[0][0] - cf.cx) * DEG;
+    const aE = Math.atan2(raw[raw.length - 1][1] - cf.cy, raw[raw.length - 1][0] - cf.cx) * DEG;
+    return { ...base, kind: 'arc', cx: cf.cx, cy: cf.cy, r: cf.r, startAngle: norm360(sgn ? aS : aE), endAngle: norm360(sgn ? aE : aS),
+      a: raw[0], b: raw[raw.length - 1], bbox: bb, lengthMM: sw * cf.r, closed: false };
+  }
+  if (kind === 'circle') {
+    const cf = fitCircle(raw) || { cx: (bb.x0 + bb.x1) / 2, cy: (bb.y0 + bb.y1) / 2, r: bb.diag / 2.83 };
+    return { ...base, kind: 'circle', cx: cf.cx, cy: cf.cy, r: cf.r, bbox: bb, lengthMM: 2 * Math.PI * cf.r, closed: true };
+  }
+  if (kind === 'rect') {
+    const pts4 = [[bb.x0, bb.y0], [bb.x1, bb.y0], [bb.x1, bb.y1], [bb.x0, bb.y1]];
+    return { ...base, kind: 'rect', pts: pts4, bbox: bb, lengthMM: 2 * (bb.w + bb.h), closed: true };
+  }
+  if (kind === 'polyline' || kind === 'polygon') {
+    let sp = rdp(raw, eps);
+    const asPoly = kind === 'polygon' || (kind === 'polyline' && closed);
+    if (asPoly && sp.length > 3 && dist(sp[0], sp[sp.length - 1]) < eps * 2) sp = sp.slice(0, -1);
+    if (asPoly) return { ...base, kind: 'polygon', pts: sp, bbox: bb, lengthMM: lenOf(sp, true), closed: true };
+    return { ...base, kind: 'polyline', pts: sp, bbox: bb, lengthMM: lenOf(sp, false), closed: false };
+  }
+  // curve (기본) — 원본 결을 살린 점열
+  const sp2 = rdp(raw, Math.max(1, eps * 0.4));
+  return { ...base, kind: 'curve', pts: sp2, bbox: bb, lengthMM: lenOf(sp2, closed), closed };
+}
+
+return { analyze, refitAs, _internal: { rdp, fitCircle, fitStroke, detectRegions, perpDist } };
 })();

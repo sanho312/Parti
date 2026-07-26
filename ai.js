@@ -50,6 +50,7 @@
     '7. 생성·수정을 마치면 get_screenshot으로 결과를 직접 눈으로 확인하고, 겹침·이상한 배치가 보이면 스스로 수정하라. 사용자가 "화면에 보이는 것"을 물을 때도 사용.',
     '8. 길이·면적·거리 질문에는 measure 도구를 써라(좌표 암산보다 정확).',
     '9. 사용자 메시지 앞의 [현재 선택된 개체: ...]는 시스템이 자동으로 붙인 선택 정보다. "이것/이것들"이 가리키는 대상으로 활용하라.',
+    '10. [스케치 인식: ...]은 사용자가 지금 그려둔 손그림의 구조 요약(자동)이다 — "방금 그린 방/선/원"이 가리키는 대상. 아직 건물화 전 상태이며, 크기 조정·건물화 요청이 오면 이 요약을 근거로 대화하라.',
     '',
     '# 파라메트릭 노드 그래프 (edit_node_graph)',
     '## 노드 vs 직접 생성 — 판단 기준 (중요)',
@@ -945,7 +946,15 @@
         selCtx = '[현재 선택된 개체: id ' + sel.join(',') + ' — ' + kinds.join(', ') + (S.selection.size > 30 ? ' 외 ' + (S.selection.size - 30) + '개' : '') + ']\n';
       }
     } catch (e) {}
-    const text = selCtx + (t || '첨부한 도면 이미지를 분석해서 그대로 작도·모델링해줘.');
+    // A1: 스케치 인식 요약 상시 공유 — 철학대로 이미지가 아니라 '구조'를 전달.
+    // "방금 그린 방 3m 로 넓혀줘" 같은 대화가 성립하는 근거 컨텍스트.
+    let skCtx = '';
+    try {
+      const SKm = window.WEBCAD_SKETCH;
+      const t2 = SKm && SKm.summaryCtx && SKm.summaryCtx();
+      if (t2) skCtx = '[' + t2 + ']\n';
+    } catch (e) {}
+    const text = selCtx + skCtx + (t || '첨부한 도면 이미지를 분석해서 그대로 작도·모델링해줘.');
     if (pendingImgs.length) {
       lastImg = pendingImgs[pendingImgs.length - 1];            // set_underlay 가 쓸 최신 이미지
       const content = pendingImgs.map(p => ({ type: 'image', source: { type: 'base64', media_type: p.media, data: p.data } }));

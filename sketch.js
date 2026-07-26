@@ -33,6 +33,7 @@ const SK = {
   snap: true,         // 스트로크 시작/끝을 CAD 개체·다른 스트로크 끝점에 흡착
   aim: false,         // 🎯 조준 모드 — 접촉해도 그리지 않고 위치·스냅만 표시 (호버 미지원 기기 대체)
   rev: 0,             // 내용 변경 카운터 (rAF 뷰 동기화용)
+  fitOv: {},          // S3 즉석 교정: strokeId -> 강제 종류(line/arc/…) — 미리보기 탭으로 순환
   docKey: '',
 };
 // 브러시 특성 — 폭 배율 곡선(필압), 폭 계수, 투명도
@@ -224,13 +225,30 @@ function tick() {
 
 // ---------- 변경/실행취소 ----------
 function pushOp(op) { SK.undo.push(op); if (SK.undo.length > 100) SK.undo.shift(); SK.redo.length = 0; }
-function changed() { SK.rev++; closePreview(); saveSoon(); }
+// S1 라이브 인식: 스트로크가 바뀔 때마다 (펜 뗌·지우개·undo) 인식 미리보기를 자동 갱신.
+// 유령선이 항상 겹쳐 보이고, 하단 칩의 확정 버튼 한 번이면 도면이 된다.
+let prevTimer = null;
+function schedulePreview() {
+  clearTimeout(prevTimer);
+  prevTimer = setTimeout(() => {
+    if (!SK.on) return;
+    if (SK.strokes.length) { try { recognize(); } catch (e) {} }
+    else closePreview(), redraw();
+  }, 160);
+}
+function changed() {
+  SK.rev++;
+  if (SKP.live !== 0) schedulePreview();   // 라이브 미리보기 (스케치 설정에서 끌 수 있음)
+  else closePreview();
+  saveSoon();
+}
 function undoSk() {
   const op = SK.undo.pop(); if (!op) return;
   if (op.t === 'add') SK.strokes = SK.strokes.filter(s => s.id !== op.s.id);
   else if (op.t === 'del') SK.strokes.push(...op.ss);
   else if (op.t === 'rep') SK.strokes = JSON.parse(JSON.stringify(op.before));
   SK.redo.push(op); SK.rev++; saveSoon();
+  if (SKP.live !== 0) schedulePreview();
 }
 function redoSk() {
   const op = SK.redo.pop(); if (!op) return;
@@ -238,6 +256,7 @@ function redoSk() {
   else if (op.t === 'del') { const ids = new Set(op.ss.map(s => s.id)); SK.strokes = SK.strokes.filter(s => !ids.has(s.id)); }
   else if (op.t === 'rep') SK.strokes = JSON.parse(JSON.stringify(op.after));
   SK.undo.push(op); SK.rev++; saveSoon();
+  if (SKP.live !== 0) schedulePreview();
 }
 
 // ---------- 영속 (문서 이름별 localStorage — Phase 1 범위) ----------
@@ -283,7 +302,7 @@ const pressureOf = (e) => (e.pressure > 0 && e.pressure <= 1) ? e.pressure : 0.5
 // ─── 스케치 패스값(보정·인식 허용치) — 초보자도 자기 손에 맞게 조정 (2026-07-26) ───
 // fitK: 보정 강도(직선화 관대함) · smooth: 손떨림 제거 횟수 · ortho: 수평수직 정리 각도(°)
 // snap: 끝점 흡착 거리(px) · corner: 모서리 판정 각(rad, 작을수록 민감=꺾은선 판정↑)
-const SKP_DEF = { fitK: 1, smooth: 2, ortho: 7, snap: 10, corner: 0.6 };
+const SKP_DEF = { fitK: 1, smooth: 2, ortho: 7, snap: 10, corner: 0.6, live: 1 };
 let SKP = { ...SKP_DEF };
 try { Object.assign(SKP, JSON.parse(localStorage.getItem('webcad_sketch_params') || '{}')); } catch (e) {}
 const skpSave = () => { try { localStorage.setItem('webcad_sketch_params', JSON.stringify(SKP)); } catch (e) {} };
@@ -564,6 +583,7 @@ skcv.addEventListener('pointerdown', (e) => {
     if (live) return;                       // 펜으로 그리는 중의 터치(손바닥) 전면 무시
     if (touches.size >= 2) { navStart(); return; }
     if (SK.penSeen) return;                 // 팜 리젝션: 펜 사용자는 한 손가락 무시
+    if (maybeTapFit(e)) return;             // S3: 미리보기 도형 탭 = 후보 순환 (그리기 아님)
     startStroke(e); return;                 // 펜 없는 기기(폰 등)는 손가락 그리기
   }
   if (e.button === 2 || e.button === 1) {   // 마우스 우/휠 버튼 = 팬
@@ -571,8 +591,19 @@ skcv.addEventListener('pointerdown', (e) => {
     try { skcv.setPointerCapture(e.pointerId); } catch (err) {}
     return;
   }
+  if (maybeTapFit(e)) return;               // S3: 미리보기 도형 탭 = 후보 순환
   startStroke(e);
 });
+// S3 탭 판정 상태 — pointerdown 에서 미리보기 도형 위면 그리기를 미루고, up 에서 이동량이 작으면 순환
+let tapFit = null;
+function maybeTapFit(e) {
+  if (!preview || SK.tool === 'eraser' || aiming) return false;
+  const hitId = hitPreviewShape(e.clientX - ovClient.x, e.clientY - ovClient.y);
+  if (hitId == null) return false;
+  tapFit = { id: hitId, x: e.clientX, y: e.clientY, pid: e.pointerId };
+  try { skcv.setPointerCapture(e.pointerId); } catch (err) {}
+  return true;
+}
 skcv.addEventListener('pointermove', (e) => {
   if (!SK.on) return;
   if (e.pointerType === 'touch' && touches.has(e.pointerId)) {
@@ -602,6 +633,12 @@ skcv.addEventListener('pointermove', (e) => {
   }
 });
 function pointerEnd(e) {
+  if (tapFit && e.pointerId === tapFit.pid) {   // S3: 이동이 작으면 탭 = 후보 순환
+    const moved = Math.hypot(e.clientX - tapFit.x, e.clientY - tapFit.y);
+    const id2 = tapFit.id; tapFit = null;
+    if (moved <= 7) { cycleFit(id2); return; }
+    return;                                     // 드래그로 변하면 무시 (그리기는 빈 곳에서)
+  }
   if (e.pointerType === 'touch') {
     touches.delete(e.pointerId);
     if (nav) { if (touches.size) navStart(); else nav = null; }
@@ -646,10 +683,67 @@ window.addEventListener('keydown', (e) => {
 
 // ---------- ✨ 인식 (Phase 2 전처리 엔진 — AI 0) ----------
 function closePreview() { if (preview) { preview = null; SK.rev++; } if (infoEl) infoEl.style.display = 'none'; }
+// S3 즉석 교정: 자동 판정이 틀린 도형을 미리보기에서 '탭'하면 후보를 순환한다 (파라미터 조정 없이 그 도형만).
+// SK.fitOv = {strokeId: kind} — 인식(analyze) 결과에 강제 재적합(refitAs)으로 덮어씀. 확정·건물화 모두 반영.
+function applyFitOv(anal) {
+  if (!anal || !SK.fitOv || !Object.keys(SK.fitOv).length) return anal;
+  const P2 = window.WEBCAD_PREP;
+  anal.shapes = anal.shapes.map(sh => {
+    const k = SK.fitOv[sh.strokeId];
+    if (!k || k === sh.kind) return sh;
+    const st = SK.strokes.find(s2 => s2.id === sh.strokeId);
+    return (st && P2.refitAs && P2.refitAs(st, k, skpOpts())) || sh;
+  });
+  return anal;
+}
+const FIT_KO = { line: '직선', arc: '호', polyline: '꺾은선', curve: '곡선', circle: '원', rect: '사각형', polygon: '다각형' };
+function cycleFit(strokeId) {
+  const cur = preview && preview.shapes.find(s2 => s2.strokeId === strokeId);
+  if (!cur) return;
+  const closedish = !!(cur.closed || ['circle', 'rect', 'polygon'].includes(cur.kind));
+  const cyc = closedish ? ['circle', 'rect', 'polygon', 'curve'] : ['line', 'arc', 'polyline', 'curve'];
+  const beforeKind = cur.kind;
+  let idx = cyc.indexOf(SK.fitOv[strokeId] || cur.kind);
+  // 후보를 순서대로 시도하되, 재적합이 폴백으로 '같은 판정'을 내면(예: 거의 직선 → 호 요청이 직선 폴백)
+  // 다음 후보로 계속 — 탭했는데 안 바뀌는 헛순환 방지. 한 바퀴 끝은 자동 판정 복귀.
+  let applied = null;
+  for (let step = 0; step <= cyc.length; step++) {
+    idx++;
+    if (idx >= cyc.length) { delete SK.fitOv[strokeId]; applied = null; recognize(); break; }
+    SK.fitOv[strokeId] = cyc[idx];
+    recognize();
+    const nk = (preview.shapes.find(s2 => s2.strokeId === strokeId) || {}).kind;
+    if (nk && nk !== beforeKind) { applied = nk; break; }
+  }
+  if (infoTxt) infoTxt.textContent = '🔄 ' + (applied ? FIT_KO[applied] + '(으)로 교정' : '자동 판정으로 복귀') + ' — ' + infoTxt.textContent.replace(/^[✨🔄][^—]*— ?/, '').replace(/^[✨🔄] ?/, '');
+}
+// 미리보기 도형 히트테스트 (화면 px) — 탭 위치에서 8px 안의 도형 strokeId
+function hitPreviewShape(sx, sy) {
+  if (!preview) return null;
+  const k = V().scale, TOL = 9;
+  const segD = (x1, y1, x2, y2) => {
+    const dx = x2 - x1, dy = y2 - y1, L2 = dx * dx + dy * dy || 1;
+    const t2 = Math.max(0, Math.min(1, ((sx - x1) * dx + (sy - y1) * dy) / L2));
+    return Math.hypot(sx - (x1 + dx * t2), sy - (y1 + dy * t2));
+  };
+  for (const s of preview.shapes) {
+    if (s.kind === 'line') { const a = w2s(s.a[0], s.a[1]), b = w2s(s.b[0], s.b[1]); if (segD(a[0], a[1], b[0], b[1]) <= TOL) return s.strokeId; }
+    else if (s.kind === 'circle' || s.kind === 'arc') { const c = w2s(s.cx, s.cy); if (Math.abs(Math.hypot(sx - c[0], sy - c[1]) - s.r * k) <= TOL) return s.strokeId; }
+    else if (s.pts) {
+      const n2 = s.pts.length, m2 = (s.closed || s.kind === 'rect' || s.kind === 'polygon') ? n2 : n2 - 1;
+      for (let i = 0; i < m2; i++) {
+        const a = w2s(s.pts[i][0], s.pts[i][1]), b = w2s(s.pts[(i + 1) % n2][0], s.pts[(i + 1) % n2][1]);
+        if (segD(a[0], a[1], b[0], b[1]) <= TOL) return s.strokeId;
+      }
+    }
+  }
+  return null;
+}
 function recognize() {
   if (!window.WEBCAD_PREP) { B.logLine && B.logLine('  전처리 엔진(prep.js)이 로드되지 않았습니다.', 'warn'); return null; }
   if (!SK.strokes.length) { B.logLine && B.logLine('  인식할 스케치가 없습니다 — 먼저 펜으로 그려주세요.', 'warn'); return null; }
-  preview = window.WEBCAD_PREP.analyze(SK.strokes, skpOpts());
+  if (!SK.fitOv) SK.fitOv = {};
+  preview = applyFitOv(window.WEBCAD_PREP.analyze(SK.strokes, skpOpts()));
   SK.rev++;
   const KN = { line: '선', polyline: '꺾은선', rect: '사각형', polygon: '다각형', circle: '원', arc: '호', curve: '곡선', dot: '점' };
   const parts = Object.entries(preview.counts).map(([k, n]) => (KN[k] || k) + ' ' + n);
@@ -722,7 +816,7 @@ async function buildBuilding() {
     const k = BF.calcScale(anal);
     if (k !== 1) {
       scaleStrokes(k);                             // (changed 아님 — 미리보기는 직접 재계산)
-      anal = window.WEBCAD_PREP.analyze(SK.strokes, skpOpts());
+      anal = applyFitOv(window.WEBCAD_PREP.analyze(SK.strokes, skpOpts()));   // 즉석 교정 반영
       B.logLine && B.logLine(`  📐 스케일 보정 ×${k} — 스케치를 건축 스케일로 확대했습니다.`, 'info');
     }
     // ② 역할 판정 — 규칙 우선, API 키가 있으면 AI 가 요약만 보고 보정 (이미지 전송 없음)
@@ -959,7 +1053,10 @@ function openSkp() {
         ${row('skpOr', '수평·수직 정리', 0, 15, 1, SKP.ortho, '끔', '15°까지 반듯하게')}
         ${row('skpSn', '끝점 흡착', 0, 30, 1, SKP.snap, '끔', '30px')}
         ${row('skpCo', '모서리 민감도', 0.35, 1.0, 0.05, SKP.corner, '민감(꺾은선↑)', '둔감(곡선↑)')}
-        <div style="font-size:10.5px;line-height:1.55;color:var(--muted2,#6b7488);">변경은 즉시 저장 — 다음 스트로크와 인식(✨)부터 적용됩니다.</div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text,#e7ecf5);cursor:pointer;">
+          <input id="skpLive" type="checkbox" ${SKP.live !== 0 ? 'checked' : ''} style="accent-color:var(--accent,#0A84FF);width:14px;height:14px;">
+          라이브 인식 미리보기 — 펜을 떼면 유령선 자동 표시</label>
+        <div style="font-size:10.5px;line-height:1.55;color:var(--muted2,#6b7488);">변경은 즉시 저장 — 다음 스트로크와 인식(✨)부터 적용됩니다.<br>미리보기의 도형을 <b>탭</b>하면 직선↔호↔꺾은선↔곡선으로 교정할 수 있습니다.</div>
       </div>
     </div>`;
   skpEl.style.display = 'block';
@@ -974,6 +1071,10 @@ function openSkp() {
     });
   };
   wireS('skpFit', 'fitK'); wireS('skpSm', 'smooth'); wireS('skpOr', 'ortho'); wireS('skpSn', 'snap'); wireS('skpCo', 'corner');
+  skpEl.querySelector('#skpLive').addEventListener('change', (e) => {
+    SKP.live = e.target.checked ? 1 : 0; skpSave();
+    if (SKP.live && SK.strokes.length) schedulePreview(); else if (!SKP.live) { closePreview(); redraw(); }
+  });
 }
 const skpBtn = mkBtn('<svg class="ic" viewBox="0 0 24 24"><path d="M4 6h10M18 6h2M4 12h2M10 12h10M4 18h10M18 18h2"/><circle cx="16" cy="6" r="2"/><circle cx="8" cy="12" r="2"/><circle cx="16" cy="18" r="2"/></svg>',
   '스케치 설정 — 보정 강도·손떨림 제거·수평수직 정리·끝점 흡착·모서리 민감도 (패스값 조정)', openSkp);
@@ -1038,5 +1139,18 @@ requestAnimationFrame(tick);
 
 // 외부/테스트 훅 — Phase 2 전처리 엔진이 이 데이터를 읽는다
 window.WEBCAD_SKETCH = { SK, enter, exit, setTool, undoSk, redoSk, redraw, syncNow, saveNow, loadNow, w2s, s2w,
-  recognize, commitRecog, closePreview, getPreview: () => preview, buildBuilding, fitView, importStrokes };
+  recognize, commitRecog, closePreview, getPreview: () => preview, buildBuilding, fitView, importStrokes,
+  cycleFit, hitPreviewShape, applyFitOv,   // S3 즉석 교정 (테스트 훅 포함)
+  // A1: AI 코워커용 구조 요약 — 이미지가 아니라 인식 결과(철학)를 한 줄로
+  summaryCtx: () => {
+    if (!SK.strokes.length) return null;
+    let anal = preview;
+    try { if (!anal) anal = applyFitOv(window.WEBCAD_PREP.analyze(SK.strokes, skpOpts())); } catch (e) { return null; }
+    if (!anal) return null;
+    const KO = { line: '선', polyline: '꺾은선', curve: '곡선', rect: '사각', polygon: '다각형', circle: '원', arc: '호', dot: '점' };
+    const parts = Object.entries(anal.counts || {}).map(([k, n]) => (KO[k] || k) + n);
+    const regs = (anal.regions || []).filter(r => r.areaMM2 > 1e4);
+    const rTxt = regs.length ? ' — 닫힌 영역 ' + regs.length + '개(' + regs.slice(0, 3).map(r => fmtArea(r.areaMM2)).join(', ') + (regs.length > 3 ? ' 외' : '') + ')' : '';
+    return '스케치 인식: ' + (parts.join('·') || '없음') + rTxt + ' · 스트로크 ' + SK.strokes.length + '개' + (Object.keys(SK.fitOv || {}).length ? ' · 수동교정 ' + Object.keys(SK.fitOv).length : '');
+  } };
 })();

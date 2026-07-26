@@ -3027,6 +3027,41 @@ function tests(){
         // ④ 스케치 툴바에 설정 버튼
         ok([...AD.querySelectorAll('#skBar button')].some(b2 => /스케치 설정/.test(b2.title)), '★스케치 설정(패스값) 버튼 존재');
       }
+      { // S1·S3·A1 — 라이브 미리보기·즉석 교정·AI 인식 컨텍스트
+        const S4 = AW.WEBCAD_SKETCH;
+        // S3-a: refitAs — 곡선 스트로크를 직선/호로 강제 재적합
+        const wavy = { id: 41, color: '#fff', hw: 3, pts: [] };
+        for (let i = 0; i <= 20; i++) wavy.pts.push([i * 150, Math.sin(i * 0.8) * 300, 0.5]);
+        const asLine = P.refitAs(wavy, 'line', { orthoTolDeg: 7 });
+        ok(asLine && asLine.kind === 'line' && Math.abs(asLine.b[0] - 3000) < 1, '★refitAs: 곡선 → 직선 강제 (끝점 유지)');
+        const asArc = P.refitAs(wavy, 'arc', {});
+        ok(asArc && (asArc.kind === 'arc' || asArc.kind === 'curve' || asArc.kind === 'line'), '  refitAs: 호 요청 = 적합 가능한 것으로');
+        // S3-b: 미리보기 + 오버라이드 + 순환 + 히트테스트 (실제 스트로크로)
+        S4.SK.strokes = [{ id: 51, color: '#e6e1d3', hw: 3, layer: '', pts: [[0, 0, .5], [1500, 40, .5], [3000, 0, .5]] }];
+        S4.SK.fitOv = {}; S4.SK.rev++;
+        S4.recognize();
+        const pv = S4.getPreview();
+        ok(pv && pv.shapes.length === 1, '★라이브/수동 인식 → 미리보기 생성');
+        const k0 = pv.shapes[0].kind;
+        // 히트테스트: '실제 인식된 도형'의 중점 화면좌표 → strokeId (ortho 스냅으로 이동한 좌표 기준)
+        const sh0 = pv.shapes[0];
+        const midW = sh0.kind === 'line' ? [(sh0.a[0] + sh0.b[0]) / 2, (sh0.a[1] + sh0.b[1]) / 2] : sh0.pts[Math.floor(sh0.pts.length / 2)];
+        const mid = S4.w2s(midW[0], midW[1]);
+        ok(S4.hitPreviewShape(mid[0], mid[1]) === 51, '★미리보기 히트테스트 — 도형 위 탭 좌표 인식');
+        S4.cycleFit(51);
+        const k1 = S4.getPreview().shapes[0].kind;
+        ok(k1 !== k0 && !!S4.SK.fitOv[51], '★탭 순환 — 판정이 실제로 바뀔 때까지 진행 (' + k0 + '→' + k1 + ')');
+        // A1: AI 컨텍스트 요약
+        const sc2 = S4.summaryCtx();
+        ok(typeof sc2 === 'string' && /스케치 인식/.test(sc2) && /스트로크 1개/.test(sc2), '★AI 컨텍스트 요약 생성 (' + (sc2 || '').slice(0, 30) + '…)');
+        ok(/수동교정 1/.test(sc2), '  요약에 수동교정 개수 포함');
+        // S1: 설정 팝업에 라이브 토글
+        const sb2 = [...AD.querySelectorAll('#skBar button')].find(b2 => /스케치 설정/.test(b2.title));
+        sb2.click();
+        ok(!!AD.querySelector('#skpLive'), '★설정 팝업에 라이브 미리보기 토글');
+        AD.querySelector('#skpDlg #skpClose').click();
+        S4.SK.strokes = []; S4.SK.fitOv = {}; S4.closePreview(); S4.SK.rev++;
+      }
       { // 커스텀 창호 기호(owlib) — 저장(정규화)·평면 렌더·3D 프리즘·문서 왕복
         // ① 저장: 기준선 2000mm + 원 + 대각선 → 1000 정규화
         const base2 = { type: 'LINE', x1: 0, y1: 0, x2: 2000, y2: 0 };
