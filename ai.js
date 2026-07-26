@@ -1057,17 +1057,27 @@
       const lines = []; let planN = 0, massN = 0, cpxN = 0, cursorX = 0;
       const allStrokes = [];
       for (const img of imgs) {
-        const cls = forceMass ? { kind: 'photo' } : forcePlan ? { kind: 'plan' } : await V.classifyImage(img.dataUrl);
-        if (cls.kind === 'plan') {
+        const cls = await V.classifyImage(img.dataUrl);
+        // ★라우팅을 분류기에 맡기지 않는다. 전역 통계로 미리 맞히려던 방식이 실물에서 두 번
+        //   뒤집혔다(스케치를 사진으로, 다음엔 도면으로 → 손그림 획이 벽 52개가 됐다).
+        //   대신 '실제로 해석해 보고 증거가 뒷받침될 때만 채택'한다. 분류 결과는 설명용.
+        //   도면 채택 근거 3가지 — 무채색(도면은 색이 없다) · 잉크 설명률 · 이중선 쌍의 존재.
+        // ★사선이 지배적이면 직교 도면도, 정면 파사드도 아니다 — 투시로 그린 그림이다.
+        //   이 한 기준이 두 오판(손그림→벽 52개 / 손그림→2층 박스)을 모두 막는다.
+        const orthoish = (cls.diagRatio || 0) < 0.35;
+        if (!forceMass) {
           const r = await V.traceImage(img.dataUrl, { widthMM: wmm });
-          if (!r.strokes.length) { lines.push('· 도면에서 선을 찾지 못했습니다 (흑백·고대비일수록 잘 읽힙니다)'); continue; }
-          for (const s of r.strokes) { for (const p of s.pts) p[0] += cursorX; allStrokes.push(s); }
-          cursorX += r.meta.widthMM + 4000; planN++;
-          lines.push(`· 도면 → 벽 ${r.meta.walls} · 참고선 ${r.meta.guides} · 문 후보 ${r.meta.doors} (가로 ${(r.meta.widthMM / 1000).toFixed(1)}m 가정)`);
-          continue;
+          const isPlan = forcePlan || (r.strokes.length && cls.chromaRatio < 0.05 && orthoish
+            && r.meta.coverage >= 0.5 && r.meta.paired >= 2);
+          if (isPlan) {
+            for (const s of r.strokes) { for (const p of s.pts) p[0] += cursorX; allStrokes.push(s); }
+            cursorX += r.meta.widthMM + 4000; planN++;
+            lines.push(`· 도면 → 벽 ${r.meta.walls} · 참고선 ${r.meta.guides} · 문 후보 ${r.meta.doors} (가로 ${(r.meta.widthMM / 1000).toFixed(1)}m 가정)`);
+            continue;
+          }
         }
-        // 정면 사진이고 창 격자가 또렷하면 파사드 매싱
-        if (cls.kind === 'photo' && window.PARTI_ARCH) {
+        // 도면이 아니다 → 정면 사진처럼 창 격자가 또렷하면 파사드 매싱
+        if (window.PARTI_ARCH && (orthoish || forceMass)) {
           const f = await V.traceFacade(img.dataUrl, { floorH: fh,
             depthMM: numOf(t, /(?:깊이|안길이)\s*(\d+(?:\.\d+)?)\s*m/) * 1000 || null });
           if (forceMass || (f.meta.conf || 0) >= 0.45) {
@@ -1097,15 +1107,34 @@
           + (spec.glass ? ' · 마당 쪽 전면 유리' : '')
           + `  (지붕 봉우리 ${c.masses}개${c.meta.courtyard ? ' · 중정 초록 영역 검출' : ''})`);
       }
+      let builtFromPlan = null;
       if (allStrokes.length && SKm && SKm.importStrokes) {
         SKm.importStrokes(allStrokes);
         if (SKm.SK && !SKm.SK.on && SKm.enter) SKm.enter();
         if (SKm.recognize) { try { SKm.recognize(); } catch (e) {} }
         if (SKm.fitView) SKm.fitView();
+        // '모델링까지' 요청했으면 건물화도 바로 — 한 문장으로 끝나야 한다는 게 요구사항.
+        // (축척 어시스트 프롬프트를 띄우지 않으려고 전처리·건물화를 직접 호출한다)
+        if (/모델링|모델|3d|입체|건물화|매스/i.test(t)) {
+          try {
+            const P2 = window.WEBCAD_PREP, BF2 = window.WEBCAD_BIMIFY;
+            if (P2 && BF2) {
+              const an = P2.analyze(allStrokes, SKm.getParams ? SKm.getParams() : {});
+              const ro = BF2.heuristic(an);
+              builtFromPlan = await BF2.build(an, ro);
+              execTool('set_view', { mode: '3d' });
+            }
+          } catch (e) { builtFromPlan = null; }
+        }
       }
       if ((massN || cpxN) && !planN) execTool('set_view', { mode: '3d' });
       let tail = '';
-      if (planN) tail = '\n도면은 스케치로 올렸습니다 — **건물화(🏠)** 를 누르면 3D 까지 만들어지고, 틀린 선은 유령선을 탭해 고칠 수 있어요. 실제 치수를 알면 "가로 12m" 처럼 알려주세요.';
+      if (planN && builtFromPlan) {
+        const b2 = builtFromPlan;
+        tail = `\n모델링까지 만들었습니다 — 벽 ${b2.wall || 0} · 문 ${b2.door || 0} · 창 ${b2.window || 0}`
+          + (b2.slab ? ` · 슬래브 ${b2.slab}` : '') + '.\n'
+          + `가로를 ${(wmm / 1000).toFixed(1)}m 로 가정했습니다 — 실제 치수를 알면 "가로 12m" 처럼 알려주시면 다시 만듭니다.`;
+      } else if (planN) tail = '\n도면은 스케치로 올렸습니다 — **건물화(🏠)** 를 누르면 3D 까지 만들어지고, 틀린 선은 유령선을 탭해 고칠 수 있어요. 실제 치수를 알면 "가로 12m" 처럼 알려주세요.';
       if (massN) tail += '\n매스는 초기 검토용입니다 — 깊이(폭×0.6)·층고(' + fh + 'mm)는 가정값이라 "깊이 12m 층고 3300" 처럼 알려주시면 다시 세웁니다.';
       if (cpxN) tail += '\n\n투시 스케치라 **치수는 읽을 수 없어** 동 크기 8×12m·층고 ' + fh + 'mm 로 세웠습니다(구성만 판독).\n'
         + '한 문장으로 고칠 수 있어요 — 예) **"6동 2층 한 동 10×14m 로 다시"**, "일렬 배치로", "평지붕으로".';

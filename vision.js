@@ -175,6 +175,27 @@ async function traceImage(src, opts) {
   const P = (x, y) => [Math.round(x * S), Math.round((h - y) * S)];
   const allWalls = wallsH.concat(wallsV);
 
+  // ── 잉크 설명률(coverage) ──
+  // ★"이 이미지가 직교 도면인가"를 전역 통계로 맞히려던 시도가 실물마다 흔들렸다(오분류 2회).
+  //   대신 실제로 뽑아 보고 '뽑은 직선들이 잉크를 얼마나 설명하는가'로 판정한다.
+  //   진짜 도면이면 잉크 대부분이 축 정렬 선 위에 있고, 손그림 투시는 그렇지 않다.
+  const cover = new Uint8Array(w * h);
+  const mark = (l, horiz) => {
+    const half = Math.max(1, Math.ceil((l.t || l.th || 2) / 2) + 1);
+    for (let u = Math.max(0, Math.floor(l.a)); u <= Math.min((horiz ? w : h) - 1, Math.ceil(l.b)); u++)
+      for (let v = -half; v <= half; v++) {
+        const c2 = Math.round(l.c) + v;
+        if (horiz) { if (c2 >= 0 && c2 < h) cover[c2 * w + u] = 1; }
+        else { if (c2 >= 0 && c2 < w) cover[u * w + c2] = 1; }
+      }
+  };
+  for (const l of wallsH) mark(l, true);
+  for (const l of wallsV) mark(l, false);
+  for (const l of thin) mark(l, l.horiz);
+  let inkN = 0, inkCov = 0;
+  for (let p = 0; p < w * h; p++) if (bin[p]) { inkN++; if (cover[p]) inkCov++; }
+  const coverage = inkN ? inkCov / inkN : 0;
+
   // ── 개구부: 같은 선 위 벽 사이의 '문/창 폭' 틈은 벽이 끊긴 게 아니라 '하나의 벽 + 개구부' ──
   // ★두 벽으로 두면 호의 경첩이 벽 끝점에 놓여 호스트 판정(0.02<t<0.98)에서 탈락한다.
   //   건축적으로도 문 있는 벽은 하나 — 틈을 메워 벽을 잇고, 그 자리에 문 호를 발행한다.
@@ -230,6 +251,10 @@ async function traceImage(src, opts) {
     strokes,
     meta: { imgW: im.width, imgH: im.height, usedW: w, usedH: h, scaleMMperPx: S,
       walls: finalWalls.length, guides: thin.length, doors: openings.length,
+      // paired = 평행 쌍(이중선)에서 나온 벽 수. 건축 도면은 벽을 두 줄로 그리므로 이 값이
+      // 크다. 손그림 투시는 단선이라 거의 0 — '진짜 도면인가'의 가장 확실한 근거.
+      paired: Hp.walls.length + Vp.walls.length,
+      coverage: +coverage.toFixed(3), inkPx: inkN,
       widthMM: o.widthMM, heightMM: Math.round(h * S) },
   };
 }
@@ -249,40 +274,45 @@ async function classifyImage(src) {
   const im = await loadImage(src);
   const { ctx, w, h } = toCanvas(im, 400);
   const d = ctx.getImageData(0, 0, w, h).data;
-  let mid = 0, ink = 0, sat = 0, white = 0;
   const total = w * h;
   const gray = new Float32Array(total);
+  let mid = 0, ink = 0, white = 0, chroma = 0, satSum = 0, markN = 0, bgSat = 0, bgN = 0;
   for (let i = 0, p = 0; i < d.length; i += 4, p++) {
     const a = d[i + 3];
-    const g = a < 40 ? 255 : (d[i] * 299 + d[i + 1] * 587 + d[i + 2] * 114) / 1000;
-    gray[p] = g;
-    if (g >= 70 && g <= 200) mid++;
-    if (g < 70) ink++;
-    if (g >= 195) white++;                                 // '종이 배경' 판정 — 촬영된 크림색 종이 포함
-    sat += Math.max(d[i], d[i + 1], d[i + 2]) - Math.min(d[i], d[i + 1], d[i + 2]);
+    const r = d[i], g1 = d[i + 1], b = d[i + 2];
+    const L = a < 40 ? 255 : (r * 299 + g1 * 587 + b * 114) / 1000;
+    const s = a < 40 ? 0 : Math.max(r, g1, b) - Math.min(r, g1, b);
+    gray[p] = L;
+    if (L >= 70 && L <= 200) mid++;
+    if (L < 70) ink++;
+    if (L >= 195) { white++; bgSat += s; bgN++; }          // 배경(밝은 면) — 종이는 무채, 하늘은 유채
+    if (s >= 40) chroma++;
+    if (L < 230) { satSum += s; markN++; }                 // '자국' 픽셀만의 채도 (흰 종이에 희석되지 않게)
   }
-  // 대각선 획 비율 — 강한 엣지 중 방향이 축(수평/수직)에서 20° 이상 벗어난 것의 비중
+  // 엣지 방향 분포 — 세기로 가중해 합산한다.
+  // ★'상위 N% 픽셀만 세기'는 쓰면 안 된다: |dx|+|dy| 가 가장 큰 곳은 두 성분이 함께 큰 '모서리'라
+  //   깨끗한 직교 도면조차 diag=1.0 이 나온다(실측). 약한 잡음만 걷어내고 세기 가중으로 합산한다.
   let axis = 0, diag = 0;
   for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
     const p = y * w + x;
-    const dx = gray[p + 1] - gray[p - 1], dy = gray[p + w] - gray[p - w];
-    const mag = Math.abs(dx) + Math.abs(dy);
-    if (mag < 40) continue;                                // 약한 엣지는 잡음
-    const ang = Math.atan2(Math.abs(dy), Math.abs(dx)) * 180 / Math.PI;  // 0=수직엣지, 90=수평엣지
-    if (ang < 20 || ang > 70) axis++; else diag++;
+    const dx = Math.abs(gray[p + 1] - gray[p - 1]), dy = Math.abs(gray[p + w] - gray[p - w]);
+    const m = dx + dy;
+    if (m < 12) continue;                                   // 종이 질감·압축 잡음 제거
+    const ang = Math.atan2(dy, dx) * 180 / Math.PI;         // 0=수직 엣지, 90=수평 엣지
+    if (ang < 20 || ang > 70) axis += m; else diag += m;
   }
   const edges = axis + diag;
-  const midR = mid / total, inkR = ink / total, satAvg = sat / total,
-    whiteR = white / total, diagR = edges ? diag / edges : 0;
+  const midR = mid / total, inkR = ink / total, whiteR = white / total,
+    chromaR = chroma / total, satInk = markN ? satSum / markN : 0,
+    bgSatAvg = bgN ? bgSat / bgN : 0, diagR = edges ? diag / edges : 0;
   let kind;
-  // 임계 근거(실측): 직교 도면 diag 0.01 · 정면 사진 0.03 vs 투시 스케치 0.34 — 0.22 로 확실히 갈린다
-  if (midR < 0.35 && inkR < 0.25 && satAvg < 12 && diagR < 0.22) kind = 'plan';
-  // 스케치: 종이 배경 + 사선 획 상당. (정면 사진은 사선이 거의 없고 밝은 배경도 없다)
-  // ★whiteR(≥225)은 촬영된 크림색 종이를 놓친다(실사용에서 스케치가 photo 로 샜다) → 195 기준.
-  else if (diagR >= 0.22 && whiteR >= 0.22) kind = 'sketch';
+  // 도면 = 무채색 자국 + 축 정렬 지배 + 밝은 배경. 유채색이 조금이라도 있으면 도면이 아니다.
+  if (chromaR < 0.02 && satInk < 25 && diagR < 0.3 && whiteR > 0.45) kind = 'plan';
+  else if (whiteR >= 0.3 && bgSatAvg < 30 && midR <= 0.5) kind = 'sketch';   // 무채색 종이 배경
   else kind = 'photo';
-  return { kind, midRatio: +midR.toFixed(3), inkRatio: +inkR.toFixed(3), satAvg: +satAvg.toFixed(1),
-    whiteRatio: +whiteR.toFixed(3), diagRatio: +diagR.toFixed(3) };
+  return { kind, midRatio: +midR.toFixed(3), inkRatio: +inkR.toFixed(3), whiteRatio: +whiteR.toFixed(3),
+    chromaRatio: +chromaR.toFixed(3), satInk: +satInk.toFixed(1), bgSat: +bgSatAvg.toFixed(1),
+    diagRatio: +diagR.toFixed(3) };
 }
 
 /* ------------------------------------------------------------
@@ -316,17 +346,26 @@ async function traceConcept(src, opts) {
   const d = ctx.getImageData(0, 0, w, h).data;
   const total = w * h;
   const bldg = new Uint8Array(total);        // 건물 픽셀 (잉크 윤곽 + 유리)
+  // 잉크 임계는 밝기 분포에서 정한다 — 고정값(135)은 연한 연필선·어두운 사진에서 다 틀린다.
+  // 종이(최빈 밝은 값)보다 확실히 어두운 쪽을 자국으로 본다.
+  const lum = new Float32Array(total), lh = new Uint32Array(256);
+  for (let i = 0, p = 0; i < d.length; i += 4, p++) {
+    const L = (d[i] * 299 + d[i + 1] * 587 + d[i + 2] * 114) / 1000;
+    lum[p] = L; lh[L | 0]++;
+  }
+  let mode = 200, mv = 0;
+  for (let v = 0; v < 256; v++) if (lh[v] > mv) { mv = lh[v]; mode = v; }
+  const inkThr = Math.max(40, Math.min(200, mode - 28));
   let green = 0, blue = 0, gSumX = 0, gSumY = 0, gMinX = w, gMaxX = 0, gMinY = h;
   for (let i = 0, p = 0; i < d.length; i += 4, p++) {
     const r = d[i], g = d[i + 1], b = d[i + 2];
-    const L = (r * 299 + g * 587 + b * 114) / 1000;
-    const isGreen = g > r + 16 && g > b + 16;
-    const isBlue = b > r + 16 && b > g + 6;
+    const isGreen = g > r + 12 && g > b + 12;
+    const isBlue = b > r + 12 && b > g + 4;
     if (isGreen) { green++; gSumX += p % w; gSumY += (p / w) | 0; const x = p % w, y = (p / w) | 0;
       if (x < gMinX) gMinX = x; if (x > gMaxX) gMaxX = x; if (y < gMinY) gMinY = y; }
     if (isBlue) blue++;
-    // 건물 = 진한 잉크선 또는 파란 유리. 초록(조경)은 제외.
-    if (!isGreen && (L < 135 || isBlue)) bldg[p] = 1;
+    // 건물 = 종이보다 어두운 자국 또는 파란 유리. 초록(조경)은 제외.
+    if (!isGreen && (lum[p] < inkThr || isBlue)) bldg[p] = 1;
   }
   // 실루엣 상단선 — 열마다 가장 위쪽 건물 픽셀. 없으면 높이 0.
   const raw = new Float32Array(w);

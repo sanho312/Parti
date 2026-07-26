@@ -3155,16 +3155,31 @@ function tests(){
             return cv3.toDataURL('image/png');
           };
           const facadeUrl = mkFacade(6, 4, 640, 560);
+          let ci0 = null;
           return VZ.classifyImage(cv2.toDataURL('image/png'))
-            .then(ci => { eqi(ci.kind, 'plan', '★이미지 분류 — 흑백 선도면은 plan (문장 키워드 아님)'); return VZ.classifyImage(facadeUrl); })
-            .then(cf => { eqi(cf.kind, 'photo', '★이미지 분류 — 채색 사진은 photo (채도 기준)'); return VZ.classifyImage(mkSketch()); })
+            .then(ci => { ci0 = ci; eqi(ci.kind, 'plan', '★이미지 분류 — 흑백 선도면은 plan (문장 키워드 아님)'); return VZ.classifyImage(facadeUrl); })
+            // 라벨보다 '어느 경로로 가는가'가 본질 — 채색 사진은 도면이 아니고, 축 정렬이라 파사드 경로.
+            .then(cf => {
+              ok(cf.kind !== 'plan', '★채색 사진은 도면으로 오인하지 않는다 (색 = 도면 아님)');
+              ok(cf.chromaRatio > 0.02 && cf.diagRatio < 0.35, '  색 있음 + 축 정렬 → 파사드 매싱 경로');
+              return VZ.classifyImage(mkSketch());
+            })
             .then(cs => {
-              eqi(cs.kind, 'sketch', '★이미지 분류 — 투시 스케치는 sketch (사선 획 비율)');
+              ok(cs.kind !== 'plan', '★투시 스케치는 도면으로 오인하지 않는다');
               return VZ.traceConcept(mkSketch()).then(cc2 => {
                 eqi(cc2.masses, 5, '★콘셉트 판독 — 지붕 봉우리로 동 수 (5동)');
                 eqi(cc2.roof, 'gable', '  뾰족한 봉우리 → 박공지붕');
                 eqi(cc2.arrange, 'circle', '  아래쪽 초록 영역 → 원형 마당 배치');
                 ok(cc2.glass, '  파란 면 → 유리');
+                // ★라우팅 근거 지표 — 전역 임계값 추측이 실물에서 두 번 뒤집힌 뒤 도입한 증거들.
+                //   도면은 무채색·축정렬·이중선, 손그림은 사선 지배 → 이 표가 오판을 막는다.
+                return VZ.traceImage(cv2.toDataURL('image/png'), { widthMM: 8000 }).then(rp => {
+                  ok(rp.meta.coverage >= 0.5, '★도면 근거 — 잉크 설명률 높음 (' + rp.meta.coverage + ')');
+                  ok(rp.meta.paired >= 2, '★도면 근거 — 이중선 쌍 존재 (' + rp.meta.paired + ')');
+                  ok(ci0.diagRatio < 0.35, '★도면 근거 — 축 정렬 지배 (사선 ' + ci0.diagRatio + ')');
+                  ok(cs.diagRatio >= 0.35, '★스케치 근거 — 사선 지배 (' + cs.diagRatio + ')');
+                  ok(cs.chromaRatio > 0.02 || cs.diagRatio >= 0.35, '  스케치는 도면 조건을 만족하지 않는다');
+                });
               });
             })
             .then(() => {
@@ -3225,6 +3240,18 @@ function tests(){
             .then(r => {
               ok(!/다시 세웠습니다/.test(r), '  배치와 무관한 문장은 배치를 갈아엎지 않는다');
               C.state.entities.length = b3;
+              if (SKl.SK) { SKl.SK.strokes = []; SKl.SK.rev++; }
+              // ★도면 이미지 + "모델링까지" → 건물화 자동 완주 (한 문장으로 끝나야 한다)
+              return LR('이 도면으로 평면도와 모델링을 생성해줘', [{ dataUrl: cv2.toDataURL('image/png') }]);
+            })
+            .then(r => {
+              ok(/도면 →/.test(r), '★도면 이미지는 도면 경로로 (손그림 획을 벽으로 오인하지 않음)');
+              ok(/모델링까지 만들었습니다/.test(r), '★도면 + "모델링" → 건물화까지 자동 완주');
+              const pe = C.state.entities.slice(b3);
+              ok(pe.filter(e7 => e7.bim && e7.bim.kind === 'wall').length >= 4, '  벽이 실제로 생성됨 (' + pe.filter(e7 => e7.bim && e7.bim.kind === 'wall').length + ')');
+              ok(C.bimSolids().filter(s7 => pe.some(e7 => e7.id === s7.eid)).length > 0, '  3D 솔리드까지');
+              C.state.entities.length = b3;
+              if (SKl.SK) { SKl.SK.strokes = []; SKl.SK.rev++; }
             });
           });
         }).then(finishAsync)
