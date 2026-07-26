@@ -3262,10 +3262,18 @@ function tests(){
               ok(ae.filter(e8 => e8.bim && e8.bim.kind === 'slab' && e8.bim.t === 400).length === 1, '  기단(건물군 외곽 한 장)');
               // ── 웹 조사로 얻은 건축 규범값을 코드에 고정 ──
               // 주거 박공 물매 4:12~9:12 (18.4~36.9°) — KCS 41 56 05 아스팔트 싱글 적용범위
-              const pit = roofs8.map(rf => { const P9 = rf.points;
-                return rf.bim.rise / (Math.hypot(P9[1][0] - P9[0][0], P9[1][1] - P9[0][1]) / 2); });
-              ok(pit.every(p9 => p9 >= 0.333 && p9 <= 0.75),
-                '★물매 4:12~9:12 준수 (' + pit.map(p9 => (Math.atan(p9) * 180 / Math.PI).toFixed(0) + '도').join('/') + ')');
+              // 비대칭 박공은 두 면의 물매가 다르다 — 급한 쪽·완만한 쪽 모두 규범 안이어야 한다
+              const gab = roofs8;
+              const pit = gab.map(rf => { const P9 = rf.points;
+                const ch = Math.hypot(P9[1][0] - P9[0][0], P9[1][1] - P9[0][1]);
+                return [rf.bim.rise / (ch * 0.42), rf.bim.rise / (ch * 0.58)]; });
+              ok(pit.every(p9 => p9.every(v9 => v9 >= 0.333 && v9 <= 0.75)),
+                '★물매 4:12~9:12 — 급·완 두 면 모두 ('
+                + pit.map(p9 => p9.map(v9 => (Math.atan(v9) * 180 / Math.PI).toFixed(0)).join('/')).join(' ') + '도)');
+              // ★데드밸리 방지 — 용마루가 방사면 경계선에서 양쪽 지붕이 같은 높이로 만나 물이 갇힌다
+              const gut9 = ae.filter(e9 => e9.layer === '홈통');
+              eqi(gut9.length, 4, '★내부 홈통 — 경계마다 배수 물매를 준다 (데드밸리 금지)');
+              ok(gut9.every(g9 => g9.bim.rise > 0), '  마당 쪽으로 흐르는 물매');
               // 방화벽은 지붕면(이 선에서는 처마 높이) 위로 500 돌출 — 피난·방화구조 규칙 제21조.
               // 나란한 박공동 사이에 연속 골(valley)을 만들지 않는 실무 해법이기도 하다.
               const fw = ae.filter(e8 => e8.type === 'LINE' && e8.layer === '벽' && e8.bim.h > 3000);

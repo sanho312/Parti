@@ -282,6 +282,7 @@ function buildComplex(spec) {
   br.ensureLayer('벽', '#cfc7ba'); br.ensureLayer('개구부', '#ff9f0a');
   br.ensureLayer('지붕', '#b8695a'); br.ensureLayer('조경', '#6aa84f'); br.ensureLayer('문자', '#8fa3c8');
   br.ensureLayer('유리', '#7ea6d1'); br.ensureLayer('조경길', '#e0dacc'); br.ensureLayer('바닥', '#bdb6a8');
+  br.ensureLayer('홈통', '#8d9099');
   const counts = { wall: 0, window: 0, door: 0, roof: 0, court: 0, slab: 0 };
   // ── 치수 근거(웹 조사) ──
   // · 주거 박공 물매 4:12~9:12 (18.4~36.9°) — KCS 41 56 05 아스팔트 싱글 적용범위 1/3~3/4
@@ -306,8 +307,9 @@ function buildComplex(spec) {
     // 물매를 스케치의 봉우리 높이 비율로 정하되 4:12~9:12 안에 가둔다
     pitches.push(0.40 + 0.30 * hf);
   }
-  // 용마루 높이 = (스팬/2) × 물매. 스팬은 용마루와 직교하는 방향의 폭.
-  const riseOf = (i, span) => Math.round(Math.max(600, span / 2 * pitches[i]));
+  // 용마루 높이 — 비대칭 박공은 두 면의 물매가 다르다. 급한 쪽(짧은 run = min(rF,1-rF))을
+  // 기준으로 잡아야 두 면 모두 4:12~9:12 안에 들어온다. (긴 쪽만 보면 급한 쪽이 규범을 넘는다)
+  const riseOf = (i, span) => Math.round(Math.max(600, span * Math.min(RIDGE_F, 1 - RIDGE_F) * pitches[i]));
   const gap = o.attached ? 0 : Math.round(o.w * 0.45);
   const L = Ws.reduce((a, v) => a + v, 0) + gap * (n - 1);   // 늘어선 전체 길이
 
@@ -385,8 +387,12 @@ function buildComplex(spec) {
         const oL = aL + sgn * ((i === 0 || gap > 0) ? dth : 0);
         const oR = aR - sgn * ((i === n - 1 || gap > 0) ? dth : 0);
         const RP = [PT(oL, r0 - RAKE), PT(oR, r0 - RAKE), PT(oR, r1 + RAKE), PT(oL, r1 + RAKE)];
+        // ★rdir 판정은 roofSolids 가 실제로 재는 값(RP 변 길이)으로 해야 한다.
+        //   벽 현으로 재면 처마만큼 어긋나 폭≈깊이 조합에서 용마루가 90° 돌아간다.
+        const cF = Math.hypot(RP[1][0] - RP[0][0], RP[1][1] - RP[0][1]);
+        const cR = Math.hypot(RP[2][0] - RP[1][0], RP[2][1] - RP[1][1]);
         poly(RP, '지붕', { kind: 'roof', rtype: o.roof, eave: H, rise, ridgeF: RIDGE_F,
-          rdir: chord >= o.d + RAKE * 2 ? 'short' : undefined });   // 용마루는 항상 방사(앞뒤) 방향
+          rdir: cF >= cR ? 'short' : undefined });   // 용마루는 항상 방사(앞뒤) 방향
         counts.roof++;
       }
       // 박공면 — 마당 쪽은 유리(통유리 박공), 뒤쪽은 벽. 지붕과 같은 프로필의 얇은 띠.
@@ -409,6 +415,18 @@ function buildComplex(spec) {
       }
       const cM = PT((aL + aR) / 2, rm);
       br.addEntity({ type: 'TEXT', layer: '문자', x: Math.round(cM[0]), y: Math.round(cM[1]), h: 400, text: (i + 1) + '동' });
+    }
+    // ★내부 홈통(box gutter) — 데드밸리 방지
+    // 용마루가 방사 방향이면 지붕은 각도 방향으로만 기울어, 이웃과 맞닿는 방사선에서 양쪽
+    // 지붕이 같은 높이로 내려온다 = 물이 못 빠지는 수평 골. 실무에서 절대 만들면 안 되는 형태다.
+    // 경계마다 마당 쪽으로 1:300 물매를 준 홈통을 넣어 배수 방향을 만든다(규정 1:400~1:200).
+    if (gap === 0 && n > 1) {
+      const gwA = 250 / rm;                                  // 홈통 폭 500 → 반각
+      for (let k = 1; k < n; k++) {
+        const ak = bays[k][0];                               // 이웃과 공유하는 경계각
+        poly([PT(ak - gwA, r0 - RAKE), PT(ak + gwA, r0 - RAKE), PT(ak + gwA, r1), PT(ak - gwA, r1)],
+          '홈통', { kind: 'roof', rtype: 'shed', eave: H - 300, rise: Math.round((o.d + RAKE) / 300) });
+      }
     }
     // 기단 — 건물군 외곽을 300 내밀어 한 장으로 (건물이 땅에 앉은 느낌)
     if (o.attached) {
