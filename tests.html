@@ -3059,6 +3059,18 @@ function tests(){
         const sb2 = [...AD.querySelectorAll('#skBar button')].find(b2 => /스케치 설정/.test(b2.title));
         sb2.click();
         ok(!!AD.querySelector('#skpLive'), '★설정 팝업에 라이브 미리보기 토글');
+        // S2: 프리셋 3종 원탭 — 값 일괄 적용 + 하이라이트
+        const pres = AD.querySelectorAll('#skpPre [data-pre]');
+        eqi(pres.length, 3, '★프리셋 버튼 3종 (러프·기본·정밀)');
+        AD.querySelector('#skpPre [data-pre="rough"]').click();
+        let sp2 = JSON.parse(AW.localStorage.getItem('webcad_sketch_params'));
+        ok(sp2.fitK === 1.8 && sp2.ortho === 12 && sp2.snap === 18, '★러프 프리셋 = 강보정 일괄 적용');
+        AD.querySelector('#skpPre [data-pre="fine"]').click();
+        sp2 = JSON.parse(AW.localStorage.getItem('webcad_sketch_params'));
+        ok(sp2.fitK === 0.5 && sp2.ortho === 3 && sp2.corner === 0.45, '★정밀 프리셋 = 원본 존중 일괄 적용');
+        const fineBtn = AD.querySelector('#skpPre [data-pre="fine"]');
+        ok(fineBtn.style.background.includes('accent') || fineBtn.style.background.includes('10,132,255') || AW.getComputedStyle(fineBtn).backgroundColor !== 'rgba(0, 0, 0, 0)', '  적용된 프리셋 하이라이트');
+        AD.querySelector('#skpPre [data-pre="basic"]').click();   // 기본으로 원복
         AD.querySelector('#skpDlg #skpClose').click();
         S4.SK.strokes = []; S4.SK.fitOv = {}; S4.closePreview(); S4.SK.rev++;
       }

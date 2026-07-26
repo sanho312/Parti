@@ -303,6 +303,17 @@ const pressureOf = (e) => (e.pressure > 0 && e.pressure <= 1) ? e.pressure : 0.5
 // fitK: 보정 강도(직선화 관대함) · smooth: 손떨림 제거 횟수 · ortho: 수평수직 정리 각도(°)
 // snap: 끝점 흡착 거리(px) · corner: 모서리 판정 각(rad, 작을수록 민감=꺾은선 판정↑)
 const SKP_DEF = { fitK: 1, smooth: 2, ortho: 7, snap: 10, corner: 0.6, live: 1 };
+// S2 프리셋 — 슬라이더도 부담인 초보용 원탭 (live 는 별도 토글이라 미포함)
+const SKP_PRESETS = {
+  rough: { ko: '러프 스케치', tip: '대충 그려도 반듯하게 — 강한 보정·넓은 흡착', v: { fitK: 1.8, smooth: 3, ortho: 12, snap: 18, corner: 0.7 } },
+  basic: { ko: '기본', tip: '균형 잡힌 기본값', v: { fitK: 1, smooth: 2, ortho: 7, snap: 10, corner: 0.6 } },
+  fine:  { ko: '정밀 트레이싱', tip: '원본 선을 최대한 존중 — 약한 보정·좁은 흡착', v: { fitK: 0.5, smooth: 1, ortho: 3, snap: 6, corner: 0.45 } },
+};
+const skpPresetNow = () => { // 현재 값이 정확히 일치하는 프리셋 키 (없으면 null = 사용자 지정)
+  for (const [k, p] of Object.entries(SKP_PRESETS))
+    if (Object.entries(p.v).every(([kk, vv]) => Math.abs(SKP[kk] - vv) < 1e-9)) return k;
+  return null;
+};
 let SKP = { ...SKP_DEF };
 try { Object.assign(SKP, JSON.parse(localStorage.getItem('webcad_sketch_params') || '{}')); } catch (e) {}
 const skpSave = () => { try { localStorage.setItem('webcad_sketch_params', JSON.stringify(SKP)); } catch (e) {} };
@@ -1048,6 +1059,12 @@ function openSkp() {
         <button id="skpClose" style="background:transparent;border:none;color:var(--muted,#8b93a5);cursor:pointer;width:26px;height:26px;border-radius:7px;display:inline-flex;align-items:center;justify-content:center;"><svg class="ic" style="width:14px;height:14px;" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
       </div>
       <div style="display:flex;flex-direction:column;gap:11px;padding:2px 15px 15px;">
+        <div id="skpPre" style="display:flex;gap:4px;padding:3px;border-radius:9px;background:var(--panel2,#1d222e);">
+          ${Object.entries(SKP_PRESETS).map(([k, p]) => `<button data-pre="${k}" title="${p.tip}"
+            style="flex:1;border:none;cursor:pointer;padding:6px 4px;border-radius:7px;font-size:11.5px;font-weight:600;
+            background:${skpPresetNow() === k ? 'var(--accent,#0A84FF)' : 'transparent'};
+            color:${skpPresetNow() === k ? '#fff' : 'var(--muted,#8b93a5)'};">${p.ko}</button>`).join('')}
+        </div>
         ${row('skpFit', '보정 강도', 0.3, 2.5, 0.1, SKP.fitK, '원본 그대로', '강하게 정리')}
         ${row('skpSm', '손떨림 제거', 0, 4, 1, SKP.smooth, '끔', '많이')}
         ${row('skpOr', '수평·수직 정리', 0, 15, 1, SKP.ortho, '끔', '15°까지 반듯하게')}
@@ -1063,11 +1080,20 @@ function openSkp() {
   if (window.webcadPopupDrag) window.webcadPopupDrag(skpEl, skpEl.querySelector('#skpHead'));
   skpEl.querySelector('#skpClose').addEventListener('click', () => { skpEl.style.display = 'none'; });
   skpEl.querySelector('#skpReset').addEventListener('click', () => { SKP = { ...SKP_DEF }; skpSave(); openSkp(); });
+  const refreshPre = () => {   // 슬라이더 수동 조정 시 프리셋 하이라이트 동기
+    const now = skpPresetNow();
+    skpEl.querySelectorAll('[data-pre]').forEach(b2 => {
+      const on = b2.dataset.pre === now;
+      b2.style.background = on ? 'var(--accent,#0A84FF)' : 'transparent';
+      b2.style.color = on ? '#fff' : 'var(--muted,#8b93a5)';
+    });
+  };
   const wireS = (id, key, fmt) => {
     const el = skpEl.querySelector('#' + id);
     el.addEventListener('input', () => {
       SKP[key] = parseFloat(el.value); skpSave();
       skpEl.querySelector('#' + id + 'V').textContent = fmt ? fmt(SKP[key]) : SKP[key];
+      refreshPre();
     });
   };
   wireS('skpFit', 'fitK'); wireS('skpSm', 'smooth'); wireS('skpOr', 'ortho'); wireS('skpSn', 'snap'); wireS('skpCo', 'corner');
@@ -1075,6 +1101,11 @@ function openSkp() {
     SKP.live = e.target.checked ? 1 : 0; skpSave();
     if (SKP.live && SK.strokes.length) schedulePreview(); else if (!SKP.live) { closePreview(); redraw(); }
   });
+  // S2 프리셋 — 원탭으로 5개 패스값 일괄 적용 (팝업 재렌더로 슬라이더·하이라이트 동기)
+  skpEl.querySelectorAll('[data-pre]').forEach(b2 => b2.addEventListener('click', () => {
+    Object.assign(SKP, SKP_PRESETS[b2.dataset.pre].v); skpSave(); openSkp();
+    if (SKP.live !== 0 && SK.strokes.length) schedulePreview();   // 라이브 미리보기도 새 값으로
+  }));
 }
 const skpBtn = mkBtn('<svg class="ic" viewBox="0 0 24 24"><path d="M4 6h10M18 6h2M4 12h2M10 12h10M4 18h10M18 18h2"/><circle cx="16" cy="6" r="2"/><circle cx="8" cy="12" r="2"/><circle cx="16" cy="18" r="2"/></svg>',
   '스케치 설정 — 보정 강도·손떨림 제거·수평수직 정리·끝점 흡착·모서리 민감도 (패스값 조정)', openSkp);
