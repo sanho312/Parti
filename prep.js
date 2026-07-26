@@ -114,11 +114,12 @@ function fitStroke(stroke, opts) {
   const base = { strokeId: stroke.id, color: stroke.color, widthMM, layer: stroke.layer || '' };
   const bb = bboxOf(raw);
   if (raw.length < 2 || bb.diag < opts.dotMax) return { ...base, kind: 'dot', at: [(bb.x0 + bb.x1) / 2, (bb.y0 + bb.y1) / 2], bbox: bb };
-  const eps = Math.min(80, Math.max(1, bb.diag * 0.02));
+  // fitK = 보정 강도(스케치 설정). 상한(80)도 fitK>1 이면 비례해 올린다 — 아니면 강한 보정이 상한에 잘림
+  const eps = Math.min(80 * Math.max(1, opts.fitK || 1), Math.max(1, bb.diag * 0.02 * (opts.fitK || 1)));
   const sp = rdp(raw, eps);
   const closed = dist(raw[0], raw[raw.length - 1]) < Math.max(bb.diag * 0.12, opts.closeTol);
   // 코너 검출 (닫힌 스트로크는 시작점 둘레도 평가)
-  const angTol = 0.6;                                 // ≈34° 이상 꺾이면 코너
+  const angTol = opts.cornerTol != null ? opts.cornerTol : 0.6;   // ≈34° 이상 꺾이면 코너 (스케치 설정으로 조정)
   const cornerIdx = [];
   const n = sp.length;
   if (closed) {

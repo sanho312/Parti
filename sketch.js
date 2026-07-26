@@ -280,7 +280,15 @@ const localXY = (e) => [e.clientX - ovClient.x, e.clientY - ovClient.y];
 const pressureOf = (e) => (e.pressure > 0 && e.pressure <= 1) ? e.pressure : 0.5;
 
 // ---------- 스냅 — 스트로크 시작/끝을 CAD 개체·다른 스트로크에 흡착 (틈 없는 벽체)
-const SNAP_PX = 10;
+// ─── 스케치 패스값(보정·인식 허용치) — 초보자도 자기 손에 맞게 조정 (2026-07-26) ───
+// fitK: 보정 강도(직선화 관대함) · smooth: 손떨림 제거 횟수 · ortho: 수평수직 정리 각도(°)
+// snap: 끝점 흡착 거리(px) · corner: 모서리 판정 각(rad, 작을수록 민감=꺾은선 판정↑)
+const SKP_DEF = { fitK: 1, smooth: 2, ortho: 7, snap: 10, corner: 0.6 };
+let SKP = { ...SKP_DEF };
+try { Object.assign(SKP, JSON.parse(localStorage.getItem('webcad_sketch_params') || '{}')); } catch (e) {}
+const skpSave = () => { try { localStorage.setItem('webcad_sketch_params', JSON.stringify(SKP)); } catch (e) {} };
+const skpOpts = () => ({ fitK: SKP.fitK, orthoTolDeg: SKP.ortho, cornerTol: SKP.corner }); // 인식(analyze)에 넘길 묶음
+const SNAP_PX = () => SKP.snap;
 let snapPts = null;  // 끝점·꼭짓점·중심 [ [wx, wy], ... ]
 let snapSegs = null; // 선 '몸통' [ [ax, ay, bx, by], ... ] — T자 접합도 틈 없이
 function collectSnapPts() {
@@ -309,7 +317,8 @@ function collectSnapPts() {
 }
 function snapWorld(wx, wy) {
   if (!SK.snap || !snapPts) return null;
-  const rW = SNAP_PX / V().scale;
+  const rW = SNAP_PX() / V().scale;
+  if (rW <= 0) return null;                            // 흡착 0 = 스냅 끔
   let best = null, bd = rW;
   for (const p of snapPts) {                            // ① 끝점·꼭짓점 우선
     const d = Math.hypot(p[0] - wx, p[1] - wy);
@@ -345,7 +354,7 @@ function beautifyStroke(s) {
   const P = window.WEBCAD_PREP;
   if (!P || s.pts.length < 3) return;
   let shape = null;
-  try { shape = P.analyze([s]).shapes[0]; } catch (e) { return; }
+  try { shape = P.analyze([s], skpOpts()).shapes[0]; } catch (e) { return; }
   if (!shape || shape.kind === 'dot') return;
   const pres = pressureSampler(s.pts);
   const stepW = 6 / V().scale;                         // 화면 6px 간격 리샘플
@@ -394,7 +403,7 @@ function beautifyStroke(s) {
         rs.push([raw[j - 1][0] + (raw[j][0] - raw[j - 1][0]) * f2, raw[j - 1][1] + (raw[j][1] - raw[j - 1][1]) * f2, prevPres(i / n)]);
       }
     }
-    for (let pass = 0; pass < 2; pass++)
+    for (let pass = 0; pass < SKP.smooth; pass++)      // 손떨림 제거 횟수 (0 = 원본 그대로)
       for (let i = 1; i < rs.length - 1; i++) {
         rs[i][0] = (rs[i - 1][0] + rs[i][0] * 2 + rs[i + 1][0]) / 4;
         rs[i][1] = (rs[i - 1][1] + rs[i][1] * 2 + rs[i + 1][1]) / 4;
@@ -640,7 +649,7 @@ function closePreview() { if (preview) { preview = null; SK.rev++; } if (infoEl)
 function recognize() {
   if (!window.WEBCAD_PREP) { B.logLine && B.logLine('  전처리 엔진(prep.js)이 로드되지 않았습니다.', 'warn'); return null; }
   if (!SK.strokes.length) { B.logLine && B.logLine('  인식할 스케치가 없습니다 — 먼저 펜으로 그려주세요.', 'warn'); return null; }
-  preview = window.WEBCAD_PREP.analyze(SK.strokes);
+  preview = window.WEBCAD_PREP.analyze(SK.strokes, skpOpts());
   SK.rev++;
   const KN = { line: '선', polyline: '꺾은선', rect: '사각형', polygon: '다각형', circle: '원', arc: '호', curve: '곡선', dot: '점' };
   const parts = Object.entries(preview.counts).map(([k, n]) => (KN[k] || k) + ' ' + n);
@@ -713,7 +722,7 @@ async function buildBuilding() {
     const k = BF.calcScale(anal);
     if (k !== 1) {
       scaleStrokes(k);                             // (changed 아님 — 미리보기는 직접 재계산)
-      anal = window.WEBCAD_PREP.analyze(SK.strokes);
+      anal = window.WEBCAD_PREP.analyze(SK.strokes, skpOpts());
       B.logLine && B.logLine(`  📐 스케일 보정 ×${k} — 스케치를 건축 스케일로 확대했습니다.`, 'info');
     }
     // ② 역할 판정 — 규칙 우선, API 키가 있으면 AI 가 요약만 보고 보정 (이미지 전송 없음)
@@ -921,7 +930,55 @@ const clearBtn = mkBtn('<svg class="ic" viewBox="0 0 24 24"><path d="M4 7h16"/><
   pushOp({ t: 'del', ss: SK.strokes.slice() });
   SK.strokes = []; changed();
 });
+// ── 스케치 설정(패스값) 팝업 — 보정·인식 허용치를 슬라이더로 (초보자용) ──
+let skpEl = null;
+function openSkp() {
+  if (!skpEl) {
+    skpEl = document.createElement('div');
+    skpEl.id = 'skpDlg';
+    skpEl.style.cssText = 'position:fixed;left:50%;top:70px;transform:translateX(-50%);z-index:80;display:none;';
+    document.body.appendChild(skpEl);
+  }
+  const row = (id, label, min, max, step, val, tipL, tipR) => `
+    <label style="display:flex;flex-direction:column;gap:3px;font-size:11.5px;color:var(--muted,#8b93a5);">
+      <span style="display:flex;justify-content:space-between;"><b style="color:var(--text,#e7ecf5);font-weight:600;">${label}</b><span id="${id}V" style="font-variant-numeric:tabular-nums;">${val}</span></span>
+      <input id="${id}" type="range" min="${min}" max="${max}" step="${step}" value="${val}" style="width:100%;accent-color:var(--accent,#0A84FF);">
+      <span style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted2,#6b7488);"><span>${tipL}</span><span>${tipR}</span></span>
+    </label>`;
+  skpEl.innerHTML = `
+    <div class="dlgBox" style="width:280px;max-width:92vw;background:var(--panel,#171b25);border:1px solid var(--line,rgba(255,255,255,.08));border-radius:14px;box-shadow:var(--shadow-pop,0 18px 48px rgba(0,0,0,.5));padding:0;overflow:hidden;color:var(--text,#e7ecf5);">
+      <div id="skpHead" style="display:flex;align-items:center;gap:9px;padding:13px 15px 9px;cursor:move;">
+        <svg class="ic" style="width:16px;height:16px;color:var(--accent-text,#5eb1ff);" viewBox="0 0 24 24"><path d="M5 4v5m0 4.5V20M12 4v9m0 4.5V20M19 4v3m0 4.5V20"/><path d="M2.8 11.5h4.4M9.8 15h4.4M16.8 9.5h4.4"/></svg>
+        <span style="font-size:14px;font-weight:650;flex:1;">스케치 설정</span>
+        <button id="skpReset" style="background:transparent;border:none;color:var(--muted,#8b93a5);font-size:11.5px;cursor:pointer;padding:4px 8px;border-radius:7px;">기본값</button>
+        <button id="skpClose" style="background:transparent;border:none;color:var(--muted,#8b93a5);cursor:pointer;width:26px;height:26px;border-radius:7px;display:inline-flex;align-items:center;justify-content:center;"><svg class="ic" style="width:14px;height:14px;" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:11px;padding:2px 15px 15px;">
+        ${row('skpFit', '보정 강도', 0.3, 2.5, 0.1, SKP.fitK, '원본 그대로', '강하게 정리')}
+        ${row('skpSm', '손떨림 제거', 0, 4, 1, SKP.smooth, '끔', '많이')}
+        ${row('skpOr', '수평·수직 정리', 0, 15, 1, SKP.ortho, '끔', '15°까지 반듯하게')}
+        ${row('skpSn', '끝점 흡착', 0, 30, 1, SKP.snap, '끔', '30px')}
+        ${row('skpCo', '모서리 민감도', 0.35, 1.0, 0.05, SKP.corner, '민감(꺾은선↑)', '둔감(곡선↑)')}
+        <div style="font-size:10.5px;line-height:1.55;color:var(--muted2,#6b7488);">변경은 즉시 저장 — 다음 스트로크와 인식(✨)부터 적용됩니다.</div>
+      </div>
+    </div>`;
+  skpEl.style.display = 'block';
+  if (window.webcadPopupDrag) window.webcadPopupDrag(skpEl, skpEl.querySelector('#skpHead'));
+  skpEl.querySelector('#skpClose').addEventListener('click', () => { skpEl.style.display = 'none'; });
+  skpEl.querySelector('#skpReset').addEventListener('click', () => { SKP = { ...SKP_DEF }; skpSave(); openSkp(); });
+  const wireS = (id, key, fmt) => {
+    const el = skpEl.querySelector('#' + id);
+    el.addEventListener('input', () => {
+      SKP[key] = parseFloat(el.value); skpSave();
+      skpEl.querySelector('#' + id + 'V').textContent = fmt ? fmt(SKP[key]) : SKP[key];
+    });
+  };
+  wireS('skpFit', 'fitK'); wireS('skpSm', 'smooth'); wireS('skpOr', 'ortho'); wireS('skpSn', 'snap'); wireS('skpCo', 'corner');
+}
+const skpBtn = mkBtn('<svg class="ic" viewBox="0 0 24 24"><path d="M4 6h10M18 6h2M4 12h2M10 12h10M4 18h10M18 18h2"/><circle cx="16" cy="6" r="2"/><circle cx="8" cy="12" r="2"/><circle cx="16" cy="18" r="2"/></svg>',
+  '스케치 설정 — 보정 강도·손떨림 제거·수평수직 정리·끝점 흡착·모서리 민감도 (패스값 조정)', openSkp);
 bar.appendChild(rowOf(undoBtn, redoBtn, eyeBtn, clearBtn));
+bar.appendChild(rowOf(skpBtn));
 const doneBtn = mkBtn('완료', '스케치 모드 종료 (Esc) — 스케치는 화면에 남습니다', exit);
 doneBtn.style.cssText += 'font-size:13px;font-weight:700;background:var(--glass-fill-hi,rgba(120,140,200,.15));';
 bar.appendChild(doneBtn);

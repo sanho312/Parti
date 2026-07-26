@@ -3006,6 +3006,27 @@ function tests(){
         C.state.entities = C.state.entities.filter(x => x.id < 999910 || x.id > 999941);
         C.state.layers = C.state.layers.filter(x => x.name !== '창호층');
       }
+      { // 스케치 패스값 — analyze 허용치(ortho·corner·fitK)가 실제 판정을 바꾼다
+        const mk3 = (pts2) => [{ id: 31, color: '#fff', hw: 3, pts: pts2.map(p2 => [p2[0], p2[1], 0.5]) }];
+        // ① 수평·수직 정리 각: 8° 기울어진 선 — 7°에선 그대로, 12°에선 반듯하게
+        const tilt = mk3([[0, 0], [3000, 3000 * Math.tan(8 * Math.PI / 180)]]);
+        const s7 = P.analyze(tilt, { orthoTolDeg: 7 }).shapes[0];
+        const s12 = P.analyze(tilt, { orthoTolDeg: 12 }).shapes[0];
+        ok(s7.kind === 'line' && !s7.ortho, '★패스값 ortho 7° — 8° 선은 그대로');
+        ok(s12.kind === 'line' && s12.ortho && Math.abs(s12.a[1] - s12.b[1]) < 1, '★ortho 12° — 8° 선이 수평으로 정리');
+        // ② 모서리 민감도: 반대 방향 완만한 꺾임 2개(~26°, S형 — 호 피팅 회피) — 0.6에선 곡선, 0.4에선 꺾은선
+        const bend = mk3([[0, 0], [2000, 0], [3000, 500], [5000, 500]]);
+        const c6 = P.analyze(bend, { cornerTol: 0.6 }).shapes[0];
+        const c4 = P.analyze(bend, { cornerTol: 0.4 }).shapes[0];
+        ok(c6.kind !== 'polyline' && c4.kind === 'polyline', '★모서리 민감도 — 낮추면 완만한 꺾임도 꺾은선으로 (' + c6.kind + '→' + c4.kind + ')');
+        // ③ 보정 강도: 잔요철 선(진폭 150 — diag*0.035 하한 위) — 강하게(2.5)면 직선, 약하게(0.3)면 원본 계열
+        const wob = []; for (let i = 0; i <= 30; i++) wob.push([i * 100, Math.sin(i * 1.3) * 130]); // 진폭 130 = 강보정 문턱(271) 아래·약보정 문턱(105) 위
+        const f25 = P.analyze(mk3(wob), { fitK: 2.5 }).shapes[0];
+        const f03 = P.analyze(mk3(wob), { fitK: 0.3 }).shapes[0];
+        ok(f25.kind === 'line' && f03.kind !== 'line', '★보정 강도 — 강하면 직선 정리, 약하면 원본 유지 (' + f25.kind + '/' + f03.kind + ')');
+        // ④ 스케치 툴바에 설정 버튼
+        ok([...AD.querySelectorAll('#skBar button')].some(b2 => /스케치 설정/.test(b2.title)), '★스케치 설정(패스값) 버튼 존재');
+      }
       { // 커스텀 창호 기호(owlib) — 저장(정규화)·평면 렌더·3D 프리즘·문서 왕복
         // ① 저장: 기준선 2000mm + 원 + 대각선 → 1000 정규화
         const base2 = { type: 'LINE', x1: 0, y1: 0, x2: 2000, y2: 0 };
