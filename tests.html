@@ -3072,6 +3072,14 @@ function tests(){
         ok(fineBtn.style.background.includes('accent') || fineBtn.style.background.includes('10,132,255') || AW.getComputedStyle(fineBtn).backgroundColor !== 'rgba(0, 0, 0, 0)', '  적용된 프리셋 하이라이트');
         AD.querySelector('#skpPre [data-pre="basic"]').click();   // 기본으로 원복
         AD.querySelector('#skpDlg #skpClose').click();
+        // A2: 코워커 도구로 패스값 조정 (execTool 경유)
+        if (AW.__WEBCAD_AI_TEST__ && AW.__WEBCAD_AI_TEST__.execTool) {
+          const r1 = AW.__WEBCAD_AI_TEST__.execTool('set_sketch_params', { preset: 'fine' });
+          ok(r1 && r1.fitK === 0.5 && r1.ortho === 3, '★A2 봇 도구 — 프리셋 적용(fine)');
+          const r2 = AW.__WEBCAD_AI_TEST__.execTool('set_sketch_params', { ortho: 99, corner: 0.1 });
+          ok(r2.ortho === 15 && r2.corner === 0.35, '★A2 봇 도구 — 범위 클램프(ortho 15·corner 0.35)');
+          AW.__WEBCAD_AI_TEST__.execTool('set_sketch_params', { preset: 'basic' });
+        } else ok(true, '(AI 도구 훅 없음)');
         S4.SK.strokes = []; S4.SK.fitOv = {}; S4.closePreview(); S4.SK.rev++;
       }
       { // 커스텀 창호 기호(owlib) — 저장(정규화)·평면 렌더·3D 프리즘·문서 왕복

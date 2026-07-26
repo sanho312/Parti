@@ -167,6 +167,17 @@
       input_schema: { type: 'object', properties: { ids: { type: 'array', items: num }, from: { type: 'array', items: num }, to: { type: 'array', items: num } } },
     },
     {
+      name: 'set_sketch_params',
+      description: '스케치 보정·인식 패스값 조정. 사용자가 "선이 자꾸 곡선으로 인식돼", "보정이 너무 세다/약하다", "끝점이 자꾸 붙는다(안 붙는다)", "기울어진 선이 자꾸 수평이 된다" 같은 스케치 인식 불만을 말하면 이 도구로 대신 조정하라. preset(rough=대충 그려도 반듯 | basic=기본 | fine=원본 존중) 또는 개별값 일부만 넘겨도 된다: fitK(0.3~2.5 보정 강도), smooth(0~4 손떨림 제거), ortho(0~15 수평수직 정리각°), snap(0~30 끝점 흡착px), corner(0.35~1.0 모서리 판정각rad — 낮을수록 완만한 꺾임도 꺾은선). 반환: 적용된 전체 값. 조정 후 무엇을 어떻게 바꿨는지 한 줄로 알려줄 것.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          preset: { type: 'string', enum: ['rough', 'basic', 'fine'] },
+          fitK: num, smooth: num, ortho: num, snap: num, corner: num,
+        },
+      },
+    },
+    {
       name: 'set_underlay', description: '사용자가 채팅에 첨부한 최신 이미지를 도면 밑그림(IMAGE 개체, 밑그림 레이어)으로 삽입. width_mm=이미지의 실제 폭(스케일) — 세로는 비율 자동. 원점(0,0)이 이미지 좌하단. 이미 밑그림이 있으면 교체. 반환: {id,w_mm,h_mm}.',
       input_schema: {
         type: 'object', required: ['width_mm'],
@@ -583,6 +594,11 @@
         case 'get_screenshot': return toolScreenshot();
         case 'measure': return toolMeasure(input);
         case 'set_underlay': return toolSetUnderlay(input || {});
+        case 'set_sketch_params': {
+          const S3 = window.WEBCAD_SKETCH;
+          if (!S3 || !S3.setParams) return { error: '스케치 모듈이 없습니다.' };
+          return S3.setParams(input || {});
+        }
         case 'make_views': return toolMakeViews(input || {});
         case 'organize_layers': return toolOrganizeLayers();
         case 'edit_node_graph': return toolNodeGraph(input);

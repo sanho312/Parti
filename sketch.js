@@ -824,11 +824,25 @@ async function buildBuilding() {
     infoTxt.textContent = '🏠 해석 중…';
     // ① 스케일 보정 — 화면 감각으로 작게 그린 스케치를 건축 스케일로 (스트로크도 함께 → 정합 유지)
     let anal = preview;
-    const k = BF.calcScale(anal);
-    if (k !== 1) {
+    let k = BF.calcScale(anal);
+    // B1 축척 어시스트: 닫힌 방이 있으면 '가장 큰 방의 실제 면적'을 한 번 물어 전체 축척 확정.
+    // 엔터 = 자동 추정값 그대로(기존 동작), 숫자 입력 = 그 면적 기준으로 정확히. "5평"처럼 평도 허용.
+    const areasB = (anal.regions || []).map(r => r.areaMM2);
+    if (areasB.length) {
+      const maxA = Math.max(...areasB);
+      const autoM2 = Math.round(maxA * k * k / 1e6 * 10) / 10;
+      const ans = prompt(`가장 큰 방의 실제 면적을 알려주세요 — 스케치 전체 축척이 여기에 맞춰집니다.\n(㎡ 기본 · "5평"처럼 평 단위도 가능 · 엔터 = 자동 ${autoM2}㎡)`, String(autoM2));
+      if (ans === null) { recognize(); return null; }        // 취소 = 건물화 중단 (미리보기 복원)
+      const mB = String(ans).trim().match(/^([\d.]+)\s*(평|py)?/i);
+      if (mB && parseFloat(mB[1]) > 0) {
+        const wantM2 = parseFloat(mB[1]) * (mB[2] ? 3.3058 : 1);
+        k = Math.round(Math.sqrt(wantM2 * 1e6 / maxA) * 1000) / 1000;   // 입력 면적은 '정확히' 맞춘다
+      }
+    }
+    if (Math.abs(k - 1) > 1e-9) {
       scaleStrokes(k);                             // (changed 아님 — 미리보기는 직접 재계산)
       anal = applyFitOv(window.WEBCAD_PREP.analyze(SK.strokes, skpOpts()));   // 즉석 교정 반영
-      B.logLine && B.logLine(`  📐 스케일 보정 ×${k} — 스케치를 건축 스케일로 확대했습니다.`, 'info');
+      B.logLine && B.logLine(`  📐 축척 확정 ×${k} — 가장 큰 방 기준으로 스케치를 건축 스케일에 맞췄습니다.`, 'info');
     }
     // ② 역할 판정 — 규칙 우선, API 키가 있으면 AI 가 요약만 보고 보정 (이미지 전송 없음)
     const { roles, usedAI } = await BF.classify(anal);
@@ -1172,6 +1186,21 @@ requestAnimationFrame(tick);
 window.WEBCAD_SKETCH = { SK, enter, exit, setTool, undoSk, redoSk, redraw, syncNow, saveNow, loadNow, w2s, s2w,
   recognize, commitRecog, closePreview, getPreview: () => preview, buildBuilding, fitView, importStrokes,
   cycleFit, hitPreviewShape, applyFitOv,   // S3 즉석 교정 (테스트 훅 포함)
+  // A2: AI 코워커가 패스값을 대신 조정 ("선이 자꾸 곡선으로 인식돼" → 봇이 도구 호출)
+  getParams: () => ({ ...SKP }),
+  setParams: (patch) => {
+    if (patch && patch.preset && SKP_PRESETS[patch.preset]) Object.assign(SKP, SKP_PRESETS[patch.preset].v);
+    for (const k2 of ['fitK', 'smooth', 'ortho', 'snap', 'corner', 'live'])
+      if (patch && patch[k2] != null && isFinite(patch[k2])) SKP[k2] = +patch[k2];
+    SKP.fitK = Math.min(2.5, Math.max(0.3, SKP.fitK));
+    SKP.smooth = Math.round(Math.min(4, Math.max(0, SKP.smooth)));
+    SKP.ortho = Math.min(15, Math.max(0, SKP.ortho));
+    SKP.snap = Math.min(30, Math.max(0, SKP.snap));
+    SKP.corner = Math.min(1, Math.max(0.35, SKP.corner));
+    skpSave();
+    if (SKP.live !== 0 && SK.strokes.length) schedulePreview();   // 새 값으로 즉시 재인식
+    return { ...SKP };
+  },
   // A1: AI 코워커용 구조 요약 — 이미지가 아니라 인식 결과(철학)를 한 줄로
   summaryCtx: () => {
     if (!SK.strokes.length) return null;
