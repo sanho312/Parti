@@ -3169,8 +3169,11 @@ function tests(){
               return VZ.traceConcept(mkSketch()).then(cc2 => {
                 eqi(cc2.masses, 5, '★콘셉트 판독 — 지붕 봉우리로 동 수 (5동)');
                 eqi(cc2.roof, 'gable', '  뾰족한 봉우리 → 박공지붕');
-                eqi(cc2.arrange, 'circle', '  아래쪽 초록 영역 → 원형 마당 배치');
+                // 마당이 건물 무리보다 '앞'에 있으면 부채꼴 배치 — 마당을 빙 두르는 링이 아니다
+                eqi(cc2.arrange, 'arc', '★마당이 앞에 있으면 부채꼴 배치 (링 아님)');
                 ok(cc2.glass, '  파란 면 → 유리');
+                ok(cc2.massList.length === cc2.masses, '  동별 폭·높이 비율을 읽는다');
+                ok(cc2.attached, '  붙어 있는 덩어리로 인식');
                 // ★라우팅 근거 지표 — 전역 임계값 추측이 실물에서 두 번 뒤집힌 뒤 도입한 증거들.
                 //   도면은 무채색·축정렬·이중선, 손그림은 사선 지배 → 이 표가 오판을 막는다.
                 return VZ.traceImage(cv2.toDataURL('image/png'), { widthMM: 8000 }).then(rp => {
@@ -3194,6 +3197,26 @@ function tests(){
               const rs = C.bimSolids().filter(s5 => s5.rf && ce.some(e5 => e5.id === s5.eid));
               eqi(rs.filter(s5 => s5.zt).length, 10, '  경사 지붕 솔리드 10면 (동당 2면)');
               C.state.entities.length = b5;
+              // ★부채꼴 배치 — 스케치 구성을 그대로 옮겼는지: 좌우 순서·동별 폭·마당 위치
+              const b6 = C.state.entities.length;
+              const arcR = A.buildComplex({ count: 5, floors: 1, w: 8000, d: 12000, roof: 'gable',
+                arrange: 'arc', attached: true,
+                massList: [{ wFrac: 0.16, hFrac: 0.84 }, { wFrac: 0.19, hFrac: 0.94 },
+                  { wFrac: 0.18, hFrac: 1 }, { wFrac: 0.17, hFrac: 0.92 }, { wFrac: 0.30, hFrac: 0.88 }] });
+              const ae = C.state.entities.slice(b6);
+              const labels = ae.filter(e6 => e6.type === 'TEXT').sort((p, q) => (p.text > q.text ? 1 : -1));
+              ok(labels.length === 5 && labels.every((t6, i6) => i6 === 0 || t6.x > labels[i6 - 1].x),
+                '★부채꼴 — 그림 왼쪽 동이 도면에서도 왼쪽 (좌우 뒤집힘 방지)');
+              ok(arcR.widths[4] > arcR.widths[0] * 1.5, '★동별 폭 반영 — 가장 넓은 동이 실제로 넓다 ('
+                + arcR.widths.map(v => (v / 1000).toFixed(0)).join('/') + 'm)');
+              const yard = ae.find(e6 => e6.type === 'CIRCLE');
+              const frontY = Math.min.apply(null, ae.filter(e6 => e6.bim && e6.bim.kind === 'roof')
+                .flatMap(e6 => e6.points.map(p => p[1])));
+              ok(yard && (yard.cy + yard.r) - frontY > -6000 && (yard.cy + yard.r) - frontY < 6000,
+                '★마당은 줄 바로 앞 (호의 중심에 두면 수십 m 떨어진다)');
+              const ars = C.bimSolids().filter(s6 => s6.rf && ae.some(e6 => e6.id === s6.eid));
+              eqi(ars.filter(s6 => s6.zt).length, 10, '  회전된 동도 박공 경사면 2면씩');
+              C.state.entities.length = b6;
               return VZ.traceFacade(facadeUrl, { floorH: 3000 });
             })
             .then(fa => {

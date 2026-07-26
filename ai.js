@@ -1098,14 +1098,19 @@
           w: exp.w || 8000, d: exp.d || 12000,
           roof: exp.roof || c.roof, arrange: exp.arrange || c.arrange,
           glass: exp.glass != null ? exp.glass : c.glass, floorH: fh,
+          // 동별 폭·높이 비율과 인접 여부까지 전달 — 균일 배치는 스케치와 전혀 다른 그림이 된다
+          massList: (!exp.count || exp.count === c.masses) ? c.massList : null,
+          attached: c.attached,
         };
         const r = window.PARTI_ARCH.buildComplex(spec);
         if (!r) continue;
         cpxN++; lastConcept = spec;
         const roofKo = { gable: '박공지붕', flat: '평지붕', shed: '외쪽지붕' }[spec.roof] || spec.roof;
-        lines.push(`· 스케치 판독 → **${r.n}동 · ${spec.floors}층 · ${roofKo} · ${spec.arrange === 'circle' ? '원형 마당 배치' : '일렬 배치'}**`
+        const arrKo = { arc: '부채꼴로 늘어서고 마당은 그 앞', circle: '마당을 둘러싼 배치', row: '일렬 배치' }[spec.arrange] || spec.arrange;
+        lines.push(`· 스케치 판독 → **${r.n}동 · ${spec.floors}층 · ${roofKo} · ${arrKo}**`
           + (spec.glass ? ' · 마당 쪽 전면 유리' : '')
-          + `  (지붕 봉우리 ${c.masses}개${c.meta.courtyard ? ' · 중정 초록 영역 검출' : ''})`);
+          + `  (봉우리 ${c.masses}개${c.attached ? ' · 서로 붙은 덩어리' : ''}${c.meta.courtyard ? ' · 마당 초록 검출' : ''}`
+          + `, 동 폭 ${r.widths.map(v => (v / 1000).toFixed(0)).join('/')}m)`);
       }
       let builtFromPlan = null;
       if (allStrokes.length && SKm && SKm.importStrokes) {

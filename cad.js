@@ -10900,6 +10900,36 @@ function roofSolids(e) {
   const xs = e.points.map(p => p[0]), ys = e.points.map(p => p[1]);
   const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
   const col = '#b8695a';
+  // ── 회전된 사각 지붕 ── (축 정렬이면 아래 기존 경로 그대로 — 회귀 없음)
+  // 축 정렬 bbox 로만 처리하면 비스듬히 앉힌 동의 지붕이 통째로 틀어진다. 네 꼭짓점이 있는
+  // 사각형이면 긴 변 방향을 용마루로 삼아 두 경사면을 만든다(축 정렬 결과와 동일하게 환원).
+  if (e.points.length === 4 && b.rtype !== 'flat') {
+    const P = e.points.map(p => [p[0], p[1]]);
+    const axisAligned = P.every((p, i) => {
+      const q = P[(i + 1) % 4];
+      return Math.abs(p[0] - q[0]) < 1e-6 || Math.abs(p[1] - q[1]) < 1e-6;
+    });
+    if (!axisAligned) {
+      const hi = b.eave + b.rise, lo = b.eave;
+      const len = (a2, b2) => Math.hypot(b2[0] - a2[0], b2[1] - a2[1]);
+      const mid = (a2, b2) => [(a2[0] + b2[0]) / 2, (a2[1] + b2[1]) / 2];
+      if (b.rtype === 'shed') {                       // 외쪽: 긴 변을 따라 한 방향으로 기울인다
+        return [{ poly: P, z0: lo, z1: hi, zt: [lo, lo, hi, hi], color: col }];
+      }
+      if (len(P[0], P[1]) >= len(P[1], P[2])) {       // 용마루 ∥ P0→P1
+        const m1 = mid(P[1], P[2]), m0 = mid(P[3], P[0]);
+        return [
+          { poly: [P[0], P[1], m1, m0], z0: lo, z1: hi, zt: [lo, lo, hi, hi], color: col },
+          { poly: [m0, m1, P[2], P[3]], z0: lo, z1: hi, zt: [hi, hi, lo, lo], color: col },
+        ];
+      }
+      const m0 = mid(P[0], P[1]), m1 = mid(P[2], P[3]);
+      return [
+        { poly: [P[0], m0, m1, P[3]], z0: lo, z1: hi, zt: [lo, hi, hi, lo], color: col },
+        { poly: [m0, P[1], P[2], m1], z0: lo, z1: hi, zt: [hi, lo, lo, hi], color: col },
+      ];
+    }
+  }
   if (b.rtype === 'flat')
     return [{ poly: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], z0: b.eave, z1: b.eave + b.rise, color: col }];
   if (b.rtype === 'shed') {

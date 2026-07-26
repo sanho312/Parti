@@ -269,70 +269,112 @@ function buildMassing(spec) {
 // ---------- 다동(多棟) 배치 — 콘셉트 스케치 대응 ----------
 // 투시 스케치는 픽셀만으로 복원할 수 없다(깊이·왜곡). 대신 스케치의 '구성'(N동·지붕형·
 // 마당 배치)을 사용자에게 확인받아 그 구성대로 세운다. 각 동은 축 정렬(회전 없음) —
-// roofSolids 가 축 정렬 bbox 기반이라 회전 동은 지붕이 틀어진다. 초기 검토용으로 충분.
+// 배치는 스케치의 구성을 따른다: 'arc'(부채꼴로 늘어서고 마당은 그 앞) · 'circle'(마당을 두름) · 'row'(일렬).
+// 동은 마당을 향해 회전한다 — roofSolids 가 회전 사각형을 지원하므로 지붕도 함께 돈다.
 function buildComplex(spec) {
   const br = B(); if (!br) return null;
   const o = Object.assign({ count: 5, floors: 1, w: 8000, d: 12000, floorH: STD.ceil + 600,
-    arrange: 'circle', roof: 'gable', glass: true, courtyardR: 0 }, spec || {});
+    arrange: 'arc', roof: 'gable', glass: true, courtyardR: 0, massList: null, attached: true,
+    ox: 0, oy: 0 }, spec || {});
   const n = Math.max(1, Math.min(12, Math.round(o.count)));
   const H = o.floors * o.floorH;
-  const rise = Math.round(Math.min(o.w, o.d) * 0.35);
   br.pushUndo();
   br.ensureLayer('벽', '#cfc7ba'); br.ensureLayer('개구부', '#ff9f0a');
   br.ensureLayer('지붕', '#b8695a'); br.ensureLayer('조경', '#6aa84f'); br.ensureLayer('문자', '#8fa3c8');
   const counts = { wall: 0, window: 0, roof: 0, court: 0 };
-  // 마당 반지름: 동들이 겹치지 않게 자동 (둘레에 n동 + 여유)
-  const foot = Math.max(o.w, o.d);
-  const R = o.courtyardR || Math.max(6000, Math.round((n * (foot + 3000)) / (2 * Math.PI)));
-  const ring = R + foot / 2 + 2500;                       // 동 중심 반지름
-  const wall = (x1, y1, x2, y2) => {
-    const e = br.addEntity({ type: 'LINE', layer: '벽', x1: Math.round(x1), y1: Math.round(y1), x2: Math.round(x2), y2: Math.round(y2) });
+
+  // 동별 폭·지붕 높이 — 스케치에서 읽은 비율이 있으면 그대로, 없으면 균일
+  const ml = (o.massList && o.massList.length === n) ? o.massList : null;
+  const hMax = ml ? Math.max.apply(null, ml.map(m => m.hFrac || 1)) || 1 : 1;
+  const Ws = [], rises = [];
+  for (let i = 0; i < n; i++) {
+    const wf = ml ? (ml[i].wFrac || 1 / n) * n : 1;
+    Ws.push(Math.max(3000, Math.round(o.w * Math.min(2.2, Math.max(0.45, wf)))));
+    const hf = ml ? (ml[i].hFrac || 1) / hMax : 1;
+    rises.push(Math.round(Math.min(o.w, o.d) * 0.35 * (0.6 + 0.8 * hf)));
+  }
+  const gap = o.attached ? 0 : Math.round(o.w * 0.45);
+  const L = Ws.reduce((a, v) => a + v, 0) + gap * (n - 1);   // 늘어선 전체 길이
+
+  const wall = (p, q) => {
+    const e = br.addEntity({ type: 'LINE', layer: '벽',
+      x1: Math.round(p[0]), y1: Math.round(p[1]), x2: Math.round(q[0]), y2: Math.round(q[1]) });
     e.bim = { kind: 'wall', h: H, t: STD.wallExt, base: 0 }; counts.wall++;
   };
-  for (let i = 0; i < n; i++) {
-    let cx, cy;
-    if (o.arrange === 'row') { cx = i * (o.w + 4000); cy = 0; }
-    else { const a = -Math.PI / 2 + (i * 2 * Math.PI) / n; cx = Math.round(ring * Math.cos(a)); cy = Math.round(ring * Math.sin(a)); }
-    const x0 = cx - o.w / 2, x1 = cx + o.w / 2, y0 = cy - o.d / 2, y1 = cy + o.d / 2;
-    wall(x0, y0, x1, y0); wall(x1, y0, x1, y1); wall(x1, y1, x0, y1); wall(x0, y1, x0, y0);
-    // 지붕 — 용마루는 동의 긴 변 방향
+  // 동 하나: 중심 C, 접선 t(폭 방향), 법선 u(마당 반대쪽이 +u) → 회전된 사각형
+  const place = (i, C, t, u) => {
+    const W2 = Ws[i] / 2, D2 = o.d / 2;
+    const P = [
+      [C[0] - t[0] * W2 - u[0] * D2, C[1] - t[1] * W2 - u[1] * D2],   // 앞-좌 (마당 쪽)
+      [C[0] + t[0] * W2 - u[0] * D2, C[1] + t[1] * W2 - u[1] * D2],   // 앞-우
+      [C[0] + t[0] * W2 + u[0] * D2, C[1] + t[1] * W2 + u[1] * D2],   // 뒤-우
+      [C[0] - t[0] * W2 + u[0] * D2, C[1] - t[1] * W2 + u[1] * D2],   // 뒤-좌
+    ];
+    for (let k = 0; k < 4; k++) wall(P[k], P[(k + 1) % 4]);
     if (o.roof && o.roof !== 'none') {
-      const r2 = br.addEntity({ type: 'LWPOLYLINE', layer: '지붕', closed: true, points: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]] });
-      r2.bim = { kind: 'roof', rtype: o.roof, eave: H, rise, dir: (o.w >= o.d ? 'x' : 'y') };
+      const r2 = br.addEntity({ type: 'LWPOLYLINE', layer: '지붕', closed: true,
+        points: P.map(p => [Math.round(p[0]), Math.round(p[1])]) });
+      r2.bim = { kind: 'roof', rtype: o.roof, eave: H, rise: rises[i],
+        dir: (Ws[i] >= o.d ? 'x' : 'y') };
       counts.roof++;
     }
-    // 유리면 — 마당(원점)을 향한 벽에 큰 고정창 (스케치의 전면 유리 표현)
-    if (o.glass) {
-      const sides = [
-        { k: 'S', d2: Math.abs(cy - o.d / 2), horiz: true, fy: y0, fa: x0, fb: x1 },
-        { k: 'N', d2: Math.abs(cy + o.d / 2), horiz: true, fy: y1, fa: x0, fb: x1 },
-        { k: 'W', d2: Math.abs(cx - o.w / 2), horiz: false, fx: x0, fa: y0, fb: y1 },
-        { k: 'E', d2: Math.abs(cx + o.w / 2), horiz: false, fx: x1, fa: y0, fb: y1 },
-      ];
-      // 벽 중심이 원점에 가장 가까운 면 = 마당 쪽
-      let best = sides[0], bd = Infinity;
-      for (const s of sides) {
-        const mx = s.horiz ? (s.fa + s.fb) / 2 : s.fx, my = s.horiz ? s.fy : (s.fa + s.fb) / 2;
-        const dd = o.arrange === 'row' ? (s.k === 'S' ? 0 : 1e9) : mx * mx + my * my;
-        if (dd < bd) { bd = dd; best = s; }
-      }
-      const m = 600;                                       // 양끝 벽 여유
-      const e = best.horiz
-        ? br.addEntity({ type: 'LINE', layer: '개구부', x1: best.fa + m, y1: best.fy, x2: best.fb - m, y2: best.fy })
-        : br.addEntity({ type: 'LINE', layer: '개구부', x1: best.fx, y1: best.fa + m, x2: best.fx, y2: best.fb - m });
+    if (o.glass) {                                    // 마당을 향한 앞면 전체 유리
+      const m = 600, a = P[0], b = P[1];
+      const dx = b[0] - a[0], dy = b[1] - a[1], Lf = Math.hypot(dx, dy) || 1;
+      const e = br.addEntity({ type: 'LINE', layer: '개구부',
+        x1: Math.round(a[0] + dx / Lf * m), y1: Math.round(a[1] + dy / Lf * m),
+        x2: Math.round(b[0] - dx / Lf * m), y2: Math.round(b[1] - dy / Lf * m) });
       e.bim = { kind: 'opening', ot: 'window', wt: 'fix', h: H - 600, sill: 300, t: STD.wallExt };
       counts.window++;
     }
-    const tx = br.addEntity({ type: 'TEXT', layer: '문자', x: cx, y: cy, h: 400, text: (i + 1) + '동' });
-    void tx;
+    br.addEntity({ type: 'TEXT', layer: '문자', x: Math.round(C[0]), y: Math.round(C[1]), h: 400, text: (i + 1) + '동' });
+  };
+
+  let R = 0, courtC = [o.ox, o.oy];
+  if (o.arrange === 'row') {
+    let s = 0;
+    for (let i = 0; i < n; i++) {
+      const C = [o.ox + s + Ws[i] / 2, o.oy];
+      place(i, C, [1, 0], [0, 1]);                    // 앞면은 -y (아래) 방향
+      s += Ws[i] + (gap || Math.round(o.w * 0.5));
+    }
+  } else if (o.arrange === 'circle') {
+    const foot = Math.max(o.w, o.d);
+    R = o.courtyardR || Math.max(6000, Math.round((n * (foot + 3000)) / (2 * Math.PI)));
+    const ring = R + o.d / 2 + 2500;
+    for (let i = 0; i < n; i++) {
+      const a = -Math.PI / 2 + (i * 2 * Math.PI) / n;
+      const u = [Math.cos(a), Math.sin(a)];           // 바깥 방향
+      const C = [o.ox + ring * u[0], o.oy + ring * u[1]];
+      place(i, C, [-u[1], u[0]], u);
+    }
+  } else {                                            // 'arc' — 완만한 부채꼴, 마당은 그 앞
+    // 스케치의 부채는 완만하다 — 크게 휘면 '마당을 두른 링'처럼 보여 원본과 달라진다(실측 후 조정)
+    const span = Math.PI * (n <= 2 ? 0.16 : 0.32);    // 약 29~58°
+    const ring = Math.max(L / span, o.d * 1.6);
+    let s = 0;
+    for (let i = 0; i < n; i++) {
+      const sc = s + Ws[i] / 2;                       // 이 동의 호 위 위치(중앙)
+      // ★부호는 '-' — 그림 왼쪽 동이 도면에서도 왼쪽에 와야 한다(뒤집혀 나오던 것 수정).
+      // 중앙 동이 원점에 오도록 ring 만큼 내려 배치 → 양 끝이 아래로 벌어지는 완만한 부채꼴.
+      const a = Math.PI / 2 - (sc - L / 2) / ring;
+      const u = [Math.cos(a), Math.sin(a)];
+      const C = [o.ox + ring * u[0], o.oy + ring * u[1] - ring];
+      place(i, C, [-u[1], u[0]], u);
+      s += Ws[i] + gap;
+    }
+    // 마당은 '호의 중심'이 아니라 '늘어선 줄 바로 앞'에 놓는다.
+    // 호가 완만할수록 중심은 아득히 멀어서, 중심에 두면 마당이 건물에서 수십 m 떨어진다(실측).
+    R = Math.max(3000, Math.round(L / 5));
+    courtC = [o.ox, o.oy - o.d / 2 - R - 3000];
   }
-  // 원형 마당 — 잔디 슬래브 (스케치의 원형 조경)
-  if (o.arrange !== 'row') {
-    const ct = br.addEntity({ type: 'CIRCLE', layer: '조경', cx: 0, cy: 0, r: R });
+  if (R > 0) {                                        // 마당 — 잔디
+    const ct = br.addEntity({ type: 'CIRCLE', layer: '조경',
+      cx: Math.round(courtC[0]), cy: Math.round(courtC[1]), r: Math.round(R) });
     ct.bim = { kind: 'slab', t: 100, top: 0 }; counts.court = 1;
   }
   br.refresh();
-  return { n, floors: o.floors, H, rise, R, counts };
+  return { n, floors: o.floors, H, R: Math.round(R), L, widths: Ws, counts, arrange: o.arrange };
 }
 
 return { STD, roomType, PROGRAMS, programOf, planLayout, buildPlan, buildMassing, buildComplex };

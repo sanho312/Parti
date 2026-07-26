@@ -386,17 +386,47 @@ async function traceConcept(src, opts) {
   const masses = Math.max(1, Math.min(12, peaks.length));
   const promAvg = peaks.length ? peaks.reduce((a, p) => a + p.prom, 0) / peaks.length : 0;
   const greenR = green / total, blueR = blue / total;
-  // 중정: 초록이 충분하고, 가로로 넓게 퍼져 있으며(띠가 아니라 마당), 화면 아래쪽에 있다
+
+  // ── 동별 폭·높이와 인접 여부 ──
+  // 한 덩어리에 같은 크기를 쓰면 스케치와 전혀 다른 그림이 된다(실사용 보고).
+  // 봉우리 사이의 골로 동 경계를 나눠 폭 비율을, 봉우리 높이로 높이 비율을 얻는다.
+  let xa = 0, xb = w - 1;
+  const lowThr = maxH * 0.15;
+  while (xa < w - 1 && prof[xa] < lowThr) xa++;
+  while (xb > xa && prof[xb] < lowThr) xb--;
+  const valleys = [];
+  for (let i = 1; i < peaks.length; i++) {
+    let vi = peaks[i - 1].i, vv = Infinity;
+    for (let x = peaks[i - 1].i; x <= peaks[i].i; x++) if (prof[x] < vv) { vv = prof[x]; vi = x; }
+    valleys.push({ i: vi, v: vv, lo: Math.min(peaks[i - 1].v, peaks[i].v) });
+  }
+  const bounds = [xa].concat(valleys.map(v => v.i), [xb]);
+  const spanW = Math.max(1, xb - xa);
+  const massList = peaks.map((p, i) => ({
+    wFrac: Math.max(0.02, (bounds[i + 1] - bounds[i]) / spanW),
+    hFrac: maxH > 0 ? +(p.v / maxH).toFixed(3) : 1,
+  }));
+  // 붙어 있는가 — 골이 충분히 높으면 한 덩어리로 이어진 동들이다
+  const attachedN = valleys.filter(v => v.lo > 0 && v.v / v.lo >= 0.35).length;
+  const attached = valleys.length ? attachedN >= valleys.length / 2 : false;
+
+  // 마당 위치 — 건물 무리보다 아래(앞)에 있으면 '앞마당', 가운데에 안기면 '중정'
   const gW = gMaxX - gMinX, gcy = green ? gSumY / green : 0;
-  const courtyard = greenR > 0.015 && gW > w * 0.25 && gcy > h * 0.45;
+  let bTop = h, bBot = 0;
+  for (let x = xa; x <= xb; x++) if (prof[x] > lowThr) { const ty = h - prof[x]; if (ty < bTop) bTop = ty; }
+  for (let y = h - 1; y >= 0; y--) { let any = false; for (let x = xa; x <= xb; x += 3) if (bldg[y * w + x]) { any = true; break; } if (any) { bBot = y; break; } }
+  const hasCourt = greenR > 0.012 && gW > w * 0.2;
+  const courtFront = hasCourt && gcy > (bTop + bBot) / 2;
   return {
-    masses,
+    masses, massList, attached,
     roof: (maxH > 0 && promAvg / maxH > 0.1) ? 'gable' : 'flat',
-    arrange: courtyard ? 'circle' : 'row',
+    // 앞마당이면 '부채꼴로 늘어서고 마당은 그 앞' — 마당을 빙 두르는 링이 아니다.
+    arrange: courtFront ? 'arc' : hasCourt ? 'circle' : 'row',
     glass: blueR > 0.008,
     peaks: peaks.map(p => Math.round(p.i)),
-    meta: { w, h, maxH: Math.round(maxH), promAvg: +promAvg.toFixed(1),
-      greenRatio: +greenR.toFixed(3), blueRatio: +blueR.toFixed(3), courtyard },
+    meta: { w, h, maxH: Math.round(maxH), promAvg: +promAvg.toFixed(1), inkThr,
+      greenRatio: +greenR.toFixed(3), blueRatio: +blueR.toFixed(3),
+      courtyard: hasCourt, courtFront, attached, bTop, bBot, gcy: Math.round(gcy) },
   };
 }
 
