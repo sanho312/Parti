@@ -10909,21 +10909,26 @@ function roofSolids(e) {
       const q = P[(i + 1) % 4];
       return Math.abs(p[0] - q[0]) < 1e-6 || Math.abs(p[1] - q[1]) < 1e-6;
     });
-    if (!axisAligned) {
+    // ridgeF: 용마루를 앞변(P0→P1) 쪽에서 비율 f 지점에 — 비대칭 박공(0.5=대칭).
+    // rdir 'short': 용마루를 짧은 변과 평행하게 — 박공벽(gable wall) 프로필용.
+    const rF = (b.ridgeF != null && isFinite(b.ridgeF)) ? Math.min(0.92, Math.max(0.08, b.ridgeF)) : 0.5;
+    if (!axisAligned || rF !== 0.5 || b.rdir) {
       const hi = b.eave + b.rise, lo = b.eave;
       const len = (a2, b2) => Math.hypot(b2[0] - a2[0], b2[1] - a2[1]);
-      const mid = (a2, b2) => [(a2[0] + b2[0]) / 2, (a2[1] + b2[1]) / 2];
+      const at = (a2, b2, f) => [a2[0] + (b2[0] - a2[0]) * f, a2[1] + (b2[1] - a2[1]) * f];
       if (b.rtype === 'shed') {                       // 외쪽: 긴 변을 따라 한 방향으로 기울인다
         return [{ poly: P, z0: lo, z1: hi, zt: [lo, lo, hi, hi], color: col }];
       }
-      if (len(P[0], P[1]) >= len(P[1], P[2])) {       // 용마루 ∥ P0→P1
-        const m1 = mid(P[1], P[2]), m0 = mid(P[3], P[0]);
+      let alongFirst = len(P[0], P[1]) >= len(P[1], P[2]);
+      if (b.rdir === 'short') alongFirst = !alongFirst;
+      if (alongFirst) {                               // 용마루 ∥ P0→P1, 앞변에서 rF 지점
+        const m0 = at(P[0], P[3], rF), m1 = at(P[1], P[2], rF);
         return [
           { poly: [P[0], P[1], m1, m0], z0: lo, z1: hi, zt: [lo, lo, hi, hi], color: col },
           { poly: [m0, m1, P[2], P[3]], z0: lo, z1: hi, zt: [hi, hi, lo, lo], color: col },
         ];
       }
-      const m0 = mid(P[0], P[1]), m1 = mid(P[2], P[3]);
+      const m0 = at(P[0], P[1], rF), m1 = at(P[3], P[2], rF);
       return [
         { poly: [P[0], m0, m1, P[3]], z0: lo, z1: hi, zt: [lo, hi, hi, lo], color: col },
         { poly: [m0, P[1], P[2], m1], z0: lo, z1: hi, zt: [hi, lo, lo, hi], color: col },

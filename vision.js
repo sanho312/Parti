@@ -357,13 +357,14 @@ async function traceConcept(src, opts) {
   for (let v = 0; v < 256; v++) if (lh[v] > mv) { mv = lh[v]; mode = v; }
   const inkThr = Math.max(40, Math.min(200, mode - 28));
   let green = 0, blue = 0, gSumX = 0, gSumY = 0, gMinX = w, gMaxX = 0, gMinY = h;
+  const colBlue = new Float32Array(w);               // 열별 파란 픽셀 수 — 유리면 군집 검출용
   for (let i = 0, p = 0; i < d.length; i += 4, p++) {
     const r = d[i], g = d[i + 1], b = d[i + 2];
     const isGreen = g > r + 12 && g > b + 12;
     const isBlue = b > r + 12 && b > g + 4;
     if (isGreen) { green++; gSumX += p % w; gSumY += (p / w) | 0; const x = p % w, y = (p / w) | 0;
       if (x < gMinX) gMinX = x; if (x > gMaxX) gMaxX = x; if (y < gMinY) gMinY = y; }
-    if (isBlue) blue++;
+    if (isBlue) { blue++; colBlue[p % w]++; }
     // 건물 = 종이보다 어두운 자국 또는 파란 유리. 초록(조경)은 제외.
     if (!isGreen && (lum[p] < inkThr || isBlue)) bldg[p] = 1;
   }
@@ -383,7 +384,6 @@ async function traceConcept(src, opts) {
   }
   let maxH = 0; for (let x = 0; x < w; x++) if (prof[x] > maxH) maxH = prof[x];
   const peaks = prominentPeaks(prof, Math.max(6, Math.round(w / 22)), Math.max(3, maxH * 0.055));
-  const masses = Math.max(1, Math.min(12, peaks.length));
   const promAvg = peaks.length ? peaks.reduce((a, p) => a + p.prom, 0) / peaks.length : 0;
   const greenR = green / total, blueR = blue / total;
 
@@ -400,12 +400,28 @@ async function traceConcept(src, opts) {
     for (let x = peaks[i - 1].i; x <= peaks[i].i; x++) if (prof[x] < vv) { vv = prof[x]; vi = x; }
     valleys.push({ i: vi, v: vv, lo: Math.min(peaks[i - 1].v, peaks[i].v) });
   }
-  const bounds = [xa].concat(valleys.map(v => v.i), [xb]);
+  let bounds = [xa].concat(valleys.map(v => v.i), [xb]);
   const spanW = Math.max(1, xb - xa);
-  const massList = peaks.map((p, i) => ({
+  let massList = peaks.map((p, i) => ({
     wFrac: Math.max(0.02, (bounds[i + 1] - bounds[i]) / spanW),
     hFrac: maxH > 0 ? +(p.v / maxH).toFixed(3) : 1,
   }));
+  // ── 유리면 군집으로 동 수 보정 ──
+  // ★투시에서 겹친 동은 지붕 봉우리가 실루엣에 묻혀 하나 덜 세어진다(실사용: 5동→4동).
+  //   유리 전면은 동마다 뚜렷한 파란 군집을 만드니, 군집이 더 많으면 그쪽을 믿는다.
+  const blueBands = bandsOf(colBlue, 0.22).filter(b2 => b2[1] - b2[0] >= w * 0.025);
+  if (blueBands.length > peaks.length && blueBands.length <= 12) {
+    bounds = [blueBands[0][0]];
+    for (let i = 1; i < blueBands.length; i++) bounds.push(Math.round((blueBands[i - 1][1] + blueBands[i][0]) / 2));
+    bounds.push(blueBands[blueBands.length - 1][1]);
+    const bw = Math.max(1, bounds[bounds.length - 1] - bounds[0]);
+    massList = blueBands.map((b2, i) => {
+      let hh = 0;
+      for (let x = Math.max(0, bounds[i]); x <= Math.min(w - 1, bounds[i + 1]); x++) if (prof[x] > hh) hh = prof[x];
+      return { wFrac: Math.max(0.02, (bounds[i + 1] - bounds[i]) / bw), hFrac: maxH > 0 ? +(hh / maxH).toFixed(3) : 1 };
+    });
+  }
+  const masses = Math.max(1, Math.min(12, massList.length));
   // 붙어 있는가 — 골이 충분히 높으면 한 덩어리로 이어진 동들이다
   const attachedN = valleys.filter(v => v.lo > 0 && v.v / v.lo >= 0.35).length;
   const attached = valleys.length ? attachedN >= valleys.length / 2 : false;

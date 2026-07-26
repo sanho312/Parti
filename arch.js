@@ -281,7 +281,10 @@ function buildComplex(spec) {
   br.pushUndo();
   br.ensureLayer('벽', '#cfc7ba'); br.ensureLayer('개구부', '#ff9f0a');
   br.ensureLayer('지붕', '#b8695a'); br.ensureLayer('조경', '#6aa84f'); br.ensureLayer('문자', '#8fa3c8');
+  br.ensureLayer('유리', '#7ea6d1'); br.ensureLayer('조경길', '#e0dacc');
   const counts = { wall: 0, window: 0, roof: 0, court: 0 };
+  const RIDGE_F = 0.42;                                // 비대칭 박공 — 앞(마당) 경사가 짧고 가파르다
+  const OVH = 450;                                     // 처마 내밀기
 
   // 동별 폭·지붕 높이 — 스케치에서 읽은 비율이 있으면 그대로, 없으면 균일
   const ml = (o.massList && o.massList.length === n) ? o.massList : null;
@@ -311,21 +314,66 @@ function buildComplex(spec) {
       [C[0] - t[0] * W2 + u[0] * D2, C[1] - t[1] * W2 + u[1] * D2],   // 뒤-좌
     ];
     for (let k = 0; k < 4; k++) wall(P[k], P[(k + 1) % 4]);
+    const gableRidge = o.roof === 'gable';
     if (o.roof && o.roof !== 'none') {
+      // 지붕 — 처마(OVH)만큼 사방으로 내밀고, 용마루는 앞쪽 42% 지점(비대칭 박공)
+      const W2o = W2 + OVH, D2o = D2 + OVH;
+      const RP = [
+        [C[0] - t[0] * W2o - u[0] * D2o, C[1] - t[1] * W2o - u[1] * D2o],
+        [C[0] + t[0] * W2o - u[0] * D2o, C[1] + t[1] * W2o - u[1] * D2o],
+        [C[0] + t[0] * W2o + u[0] * D2o, C[1] + t[1] * W2o + u[1] * D2o],
+        [C[0] - t[0] * W2o + u[0] * D2o, C[1] - t[1] * W2o + u[1] * D2o],
+      ];
       const r2 = br.addEntity({ type: 'LWPOLYLINE', layer: '지붕', closed: true,
-        points: P.map(p => [Math.round(p[0]), Math.round(p[1])]) });
-      r2.bim = { kind: 'roof', rtype: o.roof, eave: H, rise: rises[i],
-        dir: (Ws[i] >= o.d ? 'x' : 'y') };
+        points: RP.map(p => [Math.round(p[0]), Math.round(p[1])]) });
+      // 용마루는 깊이 방향(정면에서 박공 삼각형이 보인다) — 사각이 깊이가 길면 자동, 아니면 rdir 로 강제
+      r2.bim = { kind: 'roof', rtype: o.roof, eave: H, rise: rises[i], ridgeF: RIDGE_F,
+        rdir: (o.d + OVH * 2 >= Ws[i] + OVH * 2 ? undefined : 'short') };
       counts.roof++;
     }
-    if (o.glass) {                                    // 마당을 향한 앞면 전체 유리
-      const m = 600, a = P[0], b = P[1];
+    // 박공벽 — 처마 밑 삼각형을 막는 마감. 앞면은 유리(스케치의 통유리 박공), 뒷면은 벽.
+    // 지붕과 같은 프로필(rdir short + 같은 ridgeF·rise)의 얇은 띠라 정확히 맞물린다.
+    if (gableRidge) {
+      const gw = (face, layer) => {                   // face: -1 앞 / +1 뒤
+        const off = face * (D2 - 120);
+        const Q = [
+          [C[0] - t[0] * W2 + u[0] * (off - 120), C[1] - t[1] * W2 + u[1] * (off - 120)],
+          [C[0] + t[0] * W2 + u[0] * (off - 120), C[1] + t[1] * W2 + u[1] * (off - 120)],
+          [C[0] + t[0] * W2 + u[0] * (off + 120), C[1] + t[1] * W2 + u[1] * (off + 120)],
+          [C[0] - t[0] * W2 + u[0] * (off + 120), C[1] - t[1] * W2 + u[1] * (off + 120)],
+        ];
+        const g2 = br.addEntity({ type: 'LWPOLYLINE', layer, closed: true,
+          points: Q.map(p => [Math.round(p[0]), Math.round(p[1])]) });
+        g2.bim = { kind: 'roof', rtype: 'gable', eave: H, rise: rises[i], ridgeF: RIDGE_F, rdir: 'short' };
+      };
+      gw(-1, o.glass ? '유리' : '벽');
+      gw(1, '벽');
+    }
+    if (o.glass) {                                    // 앞면 커튼월 — 멀리언로 나뉜 통유리 패널
+      const m = 500, a = P[0], b = P[1];
       const dx = b[0] - a[0], dy = b[1] - a[1], Lf = Math.hypot(dx, dy) || 1;
-      const e = br.addEntity({ type: 'LINE', layer: '개구부',
-        x1: Math.round(a[0] + dx / Lf * m), y1: Math.round(a[1] + dy / Lf * m),
-        x2: Math.round(b[0] - dx / Lf * m), y2: Math.round(b[1] - dy / Lf * m) });
-      e.bim = { kind: 'opening', ot: 'window', wt: 'fix', h: H - 600, sill: 300, t: STD.wallExt };
-      counts.window++;
+      const ux = dx / Lf, uy = dy / Lf;
+      const span = Lf - m * 2;
+      const nP = Math.max(2, Math.round(span / 1700));  // 패널 폭 ~1.7m
+      const mull = 90;                                  // 멀리언 폭
+      const pw = (span - mull * (nP - 1)) / nP;
+      for (let k2 = 0; k2 < nP; k2++) {
+        const s0 = m + k2 * (pw + mull);
+        const e = br.addEntity({ type: 'LINE', layer: '개구부',
+          x1: Math.round(a[0] + ux * s0), y1: Math.round(a[1] + uy * s0),
+          x2: Math.round(a[0] + ux * (s0 + pw)), y2: Math.round(a[1] + uy * (s0 + pw)) });
+        e.bim = { kind: 'opening', ot: 'window', wt: 'fix', h: H - 400, sill: 150, t: STD.wallExt };
+        counts.window++;
+      }
+      // 동 앞 잔디 띠 — 스케치의 전면 조경
+      const li = 700;
+      const LW0 = [a[0] + ux * li - u[0] * 900, a[1] + uy * li - u[1] * 900];
+      const LW1 = [b[0] - ux * li - u[0] * 900, b[1] - uy * li - u[1] * 900];
+      const LW2 = [b[0] - ux * li - u[0] * 3200, b[1] - uy * li - u[1] * 3200];
+      const LW3 = [a[0] + ux * li - u[0] * 3200, a[1] + uy * li - u[1] * 3200];
+      const lw = br.addEntity({ type: 'LWPOLYLINE', layer: '조경', closed: true,
+        points: [LW0, LW1, LW2, LW3].map(p => [Math.round(p[0]), Math.round(p[1])]) });
+      lw.bim = { kind: 'slab', t: 80, top: 20 };
     }
     br.addEntity({ type: 'TEXT', layer: '문자', x: Math.round(C[0]), y: Math.round(C[1]), h: 400, text: (i + 1) + '동' });
   };
@@ -368,10 +416,19 @@ function buildComplex(spec) {
     R = Math.max(3000, Math.round(L / 5));
     courtC = [o.ox, o.oy - o.d / 2 - R - 3000];
   }
-  if (R > 0) {                                        // 마당 — 잔디
-    const ct = br.addEntity({ type: 'CIRCLE', layer: '조경',
-      cx: Math.round(courtC[0]), cy: Math.round(courtC[1]), r: Math.round(R) });
+  if (R > 0) {                                        // 마당 — 방사형 수레바퀴 잔디 (스케치의 원형 조경)
+    const cx = Math.round(courtC[0]), cy = Math.round(courtC[1]), Rr = Math.round(R);
+    const ct = br.addEntity({ type: 'CIRCLE', layer: '조경', cx, cy, r: Rr });
     ct.bim = { kind: 'slab', t: 100, top: 0 }; counts.court = 1;
+    const inner = br.addEntity({ type: 'CIRCLE', layer: '조경길', cx, cy, r: Math.round(Rr * 0.26) });
+    inner.bim = { kind: 'slab', t: 100, top: 30 };    // 가운데 포장 — 잔디보다 살짝 위
+    const SPOKES = 8;                                  // 방사형 길 — 평면 표현(2D 선)
+    for (let k2 = 0; k2 < SPOKES; k2++) {
+      const a2 = (k2 * 2 * Math.PI) / SPOKES;
+      br.addEntity({ type: 'LINE', layer: '조경길',
+        x1: Math.round(cx + Math.cos(a2) * Rr * 0.26), y1: Math.round(cy + Math.sin(a2) * Rr * 0.26),
+        x2: Math.round(cx + Math.cos(a2) * Rr * 0.97), y2: Math.round(cy + Math.sin(a2) * Rr * 0.97) });
+    }
   }
   br.refresh();
   return { n, floors: o.floors, H, R: Math.round(R), L, widths: Ws, counts, arrange: o.arrange };

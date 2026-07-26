@@ -3191,10 +3191,13 @@ function tests(){
               const cx5 = A.buildComplex({ count: 5, floors: 1, w: 8000, d: 12000, roof: 'gable', arrange: 'circle' });
               const ce = C.state.entities.slice(b5);
               eqi(cx5.n, 5, '★다동 배치 — 5동');
-              eqi(ce.filter(e5 => e5.bim && e5.bim.kind === 'roof').length, 5, '  박공지붕 5매');
-              eqi(ce.filter(e5 => e5.bim && e5.bim.kind === 'opening').length, 5, '  마당 쪽 전면 유리 5면');
-              eqi(ce.filter(e5 => e5.type === 'CIRCLE' && e5.bim && e5.bim.kind === 'slab').length, 1, '  원형 마당');
-              const rs = C.bimSolids().filter(s5 => s5.rf && ce.some(e5 => e5.id === s5.eid));
+              eqi(ce.filter(e5 => e5.bim && e5.bim.kind === 'roof' && e5.layer === '지붕').length, 5, '  박공지붕 5매');
+              eqi(ce.filter(e5 => e5.bim && e5.bim.kind === 'roof' && e5.layer === '유리').length, 5, '★유리 박공벽 — 전면 삼각형까지 통유리 마감');
+              ok(ce.filter(e5 => e5.bim && e5.bim.kind === 'opening').length >= 10, '★커튼월 — 멀리언로 나뉜 유리 패널 (' + ce.filter(e5 => e5.bim && e5.bim.kind === 'opening').length + ')');
+              eqi(ce.filter(e5 => e5.type === 'CIRCLE' && e5.layer === '조경').length, 1, '  원형 마당(잔디)');
+              ok(ce.filter(e5 => e5.layer === '조경길').length >= 9, '★마당 수레바퀴 — 가운데 포장 + 방사형 길');
+              const roofIds = new Set(ce.filter(e5 => e5.bim && e5.bim.kind === 'roof' && e5.layer === '지붕').map(e5 => e5.id));
+              const rs = C.bimSolids().filter(s5 => s5.rf && roofIds.has(s5.eid));
               eqi(rs.filter(s5 => s5.zt).length, 10, '  경사 지붕 솔리드 10면 (동당 2면)');
               C.state.entities.length = b5;
               // ★부채꼴 배치 — 스케치 구성을 그대로 옮겼는지: 좌우 순서·동별 폭·마당 위치
@@ -3214,8 +3217,12 @@ function tests(){
                 .flatMap(e6 => e6.points.map(p => p[1])));
               ok(yard && (yard.cy + yard.r) - frontY > -6000 && (yard.cy + yard.r) - frontY < 6000,
                 '★마당은 줄 바로 앞 (호의 중심에 두면 수십 m 떨어진다)');
-              const ars = C.bimSolids().filter(s6 => s6.rf && ae.some(e6 => e6.id === s6.eid));
+              const arIds = new Set(ae.filter(e6 => e6.bim && e6.bim.kind === 'roof' && e6.layer === '지붕').map(e6 => e6.id));
+              const ars = C.bimSolids().filter(s6 => s6.rf && arIds.has(s6.eid));
               eqi(ars.filter(s6 => s6.zt).length, 10, '  회전된 동도 박공 경사면 2면씩');
+              const a2 = s6 => { let a3 = 0; const PP = s6.poly; for (let i7 = 0; i7 < PP.length; i7++) { const q7 = PP[(i7 + 1) % PP.length]; a3 += PP[i7][0] * q7[1] - q7[0] * PP[i7][1]; } return Math.abs(a3 / 2); };
+              const one = ars.filter(s6 => s6.zt && s6.eid === ars[0].eid);
+              ok(one.length === 2 && Math.abs(a2(one[0]) / (a2(one[0]) + a2(one[1])) - 0.42) < 0.03, '★비대칭 박공 — 앞 경사 42% (스케치의 짧고 가파른 앞면)');
               C.state.entities.length = b6;
               return VZ.traceFacade(facadeUrl, { floorH: 3000 });
             })
@@ -3250,13 +3257,13 @@ function tests(){
             .then(r => {
               ok(/5동/.test(r) && /박공/.test(r), '★스케치 1장 + 자연어만으로 판독·생성 (5동 박공)');
               const ce2 = C.state.entities.slice(b3);
-              eqi(ce2.filter(e6 => e6.bim && e6.bim.kind === 'roof').length, 5, '  실제로 5동이 생성됨 (되묻고 끝내지 않음)');
+              eqi(ce2.filter(e6 => e6.bim && e6.bim.kind === 'roof' && e6.layer === '지붕').length, 5, '  실제로 5동이 생성됨 (되묻고 끝내지 않음)');
               C.state.entities.length = b3;
               return LR('6동 2층 한 동 10×14m 로 다시');
             })
             .then(r => {
               ok(/6동/.test(r) && /2층/.test(r), '★후속 한 문장으로 재구성 ("…로 다시")');
-              eqi(C.state.entities.slice(b3).filter(e6 => e6.bim && e6.bim.kind === 'roof').length, 6, '  6동으로 다시 세워짐');
+              eqi(C.state.entities.slice(b3).filter(e6 => e6.bim && e6.bim.kind === 'roof' && e6.layer === '지붕').length, 6, '  6동으로 다시 세워짐');
               C.state.entities.length = b3;
               return LR('3층 단면 만들어줘');
             })
