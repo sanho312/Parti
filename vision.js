@@ -258,7 +258,7 @@ async function classifyImage(src) {
     gray[p] = g;
     if (g >= 70 && g <= 200) mid++;
     if (g < 70) ink++;
-    if (g >= 225) white++;
+    if (g >= 195) white++;                                 // '종이 배경' 판정 — 촬영된 크림색 종이 포함
     sat += Math.max(d[i], d[i + 1], d[i + 2]) - Math.min(d[i], d[i + 1], d[i + 2]);
   }
   // 대각선 획 비율 — 강한 엣지 중 방향이 축(수평/수직)에서 20° 이상 벗어난 것의 비중
@@ -277,11 +277,88 @@ async function classifyImage(src) {
   let kind;
   // 임계 근거(실측): 직교 도면 diag 0.01 · 정면 사진 0.03 vs 투시 스케치 0.34 — 0.22 로 확실히 갈린다
   if (midR < 0.35 && inkR < 0.25 && satAvg < 12 && diagR < 0.22) kind = 'plan';
-  // 스케치: 종이 밝은 배경 + 사선 획 상당. (정면 사진은 사선이 거의 없고 종이 흰색도 없다)
-  else if (diagR >= 0.22 && whiteR >= 0.25) kind = 'sketch';
+  // 스케치: 종이 배경 + 사선 획 상당. (정면 사진은 사선이 거의 없고 밝은 배경도 없다)
+  // ★whiteR(≥225)은 촬영된 크림색 종이를 놓친다(실사용에서 스케치가 photo 로 샜다) → 195 기준.
+  else if (diagR >= 0.22 && whiteR >= 0.22) kind = 'sketch';
   else kind = 'photo';
   return { kind, midRatio: +midR.toFixed(3), inkRatio: +inkR.toFixed(3), satAvg: +satAvg.toFixed(1),
     whiteRatio: +whiteR.toFixed(3), diagRatio: +diagR.toFixed(3) };
+}
+
+/* ------------------------------------------------------------
+   콘셉트 스케치 → 구성 판독 (traceConcept)
+   ------------------------------------------------------------
+   투시 스케치에서 '치수'는 복원할 수 없지만 '구성'은 읽을 수 있다.
+     ① 실루엣 상단선의 봉우리 개수 = 동(棟) 수  ← 박공지붕은 뾰족한 봉우리를 만든다
+     ② 봉우리의 돌출도(prominence) = 지붕 경사 유무 → 박공 / 평지붕
+     ③ 초록 영역 = 조경. 건물 무리의 가운데·아래에 있으면 '중정(원형 배치)'
+     ④ 파랑 영역 = 유리면
+   치수가 아니라 구성만 뽑으므로 결과는 '추정' — 사용자가 한 문장으로 고칠 수 있게 한다.
+   ------------------------------------------------------------ */
+// 돌출도 기반 봉우리 — 단순 극대점은 손그림의 떨림마다 잡힌다. 좌우로 자기보다 높은
+// 지점까지 내려간 깊이(prominence)가 충분한 것만 진짜 봉우리로 센다.
+function prominentPeaks(prof, minSep, minProm) {
+  const n = prof.length, cands = [];
+  for (let i = 1; i < n - 1; i++) if (prof[i] >= prof[i - 1] && prof[i] > prof[i + 1]) cands.push(i);
+  const scored = cands.map(i => {
+    let lm = prof[i]; for (let j = i - 1; j >= 0 && prof[j] <= prof[i]; j--) lm = Math.min(lm, prof[j]);
+    let rm = prof[i]; for (let j = i + 1; j < n && prof[j] <= prof[i]; j++) rm = Math.min(rm, prof[j]);
+    return { i, v: prof[i], prom: prof[i] - Math.max(lm, rm) };
+  }).filter(p => p.prom >= minProm).sort((a, b) => b.prom - a.prom);
+  const kept = [];
+  for (const p of scored) if (!kept.some(k => Math.abs(k.i - p.i) < minSep)) kept.push(p);
+  return kept.sort((a, b) => a.i - b.i);
+}
+async function traceConcept(src, opts) {
+  const o = Object.assign({ maxSide: 700 }, opts || {});
+  const im = await loadImage(src);
+  const { ctx, w, h } = toCanvas(im, o.maxSide);
+  const d = ctx.getImageData(0, 0, w, h).data;
+  const total = w * h;
+  const bldg = new Uint8Array(total);        // 건물 픽셀 (잉크 윤곽 + 유리)
+  let green = 0, blue = 0, gSumX = 0, gSumY = 0, gMinX = w, gMaxX = 0, gMinY = h;
+  for (let i = 0, p = 0; i < d.length; i += 4, p++) {
+    const r = d[i], g = d[i + 1], b = d[i + 2];
+    const L = (r * 299 + g * 587 + b * 114) / 1000;
+    const isGreen = g > r + 16 && g > b + 16;
+    const isBlue = b > r + 16 && b > g + 6;
+    if (isGreen) { green++; gSumX += p % w; gSumY += (p / w) | 0; const x = p % w, y = (p / w) | 0;
+      if (x < gMinX) gMinX = x; if (x > gMaxX) gMaxX = x; if (y < gMinY) gMinY = y; }
+    if (isBlue) blue++;
+    // 건물 = 진한 잉크선 또는 파란 유리. 초록(조경)은 제외.
+    if (!isGreen && (L < 135 || isBlue)) bldg[p] = 1;
+  }
+  // 실루엣 상단선 — 열마다 가장 위쪽 건물 픽셀. 없으면 높이 0.
+  const raw = new Float32Array(w);
+  for (let x = 0; x < w; x++) {
+    let top = -1;
+    for (let y = 0; y < h; y++) if (bldg[y * w + x]) { top = y; break; }
+    raw[x] = top < 0 ? 0 : (h - top);
+  }
+  // 이동평균 — 손그림 떨림·해칭 제거
+  const k = Math.max(2, Math.round(w / 90)), prof = new Float32Array(w);
+  for (let x = 0; x < w; x++) {
+    let s = 0, c = 0;
+    for (let j = -k; j <= k; j++) { const q = x + j; if (q >= 0 && q < w) { s += raw[q]; c++; } }
+    prof[x] = s / c;
+  }
+  let maxH = 0; for (let x = 0; x < w; x++) if (prof[x] > maxH) maxH = prof[x];
+  const peaks = prominentPeaks(prof, Math.max(6, Math.round(w / 22)), Math.max(3, maxH * 0.055));
+  const masses = Math.max(1, Math.min(12, peaks.length));
+  const promAvg = peaks.length ? peaks.reduce((a, p) => a + p.prom, 0) / peaks.length : 0;
+  const greenR = green / total, blueR = blue / total;
+  // 중정: 초록이 충분하고, 가로로 넓게 퍼져 있으며(띠가 아니라 마당), 화면 아래쪽에 있다
+  const gW = gMaxX - gMinX, gcy = green ? gSumY / green : 0;
+  const courtyard = greenR > 0.015 && gW > w * 0.25 && gcy > h * 0.45;
+  return {
+    masses,
+    roof: (maxH > 0 && promAvg / maxH > 0.1) ? 'gable' : 'flat',
+    arrange: courtyard ? 'circle' : 'row',
+    glass: blueR > 0.008,
+    peaks: peaks.map(p => Math.round(p.i)),
+    meta: { w, h, maxH: Math.round(maxH), promAvg: +promAvg.toFixed(1),
+      greenRatio: +greenR.toFixed(3), blueRatio: +blueR.toFixed(3), courtyard },
+  };
 }
 
 /* ------------------------------------------------------------
@@ -458,5 +535,5 @@ async function traceFacade(src, opts) {
       floorH: o.floorH, widthMM, depthMM, heightMM, conf: +conf.toFixed(2) } };
 }
 
-return { traceImage, traceFacade, classifyImage, _internal: { binarize, extractLines, mergeCollinear, pairWalls, peaksOf, span, gradients, periodOf, bandsOf, windowMask } };
+return { traceImage, traceFacade, classifyImage, traceConcept, _internal: { binarize, extractLines, mergeCollinear, pairWalls, peaksOf, span, gradients, periodOf, bandsOf, windowMask, prominentPeaks } };
 })();

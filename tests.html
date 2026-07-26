@@ -3133,18 +3133,25 @@ function tests(){
             return cc.toDataURL('image/png');
           };
           // 투시 콘셉트 스케치 — 종이 배경 + 사선 획 (박공 동 5개 + 원형 마당)
-          const mkSketch = () => {
-            const cv3 = AD.createElement('canvas'); cv3.width = 900; cv3.height = 500;
+          // 투시 콘셉트 스케치 모사 — 크림색 종이 + 높이 제각각인 박공 5동(겹침) + 유리 + 타원 마당
+          const mkSketch = (N) => {
+            N = N || 5;
+            const cv3 = AD.createElement('canvas'); cv3.width = 940; cv3.height = 470;
             const g4 = cv3.getContext('2d');
-            g4.fillStyle = '#efe9dc'; g4.fillRect(0, 0, 900, 500);
-            g4.strokeStyle = '#222'; g4.lineWidth = 3;
-            for (let i = 0; i < 5; i++) { const x = 60 + i * 165, y = 120 + ((i % 2) ? 18 : 0);
-              g4.beginPath(); g4.moveTo(x, y + 120); g4.lineTo(x + 30, y + 35); g4.lineTo(x + 95, y); g4.lineTo(x + 150, y + 55);
-              g4.lineTo(x + 140, y + 165); g4.lineTo(x + 18, y + 185); g4.closePath(); g4.stroke();
-              g4.fillStyle = '#7fa8d9'; g4.beginPath();
-              g4.moveTo(x + 50, y + 60); g4.lineTo(x + 130, y + 40); g4.lineTo(x + 125, y + 150); g4.lineTo(x + 48, y + 160); g4.closePath(); g4.fill();
-              g4.fillStyle = '#000'; }
-            g4.fillStyle = '#7dbb57'; g4.beginPath(); g4.ellipse(450, 400, 180, 60, 0, 0, 7); g4.fill();
+            g4.fillStyle = '#f2ece0'; g4.fillRect(0, 0, 940, 470);
+            const base = 300;
+            for (let i = 0; i < N; i++) {
+              const x = 70 + i * (760 / N), wd = 760 / N + 22, peakH = 150 + (i % 3) * 28, apex = base - peakH;
+              g4.fillStyle = '#fdfcf8';
+              g4.beginPath(); g4.moveTo(x, base); g4.lineTo(x, base - 70);
+              g4.lineTo(x + wd * 0.45, apex); g4.lineTo(x + wd, base - 60); g4.lineTo(x + wd, base);
+              g4.closePath(); g4.fill();
+              g4.strokeStyle = '#2a2a2a'; g4.lineWidth = 2.5; g4.stroke();
+              g4.fillStyle = '#8fb6de';
+              g4.beginPath(); g4.moveTo(x + wd * 0.12, base - 20); g4.lineTo(x + wd * 0.42, apex + 26);
+              g4.lineTo(x + wd * 0.62, apex + 34); g4.lineTo(x + wd * 0.6, base - 14); g4.closePath(); g4.fill();
+            }
+            g4.fillStyle = '#86c05a'; g4.beginPath(); g4.ellipse(430, 385, 175, 55, 0, 0, 7); g4.fill();
             return cv3.toDataURL('image/png');
           };
           const facadeUrl = mkFacade(6, 4, 640, 560);
@@ -3153,6 +3160,14 @@ function tests(){
             .then(cf => { eqi(cf.kind, 'photo', '★이미지 분류 — 채색 사진은 photo (채도 기준)'); return VZ.classifyImage(mkSketch()); })
             .then(cs => {
               eqi(cs.kind, 'sketch', '★이미지 분류 — 투시 스케치는 sketch (사선 획 비율)');
+              return VZ.traceConcept(mkSketch()).then(cc2 => {
+                eqi(cc2.masses, 5, '★콘셉트 판독 — 지붕 봉우리로 동 수 (5동)');
+                eqi(cc2.roof, 'gable', '  뾰족한 봉우리 → 박공지붕');
+                eqi(cc2.arrange, 'circle', '  아래쪽 초록 영역 → 원형 마당 배치');
+                ok(cc2.glass, '  파란 면 → 유리');
+              });
+            })
+            .then(() => {
               // 다동 배치 — 콘셉트 스케치 구성으로 세우기
               const b5 = C.state.entities.length;
               const cx5 = A.buildComplex({ count: 5, floors: 1, w: 8000, d: 12000, roof: 'gable', arrange: 'circle' });
@@ -3191,7 +3206,26 @@ function tests(){
             .then(r => { ok(/높이 2700/.test(r), '★로컬 봇 — 벽 속성 변경'); C.state.entities.length = b3; return LR('선이 자꾸 곡선으로 인식돼'); })
             .then(() => { eqi(SKl.getParams().corner, 0.45, '★로컬 봇 — 인식 불만 → 보정값 조정 (인식 명령과 구분)'); SKl.setParams({ preset: 'basic' }); return LR('도움말'); })
             .then(r => { ok(/로컬 모드/.test(r), '  도움말 응답'); return LR('오늘 날씨 어때'); })
-            .then(r => { ok(/이해하지 못했/.test(r), '  미해석은 솔직하게'); });
+            .then(r => { ok(/이해하지 못했/.test(r), '  미해석은 솔직하게'); })
+            // ★사용자 실패 시나리오: 스케치 1장 + 자연어 한 문장만으로 실제 생성되어야 한다
+            .then(() => LR('이 이미지를 기반으로 건물의 도면과 모델링을 생성해줘.', [{ dataUrl: mkSketch() }]))
+            .then(r => {
+              ok(/5동/.test(r) && /박공/.test(r), '★스케치 1장 + 자연어만으로 판독·생성 (5동 박공)');
+              const ce2 = C.state.entities.slice(b3);
+              eqi(ce2.filter(e6 => e6.bim && e6.bim.kind === 'roof').length, 5, '  실제로 5동이 생성됨 (되묻고 끝내지 않음)');
+              C.state.entities.length = b3;
+              return LR('6동 2층 한 동 10×14m 로 다시');
+            })
+            .then(r => {
+              ok(/6동/.test(r) && /2층/.test(r), '★후속 한 문장으로 재구성 ("…로 다시")');
+              eqi(C.state.entities.slice(b3).filter(e6 => e6.bim && e6.bim.kind === 'roof').length, 6, '  6동으로 다시 세워짐');
+              C.state.entities.length = b3;
+              return LR('3층 단면 만들어줘');
+            })
+            .then(r => {
+              ok(!/다시 세웠습니다/.test(r), '  배치와 무관한 문장은 배치를 갈아엎지 않는다');
+              C.state.entities.length = b3;
+            });
           });
         }).then(finishAsync)
           .catch(e => { record(false, 'API 없는 경로 오류: ' + e.message); finishAsync(); });

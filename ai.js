@@ -480,6 +480,7 @@
   // ---------- 이미지 → 도면 도구들 ----------
   let lastImg = null; // 사용자가 채팅에 첨부한 최신 이미지 {dataUrl, w, h(px)} — set_underlay 가 쓴다
   let lastRaw = null; // 마지막 사용자 원문 {t, imgs} — API 키 무효(401) 시 로컬 폴백에 쓴다
+  let lastConcept = null; // 마지막 다동 배치 spec — "6동 2층으로 다시" 같은 후속 수정에 쓴다
   function toolSetUnderlay(inp) {
     if (!lastImg) return { error: '첨부된 이미지가 없습니다. 사용자에게 도면 이미지를 채팅에 첨부해 달라고 요청하세요(📎 버튼 또는 붙여넣기).' };
     if (!fin(inp.width_mm) || inp.width_mm <= 0) return { error: 'width_mm(이미지의 실제 폭)가 필요합니다.' };
@@ -985,9 +986,62 @@
     + '· "선이 자꾸 곡선으로 인식돼" — 스케치 보정값 조정\n\n'
     + 'API 키를 넣으면(⚙) 자유로운 자연어 대화로 확장됩니다.';
 
+  // 문장에서 다동 배치 지시를 뽑는다. 이미지 자동 판독과 합칠 때 '명시 지시가 이긴다'.
+  // (지정 안 한 항목은 undefined 로 남겨 호출 측이 판독값·기본값을 채우게 한다)
+  function parseComplexSpec(t) {
+    const o = {};
+    const n = numOf(t, /(\d+)\s*동/); if (n) o.count = n;
+    const f = numOf(t, /(\d+)\s*층/); if (f) o.floors = f;
+    const w = numOf(t, /(\d+(?:\.\d+)?)\s*[x×]\s*\d+(?:\.\d+)?\s*m/);
+    const d = numOf(t, /\d+(?:\.\d+)?\s*[x×]\s*(\d+(?:\.\d+)?)\s*m/);
+    if (w) o.w = w * 1000; if (d) o.d = d * 1000;
+    if (/평지붕|평평|플랫/.test(t)) o.roof = 'flat';
+    else if (/외쪽|한쪽|시드/.test(t)) o.roof = 'shed';
+    else if (/박공|게이블|맞배/.test(t)) o.roof = 'gable';
+    if (/일렬|한 ?줄|나란|선형/.test(t)) o.arrange = 'row';
+    else if (/원형|중정|마당 ?둘레|둥글게/.test(t)) o.arrange = 'circle';
+    if (/유리 ?없|창 ?없/.test(t)) o.glass = false;
+    return o;
+  }
+
   async function localReply(text, imgs) {
     const t = String(text || '').trim();
     const SKm = window.WEBCAD_SKETCH;
+    // ⓪ 직전 결과에 대한 후속 지시 — "매스로 만들어줘", "6동 2층 한 동 10×14m 로 다시"
+    // ★이미지 없이 온 이 문장들이 '이해 못 함'으로 떨어지던 게 실사용 실패 지점이었다.
+    //   재구성 판정: 동 수를 다시 말했거나(가장 확실한 신호), 다시/바꿔 + 바뀐 항목이 있을 때.
+    //   ('3층 단면 만들어줘' 처럼 층수만 스친 문장이 배치를 갈아엎지 않도록 이 두 경우로 한정)
+    if ((!imgs || !imgs.length) && window.PARTI_ARCH) {
+      const exp = parseComplexSpec(t);
+      const has = exp.count || exp.floors || exp.w || exp.d || exp.roof || exp.arrange || exp.glass != null;
+      if (lastConcept && (exp.count || (has && /다시|바꿔|변경|수정|말고/.test(t)))) {
+        const spec = Object.assign({}, lastConcept, exp);
+        const r = window.PARTI_ARCH.buildComplex(spec);
+        if (r) {
+          lastConcept = spec;
+          execTool('set_view', { mode: '3d' });
+          const roofKo = { gable: '박공지붕', flat: '평지붕', shed: '외쪽지붕' }[spec.roof] || spec.roof;
+          return `다시 세웠습니다 — **${r.n}동 · ${spec.floors}층 · ${roofKo} · `
+            + `${spec.arrange === 'circle' ? '원형 마당' : '일렬'} 배치**, 각 동 ${(spec.w / 1000).toFixed(0)}×${(spec.d / 1000).toFixed(0)}m.\n`
+            + '(되돌리기: Ctrl+Z)';
+        }
+      }
+    }
+    if ((!imgs || !imgs.length) && lastImg && window.PARTI_VISION
+        && /매스|매싱|그래도|어쨌든|일단|다시 세|그대로 세|세워|만들어/.test(t)) {
+      const exp = parseComplexSpec(t);
+      if (/매스|매싱|파사드|외관/.test(t) && window.PARTI_ARCH) {
+        const f = await window.PARTI_VISION.traceFacade(lastImg.dataUrl,
+          { floorH: numOf(t, /층고\s*(\d{3,5})/) || 3000 });
+        const m = window.PARTI_ARCH.buildMassing({ floors: exp.floors || f.floors, bays: f.bays,
+          windows: f.windows, widthMM: f.meta.widthMM, depthMM: f.meta.depthMM, floorH: f.meta.floorH });
+        execTool('set_view', { mode: '3d' });
+        return `직전 이미지로 매스를 세웠습니다 — **${f.floors}층 · ${f.bays}베이**, `
+          + `${(m.W / 1000).toFixed(1)}×${(m.D / 1000).toFixed(1)}×${(m.H / 1000).toFixed(1)}m (창 ${m.counts.window}개).\n`
+          + `창 격자 신뢰도가 낮았으니(${Math.round((f.meta.conf || 0) * 100)}%) 치수는 참고용입니다.`;
+      }
+      void exp;
+    }
     // ① 이미지 처리 — 붙어 있으면 최우선. 전 장 처리(마지막 한 장만 쓰던 것 수정).
     // ★도면/사진 판별은 픽셀로 한다(classifyImage). 문장 키워드로 하면 "건물의 도면
     //   만들어줘"의 '건물' 때문에 도면 이미지가 매싱 경로로 오판된다(실사용 보고).
@@ -999,36 +1053,49 @@
       const forceMass = /매스|매싱|볼륨|파사드|외관/.test(t);
       const forcePlan = /평면도|도면 (그대로|따라)|트레이스/.test(t);
       const fh = numOf(t, /층고\s*(\d{3,5})/) || 3000;
-      const lines = []; let planN = 0, massN = 0, sketchN = 0, cursorX = 0;
+      const exp = parseComplexSpec(t);        // 문장의 명시 지시 — 자동 판독보다 우선한다
+      const lines = []; let planN = 0, massN = 0, cpxN = 0, cursorX = 0;
       const allStrokes = [];
       for (const img of imgs) {
         const cls = forceMass ? { kind: 'photo' } : forcePlan ? { kind: 'plan' } : await V.classifyImage(img.dataUrl);
-        if (cls.kind === 'sketch') {
-          // ★투시 콘셉트 스케치 — 픽셀만으로는 복원 불가(깊이·투시 왜곡). 엉뚱한 박스를
-          //   자신 있게 세우는 대신(실사용 보고), 구성을 확인받아 그대로 세운다.
-          sketchN++;
-          lines.push('· 투시 스케치로 보입니다 — 사선 획 ' + Math.round((cls.diagRatio || 0) * 100) + '%');
-          continue;
-        }
-        if (cls.kind === 'photo' && window.PARTI_ARCH) {
-          const f = await V.traceFacade(img.dataUrl, { floorH: fh,
-            depthMM: numOf(t, /(?:깊이|안길이)\s*(\d+(?:\.\d+)?)\s*m/) * 1000 || null });
-          if (!forceMass && (f.meta.conf || 0) < 0.45) {
-            // 창 격자가 흐릿하면 결과가 임의 값에 가깝다 — 세우지 않고 사실대로 말한다
-            lines.push(`· 사진에서 창 격자를 확신할 수 없습니다(신뢰도 ${Math.round((f.meta.conf || 0) * 100)}%) — 정면에서 찍은 사진일수록 잘 읽힙니다. 그래도 세우려면 "매스로 만들어줘"라고 답해 주세요.`);
-            continue;
-          }
-          const m = window.PARTI_ARCH.buildMassing({ floors: f.floors, bays: f.bays, windows: f.windows,
-            widthMM: f.meta.widthMM, depthMM: f.meta.depthMM, floorH: f.meta.floorH, ox: cursorX });
-          cursorX += m.W + 4000; massN++;
-          lines.push(`· 사진 → 매스 ${f.floors}층·${f.bays}베이, ${(m.W / 1000).toFixed(1)}×${(m.D / 1000).toFixed(1)}×${(m.H / 1000).toFixed(1)}m (창 ${m.counts.window})`);
-        } else {
+        if (cls.kind === 'plan') {
           const r = await V.traceImage(img.dataUrl, { widthMM: wmm });
           if (!r.strokes.length) { lines.push('· 도면에서 선을 찾지 못했습니다 (흑백·고대비일수록 잘 읽힙니다)'); continue; }
           for (const s of r.strokes) { for (const p of s.pts) p[0] += cursorX; allStrokes.push(s); }
           cursorX += r.meta.widthMM + 4000; planN++;
           lines.push(`· 도면 → 벽 ${r.meta.walls} · 참고선 ${r.meta.guides} · 문 후보 ${r.meta.doors} (가로 ${(r.meta.widthMM / 1000).toFixed(1)}m 가정)`);
+          continue;
         }
+        // 정면 사진이고 창 격자가 또렷하면 파사드 매싱
+        if (cls.kind === 'photo' && window.PARTI_ARCH) {
+          const f = await V.traceFacade(img.dataUrl, { floorH: fh,
+            depthMM: numOf(t, /(?:깊이|안길이)\s*(\d+(?:\.\d+)?)\s*m/) * 1000 || null });
+          if (forceMass || (f.meta.conf || 0) >= 0.45) {
+            const m = window.PARTI_ARCH.buildMassing({ floors: exp.floors || f.floors, bays: f.bays, windows: f.windows,
+              widthMM: f.meta.widthMM, depthMM: f.meta.depthMM, floorH: f.meta.floorH, ox: cursorX });
+            cursorX += m.W + 4000; massN++;
+            lines.push(`· 사진 → 매스 ${f.floors}층·${f.bays}베이, ${(m.W / 1000).toFixed(1)}×${(m.D / 1000).toFixed(1)}×${(m.H / 1000).toFixed(1)}m (창 ${m.counts.window})`);
+            continue;
+          }
+        }
+        // ★여기까지 왔으면 '정확히는 모르는 이미지'(콘셉트 스케치 / 비정면 사진).
+        //   예전엔 여기서 포기하고 되물었지만, 그러면 이미지 한 장으로 아무것도 못 만든다.
+        //   구성(동 수·지붕·배치·유리)만 읽어 일단 세우고, 한 문장으로 고치게 한다.
+        if (!window.PARTI_ARCH) continue;
+        const c = await V.traceConcept(img.dataUrl);
+        const spec = {
+          count: exp.count || c.masses, floors: exp.floors || 1,
+          w: exp.w || 8000, d: exp.d || 12000,
+          roof: exp.roof || c.roof, arrange: exp.arrange || c.arrange,
+          glass: exp.glass != null ? exp.glass : c.glass, floorH: fh,
+        };
+        const r = window.PARTI_ARCH.buildComplex(spec);
+        if (!r) continue;
+        cpxN++; lastConcept = spec;
+        const roofKo = { gable: '박공지붕', flat: '평지붕', shed: '외쪽지붕' }[spec.roof] || spec.roof;
+        lines.push(`· 스케치 판독 → **${r.n}동 · ${spec.floors}층 · ${roofKo} · ${spec.arrange === 'circle' ? '원형 마당 배치' : '일렬 배치'}**`
+          + (spec.glass ? ' · 마당 쪽 전면 유리' : '')
+          + `  (지붕 봉우리 ${c.masses}개${c.meta.courtyard ? ' · 중정 초록 영역 검출' : ''})`);
       }
       if (allStrokes.length && SKm && SKm.importStrokes) {
         SKm.importStrokes(allStrokes);
@@ -1036,30 +1103,27 @@
         if (SKm.recognize) { try { SKm.recognize(); } catch (e) {} }
         if (SKm.fitView) SKm.fitView();
       }
-      if (massN && !planN) execTool('set_view', { mode: '3d' });
+      if ((massN || cpxN) && !planN) execTool('set_view', { mode: '3d' });
       let tail = '';
       if (planN) tail = '\n도면은 스케치로 올렸습니다 — **건물화(🏠)** 를 누르면 3D 까지 만들어지고, 틀린 선은 유령선을 탭해 고칠 수 있어요. 실제 치수를 알면 "가로 12m" 처럼 알려주세요.';
       if (massN) tail += '\n매스는 초기 검토용입니다 — 깊이(폭×0.6)·층고(' + fh + 'mm)는 가정값이라 "깊이 12m 층고 3300" 처럼 알려주시면 다시 세웁니다.';
-      if (sketchN) tail += '\n\n투시 스케치는 깊이 정보가 없어 알고리즘만으로 정확히 복원할 수 없습니다 — 대신 **구성을 알려주시면 그대로 세웁니다**:\n'
-        + '· 예) **"박공 5동 1층 원형 배치로 세워줘"** (동 수·층수·지붕[박공/평]·배치[원형/일렬])\n'
-        + '· 각 동 크기도 지정 가능: "한 동 8×12m"';
+      if (cpxN) tail += '\n\n투시 스케치라 **치수는 읽을 수 없어** 동 크기 8×12m·층고 ' + fh + 'mm 로 세웠습니다(구성만 판독).\n'
+        + '한 문장으로 고칠 수 있어요 — 예) **"6동 2층 한 동 10×14m 로 다시"**, "일렬 배치로", "평지붕으로".';
       return `이미지 ${imgs.length}장을 처리했습니다:\n` + lines.join('\n') + tail;
     }
     // ①-b 다동 배치 — "박공 5동 1층 원형 배치" (투시 스케치 후속 대화 or 직접 요청)
     if (window.PARTI_ARCH && /(\d+)\s*동/.test(t) && /배치|세워|만들|박공|지어/.test(t)) {
-      const n = numOf(t, /(\d+)\s*동/) || 5;
-      const fl = numOf(t, /(\d+)\s*층/) || 1;
-      const wD = numOf(t, /(\d+(?:\.\d+)?)\s*[x×]\s*\d+(?:\.\d+)?\s*m/) * 1000 || 8000;
-      const dD = numOf(t, /\d+(?:\.\d+)?\s*[x×]\s*(\d+(?:\.\d+)?)\s*m/) * 1000 || 12000;
-      const roof = /평지붕|평평/.test(t) ? 'flat' : /외쪽|한쪽/.test(t) ? 'shed' : 'gable';
-      const arrange = /일렬|한 ?줄|나란/.test(t) ? 'row' : 'circle';
-      const r = window.PARTI_ARCH.buildComplex({ count: n, floors: fl, w: wD, d: dD, roof, arrange,
-        glass: !/유리 ?없/.test(t) });
+      const e2 = parseComplexSpec(t);
+      const spec = { count: e2.count || 5, floors: e2.floors || 1, w: e2.w || 8000, d: e2.d || 12000,
+        roof: e2.roof || 'gable', arrange: e2.arrange || 'circle',
+        glass: e2.glass != null ? e2.glass : true, floorH: numOf(t, /층고\s*(\d{3,5})/) || 3000 };
+      const r = window.PARTI_ARCH.buildComplex(spec);
       if (!r) return '배치를 만들지 못했습니다.';
+      lastConcept = spec;
       execTool('set_view', { mode: '3d' });
-      const roofKo = { gable: '박공지붕', flat: '평지붕', shed: '외쪽지붕' }[roof];
-      return `${r.n}동을 ${arrange === 'row' ? '일렬로' : '원형 마당(반지름 ' + (r.R / 1000).toFixed(1) + 'm) 둘레에'} 세웠습니다 — `
-        + `각 동 ${(wD / 1000).toFixed(0)}×${(dD / 1000).toFixed(0)}m · ${fl}층(${(r.H / 1000).toFixed(1)}m) · ${roofKo}`
+      const roofKo = { gable: '박공지붕', flat: '평지붕', shed: '외쪽지붕' }[spec.roof];
+      return `${r.n}동을 ${spec.arrange === 'row' ? '일렬로' : '원형 마당(반지름 ' + (r.R / 1000).toFixed(1) + 'm) 둘레에'} 세웠습니다 — `
+        + `각 동 ${(spec.w / 1000).toFixed(0)}×${(spec.d / 1000).toFixed(0)}m · ${spec.floors}층(${(r.H / 1000).toFixed(1)}m) · ${roofKo}`
         + (r.counts.window ? ' · 마당 쪽 전면 유리' : '') + '.\n'
         + '동 수·크기·지붕·배치는 같은 문장으로 다시 말하면 새로 세웁니다. (되돌리기: Ctrl+Z)';
     }
