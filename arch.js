@@ -228,5 +228,42 @@ function buildPlan(spec) {
   return { ...p, counts };
 }
 
-return { STD, roomType, PROGRAMS, programOf, planLayout, buildPlan };
+// ---------- 매스 근사 (건물 사진 → 박스 + 창) ----------
+// 사진에서 얻는 건 층수·베이수·비례뿐이다. 깊이는 사진에 없으므로 기본값(폭×0.6).
+// '정확한 복원'이 아니라 '스케일과 리듬이 맞는 매스' — 초기 검토용.
+function buildMassing(spec) {
+  const br = B(); if (!br) return null;
+  const o = Object.assign({ floors: 3, bays: 3, widthMM: 12000, depthMM: 8000, floorH: STD.ceil + 600, windows: null }, spec || {});
+  const W = Math.max(2000, Math.round(o.widthMM)), D = Math.max(2000, Math.round(o.depthMM));
+  const H = o.floors * o.floorH;
+  br.pushUndo();
+  br.ensureLayer('벽', '#cfc7ba'); br.ensureLayer('개구부', '#ff9f0a'); br.ensureLayer('슬래브', '#9aa2af');
+  const counts = { wall: 0, window: 0, slab: 0 };
+  const wall = (x1, y1, x2, y2) => {
+    const e = br.addEntity({ type: 'LINE', layer: '벽', x1, y1, x2, y2 });
+    e.bim = { kind: 'wall', h: H, t: STD.wallExt, base: 0 }; counts.wall++;
+  };
+  wall(0, 0, W, 0); wall(W, 0, W, D); wall(W, D, 0, D); wall(0, D, 0, 0);
+  // 바닥판 — 층수가 많으면 지면·지붕만 (60층에 판 61장은 검토에 도움이 안 된다)
+  const perFloor = o.floors <= 12;
+  for (let f = 0; f <= o.floors; f++) {
+    if (!perFloor && f > 0 && f < o.floors) continue;
+    const s = br.addEntity({ type: 'LWPOLYLINE', layer: '슬래브', closed: true, points: [[0, 0], [W, 0], [W, D], [0, D]] });
+    s.bim = { kind: 'slab', t: STD.slabT, top: f * o.floorH }; counts.slab++;
+  }
+  // 창 — 전면(y=0) 격자. 모서리에 너무 붙으면 건너뛴다(구조적으로도 벽이 필요).
+  for (const win of (o.windows || [])) {
+    const cw = Math.max(600, win.wFrac * W), cx = win.cx * W;
+    const wh = Math.max(600, Math.min(o.floorH * 0.7, win.hFrac * H));
+    const sill = win.floor * o.floorH + (o.floorH - wh) / 2;
+    if (cx - cw / 2 < 300 || cx + cw / 2 > W - 300) continue;
+    const e = br.addEntity({ type: 'LINE', layer: '개구부', x1: Math.round(cx - cw / 2), y1: 0, x2: Math.round(cx + cw / 2), y2: 0 });
+    e.bim = { kind: 'opening', ot: 'window', h: Math.round(wh), sill: Math.round(sill), t: STD.wallExt, wt: 'fix' };
+    counts.window++;
+  }
+  br.refresh();
+  return { W, D, H, floors: o.floors, bays: o.bays, floorH: o.floorH, counts };
+}
+
+return { STD, roomType, PROGRAMS, programOf, planLayout, buildPlan, buildMassing };
 })();

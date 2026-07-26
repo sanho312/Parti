@@ -3117,7 +3117,36 @@ function tests(){
           const op2 = ents2.find(e2 => e2.bim && e2.bim.kind === 'opening');
           ok(op2 && Math.abs(Math.hypot(op2.x2 - op2.x1, op2.y2 - op2.y1) - 1000) < 60, '  개구 폭 ≈ 실제 틈 1000mm');
           C.state.entities.length = b2;
-          // ③ 로컬 코워커: 키 없이 의도 파싱
+          // ③ 건물 사진 → 매스 근사 (층수·베이 검출 + 매싱 생성)
+          const mkFacade = (FL, BAY, fw, fh) => {
+            const cc = AD.createElement('canvas'); cc.width = 900; cc.height = 760;
+            const g3 = cc.getContext('2d');
+            g3.fillStyle = '#bcd6ee'; g3.fillRect(0, 0, 900, 760);
+            const fy = 30, gy2 = fy + fh, fx = (900 - fw) / 2;
+            g3.fillStyle = '#8a8a86'; g3.fillRect(0, gy2, 900, 760 - gy2);
+            g3.fillStyle = '#d9d5cc'; g3.fillRect(fx, fy, fw, fh);
+            g3.fillStyle = '#2b3440';
+            for (let f3 = 0; f3 < FL; f3++) for (let b3 = 0; b3 < BAY; b3++) {
+              const cw = fw / BAY, ch = fh / FL;
+              g3.fillRect(fx + b3 * cw + cw * 0.22, fy + f3 * ch + ch * 0.28, cw * 0.56, ch * 0.44);
+            }
+            return cc.toDataURL('image/png');
+          };
+          return VZ.traceFacade(mkFacade(6, 4, 640, 560), { floorH: 3000 }).then(fa => {
+            eqi(fa.floors, 6, '★건물 사진 — 층수 검출 (창 밴드 계수)');
+            eqi(fa.bays, 4, '★건물 사진 — 베이 검출');
+            eqi(fa.windows.length, 24, '  창 격자 6×4');
+            const b4 = C.state.entities.length;
+            const ms = A.buildMassing({ floors: fa.floors, bays: fa.bays, windows: fa.windows,
+              widthMM: fa.meta.widthMM, depthMM: fa.meta.depthMM, floorH: fa.meta.floorH });
+            const me = C.state.entities.slice(b4);
+            eqi(ms.H, 18000, '★매싱 높이 = 층수×층고 (6×3000)');
+            eqi(ms.counts.wall, 4, '  박스 벽 4매');
+            ok(ms.counts.window >= 12, '  전면 창 개구부 생성 (' + ms.counts.window + ')');
+            ok(C.bimSolids().filter(s3 => me.some(e3 => e3.id === s3.eid)).length > 0, '  3D 솔리드 생성');
+            C.state.entities.length = b4;
+          }).then(() => {
+          // ④ 로컬 코워커: 키 없이 의도 파싱
           const H = AW.__WEBCAD_AI_TEST__;
           if (!H || !H.localReply) { ok(true, '(로컬 봇 훅 없음)'); return null; }
           const LR = H.localReply, SKl = AW.WEBCAD_SKETCH;
@@ -3128,6 +3157,7 @@ function tests(){
             .then(() => { eqi(SKl.getParams().corner, 0.45, '★로컬 봇 — 인식 불만 → 보정값 조정 (인식 명령과 구분)'); SKl.setParams({ preset: 'basic' }); return LR('도움말'); })
             .then(r => { ok(/로컬 모드/.test(r), '  도움말 응답'); return LR('오늘 날씨 어때'); })
             .then(r => { ok(/이해하지 못했/.test(r), '  미해석은 솔직하게'); });
+          });
         }).then(finishAsync)
           .catch(e => { record(false, 'API 없는 경로 오류: ' + e.message); finishAsync(); });
       }

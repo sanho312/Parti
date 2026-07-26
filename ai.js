@@ -965,6 +965,7 @@
   const LOCAL_HELP = '지금은 **로컬 모드**입니다 — API 키 없이 건축 지식 알고리즘으로 동작합니다.\n\n'
     + '· "10평 원룸 그려줘" / "25평 투룸" / "84㎡ 쓰리룸" — 평면 자동 생성(벽·문·창·실명)\n'
     + '· 도면 이미지 첨부 후 "이 도면 따라 그려줘" — 이미지를 선으로 벡터화\n'
+    + '· 건물 사진 첨부 후 "이 건물 매스로 만들어줘" — 층수·베이를 읽어 매스 근사\n'
     + '· "인식해줘" / "건물화해줘" — 스케치를 도형·3D 건물로\n'
     + '· "벽 높이 2700" / "벽 두께 200" — 벽 속성 변경\n'
     + '· "3D 보여줘" / "평면" / "4분할" · "단면 만들어줘" / "입면"\n'
@@ -979,6 +980,21 @@
       const img = imgs[imgs.length - 1];
       lastImg = img;
       const wmm = numOf(t, /(\d{3,6})\s*mm/) || (numOf(t, /(\d+(?:\.\d+)?)\s*m\b/) || 0) * 1000 || 10000;
+      // 건물 사진(외관) → 매스 근사 / 그 외 → 평면도 벡터화
+      if (/건물|사진|외관|파사드|입면|매스|매싱|볼륨|외벽 사진/.test(t) && window.PARTI_ARCH) {
+        const fh = numOf(t, /층고\s*(\d{3,5})/) || 3000;
+        const f = await window.PARTI_VISION.traceFacade(img.dataUrl, {
+          floorH: fh, widthMM: numOf(t, /(?:폭|가로)\s*(\d+(?:\.\d+)?)\s*m/) * 1000 || null,
+          depthMM: numOf(t, /(?:깊이|안길이|세로)\s*(\d+(?:\.\d+)?)\s*m/) * 1000 || null,
+        });
+        const m = window.PARTI_ARCH.buildMassing({ floors: f.floors, bays: f.bays, windows: f.windows,
+          widthMM: f.meta.widthMM, depthMM: f.meta.depthMM, floorH: f.meta.floorH });
+        execTool('set_view', { mode: '3d' });
+        return `건물 사진에서 매스를 세웠습니다 — **${f.floors}층 · ${f.bays}베이**, `
+          + `${(m.W / 1000).toFixed(1)}×${(m.D / 1000).toFixed(1)}×${(m.H / 1000).toFixed(1)}m (창 ${m.counts.window}개)\n`
+          + `사진에는 깊이 정보가 없어 안길이는 폭의 0.6배로 잡았습니다 — "깊이 12m" 처럼 알려주시면 다시 세웁니다.\n`
+          + `층고는 ${f.meta.floorH}mm 가정입니다. 정확한 복원이 아니라 **초기 검토용 매스**예요.`;
+      }
       const r = await window.PARTI_VISION.traceImage(img.dataUrl, { widthMM: wmm });
       if (!r.strokes.length) return '이미지에서 선을 찾지 못했습니다. 선이 뚜렷한 평면도(흑백 도면)일수록 잘 읽힙니다. 사진이라면 밝기·대비를 올려 다시 시도해 보세요.';
       if (SKm && SKm.importStrokes) {

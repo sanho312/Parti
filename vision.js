@@ -234,5 +234,166 @@ async function traceImage(src, opts) {
   };
 }
 
-return { traceImage, _internal: { binarize, extractLines, mergeCollinear, pairWalls } };
+/* ------------------------------------------------------------
+   건물 사진 → 매스 근사 (traceFacade)
+   ------------------------------------------------------------
+   단일 사진에서 3D 를 '복원'하는 건 알고리즘만으로 불가능하다. 대신 파사드에서
+   가장 확실한 신호인 '창 격자의 주기성'을 읽어 층수·베이수·비례를 얻고, 그것으로
+   매스(박스 + 창 개구부)를 세운다. 깊이는 사진에 없는 정보 → 기본값(폭의 0.6배).
+     ① 그레이 → 그래디언트(|dx|,|dy|)
+     ② 에너지 프로파일로 파사드 영역 추정 (하늘·바닥은 매끈해서 자연 탈락)
+     ③ 세로/가로 엣지 프로파일의 피크 → 창틀·층선. 피크 간격의 중앙값 = 주기
+     ④ 층수 = 높이/세로주기, 베이수 = 폭/가로주기 → 격자 칸마다 창 사각
+   ------------------------------------------------------------ */
+function gradients(ctx, w, h) {
+  const d = ctx.getImageData(0, 0, w, h).data;
+  const gray = new Float32Array(w * h);
+  for (let i = 0, p = 0; i < d.length; i += 4, p++)
+    gray[p] = (d[i] * 299 + d[i + 1] * 587 + d[i + 2] * 114) / 1000;
+  const gx = new Float32Array(w * h), gy = new Float32Array(w * h);
+  for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+    const p = y * w + x;
+    gx[p] = Math.abs(gray[p + 1] - gray[p - 1]);
+    gy[p] = Math.abs(gray[p + w] - gray[p - w]);
+  }
+  return { gx, gy, gray };
+}
+// 프로파일 피크 — 임계 이상 + 최소 간격 비최대 억제
+function peaksOf(prof, minGap, relThr) {
+  const n = prof.length;
+  let mx = 0; for (let i = 0; i < n; i++) if (prof[i] > mx) mx = prof[i];
+  if (mx <= 0) return [];
+  const thr = mx * (relThr || 0.32);
+  const cand = [];
+  for (let i = 1; i < n - 1; i++)
+    if (prof[i] >= thr && prof[i] >= prof[i - 1] && prof[i] >= prof[i + 1]) cand.push(i);
+  cand.sort((a, b) => prof[b] - prof[a]);
+  const kept = [];
+  for (const c of cand) if (!kept.some(k => Math.abs(k - c) < minGap)) kept.push(c);
+  return kept.sort((a, b) => a - b);
+}
+const median = (a) => { if (!a.length) return 0; const s = a.slice().sort((p, q) => p - q); return s[s.length >> 1]; };
+// 기본 주기 — 자기상관. ★피크 간격의 중앙값을 쓰면 창 하나가 좌·우 엣지 2개를 만들어
+//   주기가 절반으로 잡힌다(4층이 8층으로). 자기상관은 엣지 개수와 무관하게 반복 간격을 본다.
+//   전역 최대는 주기의 배수에 걸릴 수 있으므로 '충분히 큰 첫 극대'를 기본 주기로 택한다.
+function periodOf(prof, minLag, maxLag) {
+  const n = prof.length;
+  if (n < 8) return 0;
+  let mean = 0; for (let i = 0; i < n; i++) mean += prof[i];
+  mean /= n;
+  const a = new Float32Array(n);
+  for (let i = 0; i < n; i++) a[i] = prof[i] - mean;
+  const lo = Math.max(2, Math.round(minLag)), hi = Math.min(n - 2, Math.round(maxLag));
+  if (hi <= lo) return 0;
+  const ac = new Float32Array(hi + 1);
+  let gmax = 0;
+  for (let lag = lo; lag <= hi; lag++) {
+    let s = 0, c = 0;
+    for (let i = 0; i + lag < n; i++) { s += a[i] * a[i + lag]; c++; }
+    ac[lag] = c ? s / c : 0;
+    if (ac[lag] > gmax) gmax = ac[lag];
+  }
+  if (gmax <= 0) return 0;
+  for (let lag = lo + 1; lag < hi; lag++)
+    if (ac[lag] >= gmax * 0.72 && ac[lag] >= ac[lag - 1] && ac[lag] >= ac[lag + 1]) return lag;
+  return 0;
+}
+// 에너지가 몰린 연속 구간 = 파사드 (하늘·아스팔트는 그래디언트가 낮다)
+function span(prof, relThr) {
+  const n = prof.length;
+  let mx = 0; for (let i = 0; i < n; i++) if (prof[i] > mx) mx = prof[i];
+  const thr = mx * (relThr || 0.18);
+  let a = 0, b = n - 1;
+  while (a < n - 1 && prof[a] < thr) a++;
+  while (b > a && prof[b] < thr) b--;
+  return [a, b];
+}
+// 파사드 안에서 '창' 클래스 판별 — Otsu 로 두 무리로 가르고, 면적이 적은 쪽을 창으로 본다
+// (창은 보통 벽면보다 좁다. 어두운 유리든 반사로 밝든 이 규칙이 둘 다 잡는다)
+function windowMask(gray, w, h, x0, y0, x1, y1) {
+  const hist = new Uint32Array(256);
+  const total = (x1 - x0 + 1) * (y1 - y0 + 1);
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) hist[gray[y * w + x] | 0]++;
+  let sum = 0; for (let i = 0; i < 256; i++) sum += i * hist[i];
+  let sumB = 0, wB = 0, best = 0, thr = 128;
+  for (let t = 0; t < 256; t++) {
+    wB += hist[t]; if (!wB) continue;
+    const wF = total - wB; if (!wF) break;
+    sumB += t * hist[t];
+    const mB = sumB / wB, mF = (sum - sumB) / wF;
+    const v = wB * wF * (mB - mF) * (mB - mF);
+    if (v > best) { best = v; thr = t; }
+  }
+  let dark = 0; for (let t = 0; t <= thr; t++) dark += hist[t];
+  return { thr, darkIsWindow: dark <= total / 2 };
+}
+// 임계 이상인 연속 구간(밴드) 목록 — 창이 놓인 줄/칸을 그대로 센다
+function bandsOf(prof, relThr) {
+  const n = prof.length;
+  let mx = 0; for (let i = 0; i < n; i++) if (prof[i] > mx) mx = prof[i];
+  if (mx <= 0) return [];
+  const thr = mx * (relThr || 0.3), minLen = Math.max(2, Math.round(n * 0.02));
+  const out = []; let s = -1;
+  for (let i = 0; i < n; i++) {
+    if (prof[i] >= thr) { if (s < 0) s = i; }
+    else { if (s >= 0 && i - s >= minLen) out.push([s, i - 1]); s = -1; }
+  }
+  if (s >= 0 && n - s >= minLen) out.push([s, n - 1]);
+  return out;
+}
+async function traceFacade(src, opts) {
+  const o = Object.assign({ maxSide: 900, floorH: 3000, widthMM: null, depthMM: null }, opts || {});
+  const im = await loadImage(src);
+  const { ctx, w, h } = toCanvas(im, o.maxSide);
+  const { gx, gy, gray } = gradients(ctx, w, h);   // gray = 창 마스크 판별에 쓴다
+  // 열/행 에너지 (세로선은 gx 가, 가로선은 gy 가 크다)
+  const colV = new Float32Array(w), rowH = new Float32Array(h);
+  const colAll = new Float32Array(w), rowAll = new Float32Array(h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const p = y * w + x;
+    colV[x] += gx[p]; rowH[y] += gy[p];
+    colAll[x] += gx[p] + gy[p]; rowAll[y] += gx[p] + gy[p];
+  }
+  // 파사드 경계 — 임계가 높으면 위·아래 층이 잘려 층수가 모자란다(12층이 10층으로).
+  // 낮은 임계로 넓게 잡고, 창 밴드 계수가 실제 층수를 결정하게 둔다.
+  const [x0, x1] = span(colAll, 0.08), [y0, y1] = span(rowAll, 0.08);
+  const fw = Math.max(8, x1 - x0), fh = Math.max(8, y1 - y0);
+  // ── 창을 '덩어리(밴드)'로 직접 센다 ──
+  // ★엣지 주기(자기상관)는 창 높이가 층고의 절반일 때 반주기에 갇혀 층수가 2배로 나온다
+  //   (실측으로 확인). 창 픽셀 마스크의 연속 구간을 세면 엣지 개수와 무관하게 정확하다.
+  const wm = windowMask(gray, w, h, x0, y0, x1, y1);
+  const rowW = new Float32Array(fh + 1), colW = new Float32Array(fw + 1);
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+    // ★히스토그램은 |0 으로 양자화해 임계를 잡았으므로 비교도 같은 양자화로 해야 한다.
+    //   실수 그대로 비교하면 창 픽셀(50.7)이 임계(50)를 벗어나 마스크가 통째로 비어버린다.
+    const g2 = gray[y * w + x] | 0;
+    const isWin = wm.darkIsWindow ? (g2 <= wm.thr) : (g2 > wm.thr);
+    if (isWin) { rowW[y - y0]++; colW[x - x0]++; }
+  }
+  let rb = bandsOf(rowW, 0.3), cb = bandsOf(colW, 0.3);
+  // 밴드가 안 잡히면(민무늬 파사드) 엣지 주기로 후퇴
+  const cv2 = colV.slice(x0, x1 + 1), rv2 = rowH.slice(y0, y1 + 1);
+  if (rb.length < 1) { const p = periodOf(rv2, fh * 0.06, fh / 2) || fh; rb = []; for (let i = 0; i < Math.round(fh / p); i++) rb.push([i * p + p * 0.25, i * p + p * 0.75]); }
+  if (cb.length < 1) { const p = periodOf(cv2, fw * 0.06, fw / 2) || fw; cb = []; for (let i = 0; i < Math.round(fw / p); i++) cb.push([i * p + p * 0.25, i * p + p * 0.75]); }
+  const floors = Math.max(1, Math.min(60, rb.length));
+  const bays = Math.max(1, Math.min(30, cb.length));
+  const perX = bays > 1 ? fw / bays : fw, perY = floors > 1 ? fh / floors : fh;
+  // 창 사각 — 실제 검출된 밴드 위치·크기 그대로. 이미지 위쪽이 최상층이므로 층 번호를 뒤집는다.
+  const windows = [];
+  for (let ri = 0; ri < rb.length; ri++) for (let ci = 0; ci < cb.length; ci++) {
+    const [ra, rbb] = rb[ri], [ca, cbb] = cb[ci];
+    windows.push({ floor: rb.length - 1 - ri, bay: ci,
+      cx: ((ca + cbb) / 2) / fw, cy: 1 - ((ra + rbb) / 2) / fh,
+      wFrac: Math.max(0.02, (cbb - ca) / fw), hFrac: Math.max(0.02, (rbb - ra) / fh) });
+  }
+  const aspect = fw / fh;
+  const heightMM = floors * o.floorH;
+  const widthMM = o.widthMM || Math.round(heightMM * aspect / 100) * 100;
+  const depthMM = o.depthMM || Math.max(4000, Math.round(widthMM * 0.6 / 100) * 100);
+  return { floors, bays, aspect: +aspect.toFixed(2), windows,
+    meta: { imgW: im.width, imgH: im.height, facadePx: { x0, y0, x1, y1 }, periodPx: { x: +perX.toFixed(1), y: +perY.toFixed(1) },
+      floorH: o.floorH, widthMM, depthMM, heightMM } };
+}
+
+return { traceImage, traceFacade, _internal: { binarize, extractLines, mergeCollinear, pairWalls, peaksOf, span, gradients, periodOf, bandsOf, windowMask } };
 })();
