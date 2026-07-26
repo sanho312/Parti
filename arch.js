@@ -299,16 +299,20 @@ function buildComplex(spec) {
   // 동별 폭·지붕 높이 — 스케치에서 읽은 비율이 있으면 그대로, 없으면 균일
   const ml = (o.massList && o.massList.length === n) ? o.massList : null;
   const hMax = ml ? Math.max.apply(null, ml.map(m => m.hFrac || 1)) || 1 : 1;
-  const Ws = [], pitches = [];
+  const Ws = [], pitches = [], Hs = [];
   for (let i = 0; i < n; i++) {
     const wf = ml ? (ml[i].wFrac || 1 / n) * n : 1;
     Ws.push(Math.max(3000, Math.round(o.w * Math.min(2.2, Math.max(0.45, wf)))));
     const hf = ml ? (ml[i].hFrac || 1) / hMax : 1;
-    // 물매를 스케치의 봉우리 높이 비율로 정하되 4:12~9:12 안에 가둔다
-    pitches.push(0.40 + 0.30 * hf);
+    // 물매 — 스케치의 봉우리 높이 비율로. 급경사 상한 12:12(45°)까지 허용한다:
+    // 4:12~9:12 는 아스팔트 싱글 주거 기준이고, 이런 유리·금속 파빌리온은 더 가파르다.
+    pitches.push(0.50 + 0.50 * hf);
+    // ★처마 높이도 동마다 다르게 — 같으면 지붕이 하나로 이어져 '부채 지붕' 한 덩어리로 읽힌다.
+    //   스케치는 높이가 제각각인 개별 파빌리온이다.
+    Hs.push(Math.round(H * (0.82 + 0.36 * hf)));
   }
   // 용마루 높이 — 비대칭 박공은 두 면의 물매가 다르다. 급한 쪽(짧은 run = min(rF,1-rF))을
-  // 기준으로 잡아야 두 면 모두 4:12~9:12 안에 들어온다. (긴 쪽만 보면 급한 쪽이 규범을 넘는다)
+  // 기준으로 잡아야 두 면 모두 규범 범위에 들어온다. (긴 쪽만 보면 급한 쪽이 상한을 넘는다)
   const riseOf = (i, span) => Math.round(Math.max(600, span * Math.min(RIDGE_F, 1 - RIDGE_F) * pitches[i]));
   const gap = o.attached ? 0 : Math.round(o.w * 0.45);
   const L = Ws.reduce((a, v) => a + v, 0) + gap * (n - 1);   // 늘어선 전체 길이
@@ -325,7 +329,7 @@ function buildComplex(spec) {
     e.bim = bim; return e;
   };
   // 앞면 커튼월 — 멀리언로 나뉜 유리 패널. 가운데 동 한가운데 패널은 출입문.
-  const curtain = (FL, FR, isEntry) => {
+  const curtain = (FL, FR, isEntry, Hc) => {
     const chord = Math.hypot(FR[0] - FL[0], FR[1] - FL[1]);
     const m = PARTY / 2 + 250;                    // 측벽을 침범하지 않도록 양끝 여유
     const span = chord - m * 2; if (span < 900) return;
@@ -340,7 +344,7 @@ function buildComplex(spec) {
         x1: Math.round(FL[0] + ux * s0), y1: Math.round(FL[1] + uy * s0),
         x2: Math.round(FL[0] + ux * (s0 + pw)), y2: Math.round(FL[1] + uy * (s0 + pw)) });
       if (k === dIdx) { e.bim = { kind: 'opening', ot: 'door', wt: 'single', h: 2100, sill: 0, t: STD.wallExt }; counts.door++; }
-      else { e.bim = { kind: 'opening', ot: 'window', wt: 'fix', h: H - 400, sill: 150, t: STD.wallExt }; counts.window++; }
+      else { e.bim = { kind: 'opening', ot: 'window', wt: 'fix', h: (Hc || H) - 400, sill: 150, t: STD.wallExt }; counts.window++; }
     }
   };
 
@@ -373,16 +377,16 @@ function buildComplex(spec) {
       const FL = PT(aL, r0), FR = PT(aR, r0), BR = PT(aR, r1), BL = PT(aL, r1);
       const chord = Math.hypot(FR[0] - FL[0], FR[1] - FL[1]);
       const rise = riseOf(i, chord);          // 용마루는 방사 방향 → 스팬은 앞면 폭
+      const Hi = Hs[i];                       // 이 동의 처마 높이 (동마다 다르다)
       // 벽 — 앞/뒤는 각 동마다, 측벽은 이웃과 공유하므로 한 번만 만든다(중복 벽 금지).
-      // 이웃과 맞닿는 측벽은 방화벽 → 지붕면(=이 선에서는 처마 높이) 위로 500 솟는다.
+      // 이웃과 맞닿는 측벽은 방화벽 → 두 동 중 높은 처마 위로 500 솟는다.
       const shared = gap === 0 && i < n - 1;
-      wall(FL, FR); wall(BR, BL);
-      if (i === 0 || gap > 0) wall(BL, FL, PARTY);
-      wall(FR, BR, PARTY, shared ? H + FIREW : H);
+      wall(FL, FR, STD.wallExt, Hi); wall(BR, BL, STD.wallExt, Hi);
+      if (i === 0 || gap > 0) wall(BL, FL, PARTY, Hi);
+      wall(FR, BR, PARTY, shared ? Math.max(Hi, Hs[i + 1]) + FIREW : Hi);
       poly([FL, FR, BR, BL], '바닥', { kind: 'slab', t: STD.slabT, top: 0 }); counts.slab++;
       // 지붕 — 처마는 앞뒤로만. 측면은 이웃과 맞닿으므로 내밀면 지붕끼리 겹친다.
       if (o.roof && o.roof !== 'none') {
-        // 처마측(양 끝동 바깥)만 내밀고, 이웃과 닿는 쪽은 0 — 내밀면 지붕끼리 겹친다.
         const sgn = aL >= aR ? 1 : -1;               // 바깥쪽으로 내밀도록 부호를 맞춘다
         const oL = aL + sgn * ((i === 0 || gap > 0) ? dth : 0);
         const oR = aR - sgn * ((i === n - 1 || gap > 0) ? dth : 0);
@@ -391,17 +395,17 @@ function buildComplex(spec) {
         //   벽 현으로 재면 처마만큼 어긋나 폭≈깊이 조합에서 용마루가 90° 돌아간다.
         const cF = Math.hypot(RP[1][0] - RP[0][0], RP[1][1] - RP[0][1]);
         const cR = Math.hypot(RP[2][0] - RP[1][0], RP[2][1] - RP[1][1]);
-        poly(RP, '지붕', { kind: 'roof', rtype: o.roof, eave: H, rise, ridgeF: RIDGE_F,
+        poly(RP, '지붕', { kind: 'roof', rtype: o.roof, eave: Hi, rise, ridgeF: RIDGE_F,
           rdir: cF >= cR ? 'short' : undefined });   // 용마루는 항상 방사(앞뒤) 방향
         counts.roof++;
       }
       // 박공면 — 마당 쪽은 유리(통유리 박공), 뒤쪽은 벽. 지붕과 같은 프로필의 얇은 띠.
       if (o.roof === 'gable') {
-        const prof = { kind: 'roof', rtype: 'gable', eave: H, rise, ridgeF: RIDGE_F, rdir: 'short' };
+        const prof = { kind: 'roof', rtype: 'gable', eave: Hi, rise, ridgeF: RIDGE_F, rdir: 'short' };
         poly([PT(aL, r0), PT(aR, r0), PT(aR, r0 + 240), PT(aL, r0 + 240)], o.glass ? '유리' : '벽', prof);
         poly([PT(aL, r1 - 240), PT(aR, r1 - 240), PT(aR, r1), PT(aL, r1)], '벽', prof);
       }
-      if (o.glass) curtain(FL, FR, i === mid);
+      if (o.glass) curtain(FL, FR, i === mid, Hi);
       // 처마돌림(fascia) — 처마 끝을 마감하는 띠. 얇은 벽으로 표현하면 3D 에서 지붕 가장자리가
       // '두께 있는 면'으로 보여 종잇장 같지 않다. 앞/뒤 처마선에만.
       const sgn2 = aL >= aR ? 1 : -1;
@@ -411,7 +415,7 @@ function buildComplex(spec) {
         const fa = br.addEntity({ type: 'LINE', layer: '지붕',
           x1: Math.round(PT(fL, rr)[0]), y1: Math.round(PT(fL, rr)[1]),
           x2: Math.round(PT(fR, rr)[0]), y2: Math.round(PT(fR, rr)[1]) });
-        fa.bim = { kind: 'wall', h: 260, t: 120, base: H - 60 };
+        fa.bim = { kind: 'wall', h: 260, t: 120, base: Hi - 60 };
       }
       const cM = PT((aL + aR) / 2, rm);
       br.addEntity({ type: 'TEXT', layer: '문자', x: Math.round(cM[0]), y: Math.round(cM[1]), h: 400, text: (i + 1) + '동' });
@@ -425,7 +429,7 @@ function buildComplex(spec) {
       for (let k = 1; k < n; k++) {
         const ak = bays[k][0];                               // 이웃과 공유하는 경계각
         poly([PT(ak - gwA, r0 - RAKE), PT(ak + gwA, r0 - RAKE), PT(ak + gwA, r1), PT(ak - gwA, r1)],
-          '홈통', { kind: 'roof', rtype: 'shed', eave: H - 300, rise: Math.round((o.d + RAKE) / 300) });
+          '홈통', { kind: 'roof', rtype: 'shed', eave: Math.min(Hs[k - 1], Hs[k]) - 300, rise: Math.round((o.d + RAKE) / 300) });
       }
     }
     // 기단 — 건물군 외곽을 300 내밀어 한 장으로 (건물이 땅에 앉은 느낌)

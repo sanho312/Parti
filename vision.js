@@ -368,12 +368,18 @@ async function traceConcept(src, opts) {
     // 건물 = 종이보다 어두운 자국 또는 파란 유리. 초록(조경)은 제외.
     if (!isGreen && (lum[p] < inkThr || isBlue)) bldg[p] = 1;
   }
+  // ★높이의 기준선은 '이미지 바닥'이 아니라 '건물이 앉은 지면선'이어야 한다.
+  //   이미지 바닥부터 재면 건물 아래 여백까지 높이에 들어가 층수가 통째로 과대 추정된다(실측).
+  let baseY = 0;
+  for (let y = h - 1; y >= 0; y--) { let any = false;
+    for (let x = 0; x < w; x += 2) if (bldg[y * w + x]) { any = true; break; }
+    if (any) { baseY = y; break; } }
   // 실루엣 상단선 — 열마다 가장 위쪽 건물 픽셀. 없으면 높이 0.
   const raw = new Float32Array(w);
   for (let x = 0; x < w; x++) {
     let top = -1;
     for (let y = 0; y < h; y++) if (bldg[y * w + x]) { top = y; break; }
-    raw[x] = top < 0 ? 0 : (h - top);
+    raw[x] = top < 0 ? 0 : Math.max(0, baseY - top);
   }
   // 이동평균 — 손그림 떨림·해칭 제거
   const k = Math.max(2, Math.round(w / 90)), prof = new Float32Array(w);
@@ -421,28 +427,101 @@ async function traceConcept(src, opts) {
       return { wFrac: Math.max(0.02, (bounds[i + 1] - bounds[i]) / bw), hFrac: maxH > 0 ? +(hh / maxH).toFixed(3) : 1 };
     });
   }
+  // ── 떨어져 있는 동은 '연결 성분'으로 센다 ──
+  // ★1차원 실루엣은 링/군집 배치에서 앞뒤로 겹친 동을 하나로 본다(실측: 5동이 4동).
+  //   서로 떨어진 덩어리 개수가 실루엣보다 많으면 그쪽이 진실이다.
+  //   (붙어 있는 연립은 덩어리가 1개라 이 보정이 발동하지 않는다 — 그때는 실루엣이 옳다)
+  let comps = 0;
+  {
+    const sw = Math.max(8, w >> 1), sh = Math.max(8, h >> 1);
+    // ★2×2 블록을 OR 로 모은다. 한 픽셀만 뽑으면 1~2px 얇은 손그림 선이 끊겨
+    //   윤곽이 조각나고 덩어리 수가 부풀려진다(실측: 5동이 6동).
+    const m = new Uint8Array(sw * sh);
+    for (let y = 0; y < h; y++) { const yy = (y >> 1) * sw;
+      for (let x = 0; x < w; x++) if (bldg[y * w + x]) m[yy + (x >> 1)] = 1; }
+    // 한 번 팽창 — 붓 끊김·해칭 틈을 메워 같은 건물이 갈라지지 않게
+    const dl = m.slice();
+    for (let y = 1; y < sh - 1; y++) for (let x = 1; x < sw - 1; x++) {
+      const p2 = y * sw + x;
+      if (m[p2] || m[p2 - 1] || m[p2 + 1] || m[p2 - sw] || m[p2 + sw]) dl[p2] = 1;
+    }
+    m.set(dl);
+    const seen = new Uint8Array(sw * sh), st = new Int32Array(sw * sh);
+    const minA = sw * sh * 0.004;
+    for (let p = 0; p < m.length; p++) {
+      if (!m[p] || seen[p]) continue;
+      let top = 0, area = 0; st[top++] = p; seen[p] = 1;
+      while (top) {
+        const q = st[--top]; area++;
+        const qx = q % sw, qy = (q / sw) | 0;
+        if (qx > 0 && m[q - 1] && !seen[q - 1]) { seen[q - 1] = 1; st[top++] = q - 1; }
+        if (qx < sw - 1 && m[q + 1] && !seen[q + 1]) { seen[q + 1] = 1; st[top++] = q + 1; }
+        if (qy > 0 && m[q - sw] && !seen[q - sw]) { seen[q - sw] = 1; st[top++] = q - sw; }
+        if (qy < sh - 1 && m[q + sw] && !seen[q + sw]) { seen[q + sw] = 1; st[top++] = q + sw; }
+      }
+      if (area >= minA) comps++;
+    }
+  }
+  // ※comps 로 동 수를 덮어쓰지 않는다 — 실측 결과 유리면과 윤곽선이 따로 세어져(동당 2개)
+  //   오히려 부풀렸다. 진단값으로만 남기고, 동 수는 실루엣 봉우리·유리 군집으로 판단한다.
   const masses = Math.max(1, Math.min(12, massList.length));
+  // ── 지붕형: 봉우리가 '뾰족한가(박공)' vs '평평한가(평지붕)' ──
+  // ★돌출도만 보면 상자들 사이 단차도 큰 돌출로 잡혀 평지붕이 박공이 된다(실측).
+  //   봉우리 근처가 고원(plateau)처럼 평평하면 평지붕이다.
+  let plateau = 0;
+  for (let i = 0; i < massList.length; i++) {
+    const a1 = Math.max(0, Math.round(bounds[i])), b1 = Math.min(w - 1, Math.round(bounds[i + 1]));
+    let hm = 0; for (let x = a1; x <= b1; x++) if (prof[x] > hm) hm = prof[x];
+    let flatN = 0, tot = 0;
+    for (let x = a1; x <= b1; x++) { tot++; if (prof[x] >= hm * 0.93) flatN++; }
+    plateau += tot ? flatN / tot : 0;
+  }
+  plateau /= Math.max(1, massList.length);
+  // ── 층수: 지붕이 아니라 '처마 높이 / 폭' 으로 ──
+  // 실루엣 전체 높이를 쓰면 급경사 지붕 때문에 1층 파빌리온도 2~3층으로 나온다.
+  // 매스 경계(=박공 골)의 높이가 곧 처마 높이다.
+  let eaveRatio = 0;
+  for (let i = 0; i < massList.length; i++) {
+    const wd = Math.max(1, bounds[i + 1] - bounds[i]);
+    // ★경계 픽셀을 그대로 읽으면 떨어져 있는 동에서 '틈'을 읽어 처마가 과소평가된다.
+    //   매스 안쪽으로 8% 들어간 지점에서 잰다.
+    const e0 = prof[Math.max(0, Math.round(bounds[i] + wd * 0.08))];
+    const e1 = prof[Math.min(w - 1, Math.round(bounds[i + 1] - wd * 0.08))];
+    eaveRatio += Math.max(e0, e1) / wd;
+  }
+  eaveRatio /= Math.max(1, massList.length);
+  const floors = Math.max(1, Math.min(3, Math.round(eaveRatio / 0.42)));
   // 붙어 있는가 — 골이 충분히 높으면 한 덩어리로 이어진 동들이다
   const attachedN = valleys.filter(v => v.lo > 0 && v.v / v.lo >= 0.35).length;
   const attached = valleys.length ? attachedN >= valleys.length / 2 : false;
 
-  // 마당 위치 — 건물 무리보다 아래(앞)에 있으면 '앞마당', 가운데에 안기면 '중정'
+  // 마당 위치 — 건물이 마당을 '둘러쌌는가(중정)' vs '뒤에만 있는가(앞마당)'
+  // ★중심 y 비교만으로는 링 배치가 앞마당으로 오판된다(실측). 마당 x 범위 안에서
+  //   마당보다 '아래쪽'에도 건물이 있으면 둘러싼 것 = 중정.
   const gW = gMaxX - gMinX, gcy = green ? gSumY / green : 0;
   let bTop = h, bBot = 0;
-  for (let x = xa; x <= xb; x++) if (prof[x] > lowThr) { const ty = h - prof[x]; if (ty < bTop) bTop = ty; }
+  for (let x = xa; x <= xb; x++) if (prof[x] > lowThr) { const ty = baseY - prof[x]; if (ty < bTop) bTop = ty; }
   for (let y = h - 1; y >= 0; y--) { let any = false; for (let x = xa; x <= xb; x += 3) if (bldg[y * w + x]) { any = true; break; } if (any) { bBot = y; break; } }
   const hasCourt = greenR > 0.012 && gW > w * 0.2;
-  const courtFront = hasCourt && gcy > (bTop + bBot) / 2;
+  // ★마당 x 범위 안만 보면 링 배치를 놓친다(아래쪽 동이 좌우로 벌어져 있으면 범위 밖).
+  //   화면 전체에서 '마당보다 아래에 있는 건물 픽셀 비율'로 판정한다.
+  let below = 0, bAll = 0;
+  if (hasCourt) for (let y = 0; y < h; y++) for (let x = 0; x < w; x += 2)
+    if (bldg[y * w + x]) { bAll++; if (y > gcy + 8) below++; }
+  const enclosed = hasCourt && bAll > 0 && below / bAll > 0.15;   // 마당 아래에도 건물이 상당량
+  const courtFront = hasCourt && !enclosed;
   return {
-    masses, massList, attached,
-    roof: (maxH > 0 && promAvg / maxH > 0.1) ? 'gable' : 'flat',
+    masses, massList, attached, floors,
+    // 고원 비율이 크면 평지붕. 뾰족한 봉우리라야 박공이다.
+    roof: (plateau < 0.42 && maxH > 0 && promAvg / maxH > 0.08) ? 'gable' : 'flat',
     // 앞마당이면 '부채꼴로 늘어서고 마당은 그 앞' — 마당을 빙 두르는 링이 아니다.
-    arrange: courtFront ? 'arc' : hasCourt ? 'circle' : 'row',
+    arrange: courtFront ? 'arc' : enclosed ? 'circle' : 'row',
     glass: blueR > 0.008,
     peaks: peaks.map(p => Math.round(p.i)),
     meta: { w, h, maxH: Math.round(maxH), promAvg: +promAvg.toFixed(1), inkThr,
       greenRatio: +greenR.toFixed(3), blueRatio: +blueR.toFixed(3),
-      courtyard: hasCourt, courtFront, attached, bTop, bBot, gcy: Math.round(gcy) },
+      courtyard: hasCourt, courtFront, enclosed, attached, bTop, bBot, baseY,
+      plateau: +plateau.toFixed(2), eaveRatio: +eaveRatio.toFixed(2), comps, gcy: Math.round(gcy) },
   };
 }
 

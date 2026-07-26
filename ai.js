@@ -1076,8 +1076,12 @@
             continue;
           }
         }
-        // 도면이 아니다 → 정면 사진처럼 창 격자가 또렷하면 파사드 매싱
-        if (window.PARTI_ARCH && (orthoish || forceMass)) {
+        // 도면이 아니다 → 정면 사진처럼 창 격자가 또렷하면 파사드 매싱.
+        // ★단, 마당을 낀 여러 동이 읽히면 그건 '한 덩어리 파사드'가 아니라 배치 스케치다.
+        //   (평지붕 4동 + 앞마당이 파사드 격자로 잡혀 한 채로 뭉치던 문제 — 실측)
+        const pre = await V.traceConcept(img.dataUrl).catch(() => null);
+        const isComplex = pre && pre.masses >= 2 && pre.meta.courtyard;
+        if (window.PARTI_ARCH && (orthoish || forceMass) && !isComplex) {
           const f = await V.traceFacade(img.dataUrl, { floorH: fh,
             depthMM: numOf(t, /(?:깊이|안길이)\s*(\d+(?:\.\d+)?)\s*m/) * 1000 || null });
           if (forceMass || (f.meta.conf || 0) >= 0.45) {
@@ -1092,9 +1096,9 @@
         //   예전엔 여기서 포기하고 되물었지만, 그러면 이미지 한 장으로 아무것도 못 만든다.
         //   구성(동 수·지붕·배치·유리)만 읽어 일단 세우고, 한 문장으로 고치게 한다.
         if (!window.PARTI_ARCH) continue;
-        const c = await V.traceConcept(img.dataUrl);
+        const c = pre || await V.traceConcept(img.dataUrl);
         const spec = {
-          count: exp.count || c.masses, floors: exp.floors || 1,
+          count: exp.count || c.masses, floors: exp.floors || c.floors || 1,
           w: exp.w || 8000, d: exp.d || 12000,
           roof: exp.roof || c.roof, arrange: exp.arrange || c.arrange,
           glass: exp.glass != null ? exp.glass : c.glass, floorH: fh,

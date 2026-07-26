@@ -3171,9 +3171,44 @@ function tests(){
                 eqi(cc2.roof, 'gable', '  뾰족한 봉우리 → 박공지붕');
                 // 마당이 건물 무리보다 '앞'에 있으면 부채꼴 배치 — 마당을 빙 두르는 링이 아니다
                 eqi(cc2.arrange, 'arc', '★마당이 앞에 있으면 부채꼴 배치 (링 아님)');
+                eqi(cc2.floors, 1, '★층수는 실루엣이 아니라 처마 높이/폭 으로 (급경사 지붕에 속지 않음)');
                 ok(cc2.glass, '  파란 면 → 유리');
                 ok(cc2.massList.length === cc2.masses, '  동별 폭·높이 비율을 읽는다');
                 ok(cc2.attached, '  붙어 있는 덩어리로 인식');
+                // ★평지붕 군을 박공으로 오판하지 않는가 — 봉우리 근처가 고원이면 평지붕
+                const cvF = AD.createElement('canvas'); cvF.width = 760; cvF.height = 360;
+                const gF = cvF.getContext('2d');
+                gF.fillStyle = '#efeade'; gF.fillRect(0, 0, 760, 360);
+                for (let i9 = 0, x9 = 60; i9 < 4; i9++, x9 += 150) {
+                  gF.fillStyle = '#fcfaf5'; gF.fillRect(x9, 155, 150, 95);
+                  gF.strokeStyle = '#2f2f2d'; gF.lineWidth = 1.8; gF.strokeRect(x9, 155, 150, 95);
+                  gF.fillStyle = 'rgba(120,163,208,0.75)'; gF.fillRect(x9 + 14, 172, 122, 58);
+                }
+                gF.fillStyle = 'rgba(126,186,88,0.8)'; gF.beginPath(); gF.ellipse(370, 312, 150, 32, 0, 0, 7); gF.fill();
+                return VZ.traceConcept(cvF.toDataURL('image/png')).then(cf9 => {
+                  eqi(cf9.roof, 'flat', '★평지붕 판별 — 상자 군을 박공으로 오판하지 않는다');
+                  eqi(cf9.masses, 4, '  평지붕 4동 계수');
+                });
+              }).then(() => {
+                // ★마당을 둘러싼 링 배치는 '앞마당'이 아니다 — 마당 아래에도 건물이 있으면 중정
+                const cvR = AD.createElement('canvas'); cvR.width = 740; cvR.height = 420;
+                const gR = cvR.getContext('2d');
+                gR.fillStyle = '#f0ebe0'; gR.fillRect(0, 0, 740, 420);
+                gR.fillStyle = 'rgba(126,186,88,0.85)'; gR.beginPath(); gR.ellipse(370, 215, 120, 60, 0, 0, 7); gR.fill();
+                const putR = (cx9, cy9, wd9, ht9) => {
+                  gR.fillStyle = '#fcfaf5'; gR.beginPath(); gR.moveTo(cx9 - wd9 / 2, cy9);
+                  gR.lineTo(cx9 - wd9 / 2, cy9 - ht9 * 0.55); gR.lineTo(cx9, cy9 - ht9);
+                  gR.lineTo(cx9 + wd9 / 2, cy9 - ht9 * 0.55); gR.lineTo(cx9 + wd9 / 2, cy9);
+                  gR.closePath(); gR.fill(); gR.strokeStyle = '#2f2f2d'; gR.lineWidth = 1.6; gR.stroke();
+                  gR.fillStyle = 'rgba(120,163,208,0.8)'; gR.fillRect(cx9 - wd9 * 0.3, cy9 - ht9 * 0.5, wd9 * 0.6, ht9 * 0.4);
+                };
+                putR(150, 150, 110, 120); putR(370, 110, 120, 130); putR(590, 150, 110, 120);
+                putR(180, 340, 110, 110); putR(560, 340, 110, 110);
+                return VZ.traceConcept(cvR.toDataURL('image/png')).then(cr9 => {
+                  eqi(cr9.arrange, 'circle', '★링 배치 — 마당 아래에도 건물이 있으면 중정으로');
+                  ok(cr9.meta.enclosed, '  둘러쌈 판정');
+                });
+              }).then(() => {
                 // ★라우팅 근거 지표 — 전역 임계값 추측이 실물에서 두 번 뒤집힌 뒤 도입한 증거들.
                 //   도면은 무채색·축정렬·이중선, 손그림은 사선 지배 → 이 표가 오판을 막는다.
                 return VZ.traceImage(cv2.toDataURL('image/png'), { widthMM: 8000 }).then(rp => {
@@ -3267,8 +3302,8 @@ function tests(){
               const pit = gab.map(rf => { const P9 = rf.points;
                 const ch = Math.hypot(P9[1][0] - P9[0][0], P9[1][1] - P9[0][1]);
                 return [rf.bim.rise / (ch * 0.42), rf.bim.rise / (ch * 0.58)]; });
-              ok(pit.every(p9 => p9.every(v9 => v9 >= 0.333 && v9 <= 0.75)),
-                '★물매 4:12~9:12 — 급·완 두 면 모두 ('
+              ok(pit.every(p9 => p9.every(v9 => v9 >= 0.333 && v9 <= 1.05)),   // 지붕 폴리곤은 처마만큼 짧아 약간 크게 잡힌다
+                '★물매 4:12~12:12 — 급·완 두 면 모두 ('
                 + pit.map(p9 => p9.map(v9 => (Math.atan(v9) * 180 / Math.PI).toFixed(0)).join('/')).join(' ') + '도)');
               // ★데드밸리 방지 — 용마루가 방사면 경계선에서 양쪽 지붕이 같은 높이로 만나 물이 갇힌다
               const gut9 = ae.filter(e9 => e9.layer === '홈통');
@@ -3276,9 +3311,11 @@ function tests(){
               ok(gut9.every(g9 => g9.bim.rise > 0), '  마당 쪽으로 흐르는 물매');
               // 방화벽은 지붕면(이 선에서는 처마 높이) 위로 500 돌출 — 피난·방화구조 규칙 제21조.
               // 나란한 박공동 사이에 연속 골(valley)을 만들지 않는 실무 해법이기도 하다.
-              const fw = ae.filter(e8 => e8.type === 'LINE' && e8.layer === '벽' && e8.bim.h > 3000);
-              eqi(fw.length, 4, '★방화벽 — 이웃과 맞닿는 측벽 4개(=n-1)');
-              ok(fw.every(w9 => w9.bim.h === 3500), '  지붕면 위로 500 돌출 (건축법)');
+              // 처마 높이는 동마다 다르다 — '어떤 처마 높이 + 500' 인 벽이 방화벽
+              const eaveSet = roofs8.map(r9 => r9.bim.eave);
+              const fw = ae.filter(e8 => e8.type === 'LINE' && e8.layer === '벽'
+                && eaveSet.some(hh => Math.abs(e8.bim.h - hh - 500) < 2));
+              eqi(fw.length, 4, '★방화벽 — 이웃과 맞닿는 측벽 4개(=n-1), 지붕면 위 500 돌출(건축법)');
               ok(ae.some(e8 => e8.type === 'LINE' && e8.layer === '지붕' && e8.bim && e8.bim.kind === 'wall'),
                 '★처마돌림(fascia) — 지붕 끝이 두께를 갖는다');
               C.state.entities.length = b6;
