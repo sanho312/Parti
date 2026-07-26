@@ -233,14 +233,15 @@ function buildPlan(spec) {
 // '정확한 복원'이 아니라 '스케일과 리듬이 맞는 매스' — 초기 검토용.
 function buildMassing(spec) {
   const br = B(); if (!br) return null;
-  const o = Object.assign({ floors: 3, bays: 3, widthMM: 12000, depthMM: 8000, floorH: STD.ceil + 600, windows: null }, spec || {});
+  const o = Object.assign({ floors: 3, bays: 3, widthMM: 12000, depthMM: 8000, floorH: STD.ceil + 600, windows: null, ox: 0, oy: 0 }, spec || {});
   const W = Math.max(2000, Math.round(o.widthMM)), D = Math.max(2000, Math.round(o.depthMM));
   const H = o.floors * o.floorH;
+  const OX = Math.round(o.ox), OY = Math.round(o.oy);   // 원점 오프셋 — 사진 여러 장을 나란히 세울 때
   br.pushUndo();
   br.ensureLayer('벽', '#cfc7ba'); br.ensureLayer('개구부', '#ff9f0a'); br.ensureLayer('슬래브', '#9aa2af');
   const counts = { wall: 0, window: 0, slab: 0 };
   const wall = (x1, y1, x2, y2) => {
-    const e = br.addEntity({ type: 'LINE', layer: '벽', x1, y1, x2, y2 });
+    const e = br.addEntity({ type: 'LINE', layer: '벽', x1: x1 + OX, y1: y1 + OY, x2: x2 + OX, y2: y2 + OY });
     e.bim = { kind: 'wall', h: H, t: STD.wallExt, base: 0 }; counts.wall++;
   };
   wall(0, 0, W, 0); wall(W, 0, W, D); wall(W, D, 0, D); wall(0, D, 0, 0);
@@ -248,7 +249,7 @@ function buildMassing(spec) {
   const perFloor = o.floors <= 12;
   for (let f = 0; f <= o.floors; f++) {
     if (!perFloor && f > 0 && f < o.floors) continue;
-    const s = br.addEntity({ type: 'LWPOLYLINE', layer: '슬래브', closed: true, points: [[0, 0], [W, 0], [W, D], [0, D]] });
+    const s = br.addEntity({ type: 'LWPOLYLINE', layer: '슬래브', closed: true, points: [[OX, OY], [OX + W, OY], [OX + W, OY + D], [OX, OY + D]] });
     s.bim = { kind: 'slab', t: STD.slabT, top: f * o.floorH }; counts.slab++;
   }
   // 창 — 전면(y=0) 격자. 모서리에 너무 붙으면 건너뛴다(구조적으로도 벽이 필요).
@@ -257,7 +258,7 @@ function buildMassing(spec) {
     const wh = Math.max(600, Math.min(o.floorH * 0.7, win.hFrac * H));
     const sill = win.floor * o.floorH + (o.floorH - wh) / 2;
     if (cx - cw / 2 < 300 || cx + cw / 2 > W - 300) continue;
-    const e = br.addEntity({ type: 'LINE', layer: '개구부', x1: Math.round(cx - cw / 2), y1: 0, x2: Math.round(cx + cw / 2), y2: 0 });
+    const e = br.addEntity({ type: 'LINE', layer: '개구부', x1: Math.round(cx - cw / 2) + OX, y1: OY, x2: Math.round(cx + cw / 2) + OX, y2: OY });
     e.bim = { kind: 'opening', ot: 'window', h: Math.round(wh), sill: Math.round(sill), t: STD.wallExt, wt: 'fix' };
     counts.window++;
   }

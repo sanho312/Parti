@@ -479,6 +479,7 @@
 
   // ---------- 이미지 → 도면 도구들 ----------
   let lastImg = null; // 사용자가 채팅에 첨부한 최신 이미지 {dataUrl, w, h(px)} — set_underlay 가 쓴다
+  let lastRaw = null; // 마지막 사용자 원문 {t, imgs} — API 키 무효(401) 시 로컬 폴백에 쓴다
   function toolSetUnderlay(inp) {
     if (!lastImg) return { error: '첨부된 이미지가 없습니다. 사용자에게 도면 이미지를 채팅에 첨부해 달라고 요청하세요(📎 버튼 또는 붙여넣기).' };
     if (!fin(inp.width_mm) || inp.width_mm <= 0) return { error: 'width_mm(이미지의 실제 폭)가 필요합니다.' };
@@ -710,8 +711,17 @@
       }
       if (usage.in + usage.out + usage.cr + usage.cw > 0) addMsg('tool', costLine(usage));
     } catch (err) {
+      const emsg = String(err && err.message || err);
       if (err && err.name === 'AbortError') addMsg('tool', '⏹ 사용자가 중단했습니다.');
-      else addMsg('err', String(err && err.message || err));
+      else if (/401|invalid|authentication|unauthorized/i.test(emsg) && lastRaw) {
+        // ★저장된 키가 무효(401)면 오류만 띄우고 끝내지 않는다 — 로컬 코워커가 이어받는다.
+        //   (키가 있으면 로컬 분기를 안 타므로, 무효 키는 '키 없음'과 같게 취급해야 일관적)
+        addMsg('tool', '🔑 저장된 API 키가 유효하지 않아 **로컬 모드**로 처리합니다. (⚙ 에서 키를 고치거나 지울 수 있어요)');
+        history.pop();                                   // 실패한 API 왕복은 히스토리에서 제거
+        try { addMsg('ai', await localReply(lastRaw.t, lastRaw.imgs)); }
+        catch (e2) { addMsg('err', '로컬 처리 중 오류: ' + (e2 && e2.message || e2)); }
+      }
+      else addMsg('err', emsg);
     }
     aborter = null;
     saveHist();
@@ -977,37 +987,47 @@
   async function localReply(text, imgs) {
     const t = String(text || '').trim();
     const SKm = window.WEBCAD_SKETCH;
-    // ① 도면 이미지 벡터화 — 이미지가 붙어 있으면 최우선
+    // ① 이미지 처리 — 붙어 있으면 최우선. 전 장 처리(마지막 한 장만 쓰던 것 수정).
+    // ★도면/사진 판별은 픽셀로 한다(classifyImage). 문장 키워드로 하면 "건물의 도면
+    //   만들어줘"의 '건물' 때문에 도면 이미지가 매싱 경로로 오판된다(실사용 보고).
+    //   문장은 '매스로/매싱' 처럼 명시적으로 매싱을 요구할 때만 우선한다.
     if (imgs && imgs.length && window.PARTI_VISION) {
-      const img = imgs[imgs.length - 1];
-      lastImg = img;
-      const wmm = numOf(t, /(\d{3,6})\s*mm/) || (numOf(t, /(\d+(?:\.\d+)?)\s*m\b/) || 0) * 1000 || 10000;
-      // 건물 사진(외관) → 매스 근사 / 그 외 → 평면도 벡터화
-      if (/건물|사진|외관|파사드|입면|매스|매싱|볼륨|외벽 사진/.test(t) && window.PARTI_ARCH) {
-        const fh = numOf(t, /층고\s*(\d{3,5})/) || 3000;
-        const f = await window.PARTI_VISION.traceFacade(img.dataUrl, {
-          floorH: fh, widthMM: numOf(t, /(?:폭|가로)\s*(\d+(?:\.\d+)?)\s*m/) * 1000 || null,
-          depthMM: numOf(t, /(?:깊이|안길이|세로)\s*(\d+(?:\.\d+)?)\s*m/) * 1000 || null,
-        });
-        const m = window.PARTI_ARCH.buildMassing({ floors: f.floors, bays: f.bays, windows: f.windows,
-          widthMM: f.meta.widthMM, depthMM: f.meta.depthMM, floorH: f.meta.floorH });
-        execTool('set_view', { mode: '3d' });
-        return `건물 사진에서 매스를 세웠습니다 — **${f.floors}층 · ${f.bays}베이**, `
-          + `${(m.W / 1000).toFixed(1)}×${(m.D / 1000).toFixed(1)}×${(m.H / 1000).toFixed(1)}m (창 ${m.counts.window}개)\n`
-          + `사진에는 깊이 정보가 없어 안길이는 폭의 0.6배로 잡았습니다 — "깊이 12m" 처럼 알려주시면 다시 세웁니다.\n`
-          + `층고는 ${f.meta.floorH}mm 가정입니다. 정확한 복원이 아니라 **초기 검토용 매스**예요.`;
+      const V = window.PARTI_VISION;
+      lastImg = imgs[imgs.length - 1];
+      const wmm = numOf(t, /(\d{3,6})\s*mm/) || (numOf(t, /(?:폭|가로)?\s*(\d+(?:\.\d+)?)\s*m\b/) || 0) * 1000 || 10000;
+      const forceMass = /매스|매싱|볼륨|파사드|외관/.test(t);
+      const forcePlan = /평면도|도면 (그대로|따라)|트레이스/.test(t);
+      const fh = numOf(t, /층고\s*(\d{3,5})/) || 3000;
+      const lines = []; let planN = 0, massN = 0, cursorX = 0;
+      const allStrokes = [];
+      for (const img of imgs) {
+        const cls = forceMass ? { kind: 'photo' } : forcePlan ? { kind: 'plan' } : await V.classifyImage(img.dataUrl);
+        if (cls.kind === 'photo' && window.PARTI_ARCH) {
+          const f = await V.traceFacade(img.dataUrl, { floorH: fh,
+            depthMM: numOf(t, /(?:깊이|안길이)\s*(\d+(?:\.\d+)?)\s*m/) * 1000 || null });
+          const m = window.PARTI_ARCH.buildMassing({ floors: f.floors, bays: f.bays, windows: f.windows,
+            widthMM: f.meta.widthMM, depthMM: f.meta.depthMM, floorH: f.meta.floorH, ox: cursorX });
+          cursorX += m.W + 4000; massN++;
+          lines.push(`· 사진 → 매스 ${f.floors}층·${f.bays}베이, ${(m.W / 1000).toFixed(1)}×${(m.D / 1000).toFixed(1)}×${(m.H / 1000).toFixed(1)}m (창 ${m.counts.window})`);
+        } else {
+          const r = await V.traceImage(img.dataUrl, { widthMM: wmm });
+          if (!r.strokes.length) { lines.push('· 도면에서 선을 찾지 못했습니다 (흑백·고대비일수록 잘 읽힙니다)'); continue; }
+          for (const s of r.strokes) { for (const p of s.pts) p[0] += cursorX; allStrokes.push(s); }
+          cursorX += r.meta.widthMM + 4000; planN++;
+          lines.push(`· 도면 → 벽 ${r.meta.walls} · 참고선 ${r.meta.guides} · 문 후보 ${r.meta.doors} (가로 ${(r.meta.widthMM / 1000).toFixed(1)}m 가정)`);
+        }
       }
-      const r = await window.PARTI_VISION.traceImage(img.dataUrl, { widthMM: wmm });
-      if (!r.strokes.length) return '이미지에서 선을 찾지 못했습니다. 선이 뚜렷한 평면도(흑백 도면)일수록 잘 읽힙니다. 사진이라면 밝기·대비를 올려 다시 시도해 보세요.';
-      if (SKm && SKm.importStrokes) {
-        SKm.importStrokes(r.strokes);
+      if (allStrokes.length && SKm && SKm.importStrokes) {
+        SKm.importStrokes(allStrokes);
         if (SKm.SK && !SKm.SK.on && SKm.enter) SKm.enter();
         if (SKm.recognize) { try { SKm.recognize(); } catch (e) {} }
         if (SKm.fitView) SKm.fitView();
       }
-      return `이미지를 벡터로 옮겼습니다 — 벽 ${r.meta.walls}개 · 참고선 ${r.meta.guides}개 · 문 후보 ${r.meta.doors}개.\n`
-        + `가로를 ${(r.meta.widthMM / 1000).toFixed(1)}m 로 가정했습니다(실제 치수를 알면 "가로 12m" 처럼 알려주세요).\n`
-        + `스케치로 올려두었으니 확인하고 **건물화(🏠)** 를 누르면 3D 까지 만들어집니다. 틀린 선은 유령선을 탭해 고칠 수 있어요.`;
+      if (massN && !planN) execTool('set_view', { mode: '3d' });
+      let tail = '';
+      if (planN) tail = '\n도면은 스케치로 올렸습니다 — **건물화(🏠)** 를 누르면 3D 까지 만들어지고, 틀린 선은 유령선을 탭해 고칠 수 있어요. 실제 치수를 알면 "가로 12m" 처럼 알려주세요.';
+      if (massN) tail += '\n매스는 초기 검토용입니다 — 깊이(폭×0.6)·층고(' + fh + 'mm)는 가정값이라 "깊이 12m 층고 3300" 처럼 알려주시면 다시 세웁니다.';
+      return `이미지 ${imgs.length}장을 처리했습니다:\n` + lines.join('\n') + tail;
     }
     // ② 평면 생성 — "N평/N㎡ + 실 구성"
     const prog = window.PARTI_ARCH && window.PARTI_ARCH.programOf(t);
@@ -1087,6 +1107,7 @@
     }
     inEl.value = '';
     addMsg('user', (pendingImgs.length ? '📷 이미지 ' + pendingImgs.length + '장' + (t ? '\n' : '') : '') + t);
+    lastRaw = { t, imgs: pendingImgs.slice() };      // API 인증 실패 시 로컬 폴백용 원문
     let selCtx = ''; // 선택 연동: 현재 선택 개체를 자동으로 함께 전달 → "이것들 ~해줘" 지원
     try {
       const S = B().state;

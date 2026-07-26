@@ -3132,7 +3132,11 @@ function tests(){
             }
             return cc.toDataURL('image/png');
           };
-          return VZ.traceFacade(mkFacade(6, 4, 640, 560), { floorH: 3000 }).then(fa => {
+          const facadeUrl = mkFacade(6, 4, 640, 560);
+          return VZ.classifyImage(cv2.toDataURL('image/png'))
+            .then(ci => { eqi(ci.kind, 'plan', '★이미지 분류 — 흑백 선도면은 plan (문장 키워드 아님)'); return VZ.classifyImage(facadeUrl); })
+            .then(cf => { eqi(cf.kind, 'photo', '★이미지 분류 — 채색 사진은 photo (채도 기준)'); return VZ.traceFacade(facadeUrl, { floorH: 3000 }); })
+            .then(fa => {
             eqi(fa.floors, 6, '★건물 사진 — 층수 검출 (창 밴드 계수)');
             eqi(fa.bays, 4, '★건물 사진 — 베이 검출');
             eqi(fa.windows.length, 24, '  창 격자 6×4');

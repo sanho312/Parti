@@ -235,6 +235,34 @@ async function traceImage(src, opts) {
 }
 
 /* ------------------------------------------------------------
+   이미지 종류 판별 — 도면(선그림)인가 사진인가
+   ------------------------------------------------------------
+   ★사용자 문장("건물의 도면 만들어줘")의 키워드로 라우팅하면 '건물'이라는 단어 때문에
+   도면 이미지가 사진(매싱) 경로로 오판된다. 이미지 픽셀 자체로 판별해야 한다.
+   근거: 도면은 거의 흰 배경 + 소량의 진한 선 → 중간톤이 거의 없다.
+        사진은 하늘·벽면·그림자 등 중간톤이 화면 대부분을 차지한다.
+   ------------------------------------------------------------ */
+async function classifyImage(src) {
+  const im = await loadImage(src);
+  const { ctx, w, h } = toCanvas(im, 400);
+  const d = ctx.getImageData(0, 0, w, h).data;
+  let mid = 0, ink = 0, sat = 0;
+  const total = w * h;
+  for (let i = 0; i < d.length; i += 4) {
+    const a = d[i + 3];
+    const g = a < 40 ? 255 : (d[i] * 299 + d[i + 1] * 587 + d[i + 2] * 114) / 1000;
+    if (g >= 70 && g <= 200) mid++;
+    if (g < 70) ink++;
+    sat += Math.max(d[i], d[i + 1], d[i + 2]) - Math.min(d[i], d[i + 1], d[i + 2]);
+  }
+  const midR = mid / total, inkR = ink / total, satAvg = sat / total;
+  // 도면: 흑백(채도≈0) + 중간톤 적음 + 잉크 소량. 사진: 중간톤이 지배적이거나 채도가 있다.
+  // ★중간톤만으로는 단색 벽면 사진이 도면으로 오분류된다(실측) — 채도를 함께 본다.
+  const kind = (midR < 0.35 && inkR < 0.25 && satAvg < 12) ? 'plan' : 'photo';
+  return { kind, midRatio: +midR.toFixed(3), inkRatio: +inkR.toFixed(3), satAvg: +satAvg.toFixed(1) };
+}
+
+/* ------------------------------------------------------------
    건물 사진 → 매스 근사 (traceFacade)
    ------------------------------------------------------------
    단일 사진에서 3D 를 '복원'하는 건 알고리즘만으로 불가능하다. 대신 파사드에서
@@ -395,5 +423,5 @@ async function traceFacade(src, opts) {
       floorH: o.floorH, widthMM, depthMM, heightMM } };
 }
 
-return { traceImage, traceFacade, _internal: { binarize, extractLines, mergeCollinear, pairWalls, peaksOf, span, gradients, periodOf, bandsOf, windowMask } };
+return { traceImage, traceFacade, classifyImage, _internal: { binarize, extractLines, mergeCollinear, pairWalls, peaksOf, span, gradients, periodOf, bandsOf, windowMask } };
 })();
