@@ -862,7 +862,8 @@
     // 키 설정
     setupEl = h('div', { id: 'aiSetup' });
     setupEl.innerHTML = `
-      <div class="hint">Anthropic API 키를 넣으면 활성화됩니다. 키는 <b>이 브라우저에만</b>(localStorage) 저장되며 서버로 전송되지 않습니다.
+      <div class="hint"><b>키 없이도 씁니다</b> — 지금은 로컬 모드로 평면 생성·도면 이미지 벡터화·건물화가 알고리즘으로 동작합니다.
+      Anthropic API 키를 넣으면 자유로운 자연어 대화로 확장됩니다. 키는 <b>이 브라우저에만</b>(localStorage) 저장되며 서버로 전송되지 않습니다.
       키 발급: console.anthropic.com → API Keys</div>`;
     const keyIn = h('input', { type: 'password', placeholder: 'sk-ant-…' });
     keyIn.value = cfg.key || '';
@@ -932,7 +933,11 @@
     }
   }
   function greet() {
-    addMsg('ai', '안녕하세요! 자연어로 작도를 도와드리는 AI 코워커입니다.\n예) "10평 원룸 평면 그려줘" · "이 벽들 높이 3000으로"\n도면 이미지를 첨부하면 평면 트레이스 → 3D 모델링 → 레이어 정리 → 입면·단면까지 만들어 드립니다.' + (cfg.key ? '' : '\n\n먼저 ⚙에서 API 키를 설정해 주세요.'));
+    addMsg('ai', cfg.key
+      ? '안녕하세요! 자연어로 작도를 도와드리는 AI 코워커입니다.\n예) "10평 원룸 평면 그려줘" · "이 벽들 높이 3000으로"\n도면 이미지를 첨부하면 평면 트레이스 → 3D 모델링 → 레이어 정리 → 입면·단면까지 만들어 드립니다.'
+      : '안녕하세요! 지금은 **로컬 모드**입니다 — API 키 없이 건축 지식 알고리즘으로 바로 쓸 수 있어요.\n'
+        + '예) "10평 원룸 그려줘" · "25평 투룸" · 도면 이미지를 첨부하고 "이 도면 따라 그려줘" · "건물화해줘"\n'
+        + '무엇을 할 수 있는지 궁금하면 "도움말" 이라고 보내 주세요. (⚙ 에서 API 키를 넣으면 자유 대화로 확장됩니다)');
   }
   function addMsg(kind, text) {
     if (!msgsEl) return;
@@ -947,10 +952,121 @@
     if (on) { busyEl = h('div', { class: 'aiM tool' }, '⋯ 작업 중'); msgsEl.appendChild(busyEl); msgsEl.scrollTop = msgsEl.scrollHeight; }
     else if (busyEl) { busyEl.remove(); busyEl = null; }
   }
+  // ============================================================
+  //  로컬 코워커 — API 키 없이, 건축 지식 알고리즘만으로 작도·모델링
+  //  (arch.js 평면 생성 · vision.js 이미지 벡터화 · 기존 sketch/bimify 파이프라인 재사용)
+  // ============================================================
+  const numOf = (s, re) => { const m = String(s).match(re); return m ? parseFloat(m[1]) : null; };
+  function wallsTarget() {                      // 선택이 있으면 선택, 없으면 전체 벽
+    const S = B().state;
+    const sel = [...S.selection].map(id => S.entities.find(e => e.id === id)).filter(e => e && e.bim && e.bim.kind === 'wall');
+    return sel.length ? sel : S.entities.filter(e => e.bim && e.bim.kind === 'wall');
+  }
+  const LOCAL_HELP = '지금은 **로컬 모드**입니다 — API 키 없이 건축 지식 알고리즘으로 동작합니다.\n\n'
+    + '· "10평 원룸 그려줘" / "25평 투룸" / "84㎡ 쓰리룸" — 평면 자동 생성(벽·문·창·실명)\n'
+    + '· 도면 이미지 첨부 후 "이 도면 따라 그려줘" — 이미지를 선으로 벡터화\n'
+    + '· "인식해줘" / "건물화해줘" — 스케치를 도형·3D 건물로\n'
+    + '· "벽 높이 2700" / "벽 두께 200" — 벽 속성 변경\n'
+    + '· "3D 보여줘" / "평면" / "4분할" · "단면 만들어줘" / "입면"\n'
+    + '· "선이 자꾸 곡선으로 인식돼" — 스케치 보정값 조정\n\n'
+    + 'API 키를 넣으면(⚙) 자유로운 자연어 대화로 확장됩니다.';
+
+  async function localReply(text, imgs) {
+    const t = String(text || '').trim();
+    const SKm = window.WEBCAD_SKETCH;
+    // ① 도면 이미지 벡터화 — 이미지가 붙어 있으면 최우선
+    if (imgs && imgs.length && window.PARTI_VISION) {
+      const img = imgs[imgs.length - 1];
+      lastImg = img;
+      const wmm = numOf(t, /(\d{3,6})\s*mm/) || (numOf(t, /(\d+(?:\.\d+)?)\s*m\b/) || 0) * 1000 || 10000;
+      const r = await window.PARTI_VISION.traceImage(img.dataUrl, { widthMM: wmm });
+      if (!r.strokes.length) return '이미지에서 선을 찾지 못했습니다. 선이 뚜렷한 평면도(흑백 도면)일수록 잘 읽힙니다. 사진이라면 밝기·대비를 올려 다시 시도해 보세요.';
+      if (SKm && SKm.importStrokes) {
+        SKm.importStrokes(r.strokes);
+        if (SKm.SK && !SKm.SK.on && SKm.enter) SKm.enter();
+        if (SKm.recognize) { try { SKm.recognize(); } catch (e) {} }
+        if (SKm.fitView) SKm.fitView();
+      }
+      return `이미지를 벡터로 옮겼습니다 — 벽 ${r.meta.walls}개 · 참고선 ${r.meta.guides}개 · 문 후보 ${r.meta.doors}개.\n`
+        + `가로를 ${(r.meta.widthMM / 1000).toFixed(1)}m 로 가정했습니다(실제 치수를 알면 "가로 12m" 처럼 알려주세요).\n`
+        + `스케치로 올려두었으니 확인하고 **건물화(🏠)** 를 누르면 3D 까지 만들어집니다. 틀린 선은 유령선을 탭해 고칠 수 있어요.`;
+    }
+    // ② 평면 생성 — "N평/N㎡ + 실 구성"
+    const prog = window.PARTI_ARCH && window.PARTI_ARCH.programOf(t);
+    const py = numOf(t, /(\d+(?:\.\d+)?)\s*평/);
+    const m2 = numOf(t, /(\d+(?:\.\d+)?)\s*(?:㎡|m2|m²|제곱미?터?)/i);
+    if (window.PARTI_ARCH && (prog || py || m2) && /그려|만들|생성|평면|배치|plan/i.test(t + (prog ? ' 평면' : ''))) {
+      const areaM2 = m2 || (py ? py * 3.3058 : 33);
+      const h = numOf(t, /(?:층고|천장|높이)\s*(\d{3,5})/) || undefined;
+      const r = window.PARTI_ARCH.buildPlan({ areaM2, program: prog || 'oneroom', h });
+      if (!r) return '평면을 만들지 못했습니다.';
+      const rooms = r.cells.map(c => `${c.name} ${(c.w * c.h / 1e6).toFixed(1)}㎡`).join(' · ');
+      return `${r.program} 평면을 만들었습니다 — 전체 ${r.areaM2.toFixed(1)}㎡(${(r.areaM2 / 3.3058).toFixed(1)}평), ${r.W}×${r.D}mm\n`
+        + `${rooms}\n벽 ${r.counts.wall} · 문 ${r.counts.door} · 창 ${r.counts.window} 생성. "3D 보여줘" 라고 하시면 입체로 확인할 수 있어요.`;
+    }
+    // ③ 스케치 보정값 — ★'인식이 이상하다'는 불만은 '인식해줘' 명령보다 먼저 걸러야 한다
+    //   ("선이 자꾸 곡선으로 인식돼" 가 인식 명령으로 잡히던 버그)
+    if (SKm && SKm.setParams) {
+      if (/곡선으로.*인식|자꾸 곡선|직선인데|곡선이 아닌/.test(t)) { const p = SKm.setParams({ corner: 0.45 }); return `모서리 민감도를 ${p.corner} 로 낮췄습니다 — 완만한 꺾임도 이제 꺾은선으로 인식됩니다. 다시 그려 보세요.`; }
+      if (/꺾은선으로.*인식|자꾸 꺾|각지게/.test(t)) { const p = SKm.setParams({ corner: 0.85 }); return `모서리 민감도를 ${p.corner} 로 높였습니다 — 완만한 꺾임은 이제 곡선으로 봅니다.`; }
+      if (/보정.*(세|강|많)|너무 반듯|내 선.*살/.test(t)) { const p = SKm.setParams({ preset: 'fine' }); return `정밀 모드로 바꿨습니다 — 보정 강도 ${p.fitK}, 원본 선을 최대한 살립니다.`; }
+      if (/보정.*(약|안 되|부족)|반듯하게 (해|정리)|대충 그려도/.test(t)) { const p = SKm.setParams({ preset: 'rough' }); return `러프 모드로 바꿨습니다 — 보정 강도 ${p.fitK}, 대충 그려도 반듯하게 정리됩니다.`; }
+      if (/끝점.*(안 붙|안붙|안 닿)/.test(t)) { const p = SKm.setParams({ snap: 20 }); return `끝점 흡착을 ${p.snap}px 로 넓혔습니다.`; }
+      if (/끝점.*(자꾸 붙|너무 붙)/.test(t)) { const p = SKm.setParams({ snap: 5 }); return `끝점 흡착을 ${p.snap}px 로 좁혔습니다.`; }
+      if (/기울.*(수평|반듯)|자꾸 수평/.test(t)) { const p = SKm.setParams({ ortho: 3 }); return `수평·수직 정리각을 ${p.ortho}° 로 줄였습니다 — 기울여 그린 선이 유지됩니다.`; }
+    }
+    // ④ 스케치 인식 / 건물화
+    if (/건물화|모델링|3d\s*로|입체로|세워/i.test(t) && SKm && SKm.buildBuilding) {
+      if (!SKm.getPreview || !SKm.getPreview()) { try { SKm.recognize(); } catch (e) {} }
+      const c = await SKm.buildBuilding();
+      if (!c) return '건물화할 스케치가 없습니다 — 먼저 평면을 그려 주세요.';
+      const KO = { wall: '벽', door: '문', window: '창', column: '기둥', furniture: '가구', slab: '슬래브' };
+      return '건물로 만들었습니다 — ' + Object.entries(c).filter(([, n]) => n > 0).map(([k, n]) => KO[k] + ' ' + n).join(' · ') + '. 3D 로 확인해 보세요.';
+    }
+    if (/인식|알아봐|정리해|반듯/i.test(t) && SKm && SKm.recognize) {
+      const p = SKm.recognize();
+      if (!p) return '인식할 스케치가 없습니다.';
+      const KN = { line: '선', polyline: '꺾은선', rect: '사각형', polygon: '다각형', circle: '원', arc: '호', curve: '곡선', dot: '점' };
+      return '인식했습니다 — ' + Object.entries(p.counts).map(([k, n]) => (KN[k] || k) + ' ' + n).join(' · ')
+        + (p.regions.length ? ` · 닫힌 영역 ${p.regions.length}개` : '') + '. 유령선을 탭하면 종류를 바꿀 수 있어요.';
+    }
+    // ④ 벽 속성
+    const wh = numOf(t, /(?:벽)?\s*(?:높이|층고)\s*(\d{3,5})/), wt = numOf(t, /(?:벽)?\s*두께\s*(\d{2,4})/);
+    if (wh || wt) {
+      const ws = wallsTarget();
+      if (!ws.length) return '벽이 없습니다 — 먼저 평면을 만들거나 벽을 그려 주세요.';
+      B().pushUndo();
+      for (const w of ws) { if (wh) w.bim.h = wh; if (wt) w.bim.t = wt; }
+      B().refresh();
+      return `벽 ${ws.length}개를 ${[wh ? '높이 ' + wh : null, wt ? '두께 ' + wt : null].filter(Boolean).join(' · ')}(으)로 바꿨습니다.`;
+    }
+    // ⑤ 뷰 / 도면
+    if (/4\s*분할|사분할/.test(t)) { execTool('set_view', { mode: 'quad' }); return '4분할로 전환했습니다.'; }
+    if (/3d|입체|아이소/i.test(t)) { execTool('set_view', { mode: '3d' }); return '3D 로 전환했습니다.'; }
+    if (/평면\s*(보여|전환|으로)/.test(t)) { execTool('set_view', { mode: 'plan' }); return '평면으로 전환했습니다.'; }
+    if (/단면/.test(t)) { const r = execTool('make_views', { kind: 'section', axis: /세로|x/i.test(t) ? 'x' : 'y' }); return r && r.error ? '단면 생성 실패: ' + r.error : '단면 도면을 새 탭에 만들었습니다.'; }
+    if (/입면/.test(t)) { const r = execTool('make_views', { kind: 'elevation', edge: /뒤|북/.test(t) ? 'back' : /좌|서/.test(t) ? 'left' : /우|동/.test(t) ? 'right' : 'front' }); return r && r.error ? '입면 생성 실패: ' + r.error : '입면 도면을 새 탭에 만들었습니다.'; }
+    // ⑦ 도움말 / 미해석
+    if (/도움|뭐 할|무엇|help|사용법|기능/i.test(t) || !t) return LOCAL_HELP;
+    return '로컬 모드에서는 아직 이 요청을 이해하지 못했습니다.\n\n' + LOCAL_HELP;
+  }
+  async function runLocal(text, imgs) {
+    busy = true; setBusy(true);
+    try { addMsg('ai', await localReply(text, imgs)); }
+    catch (e) { addMsg('err', '로컬 처리 중 오류: ' + (e && e.message ? e.message : e)); }
+    finally { busy = false; setBusy(false); }
+  }
+
   function submit() {
     const t = (inEl.value || '').trim();
     if ((!t && !pendingImgs.length) || busy) return;
-    if (!cfg.key) { setupEl.style.display = 'flex'; addMsg('err', 'API 키를 먼저 설정해 주세요 (⚙).'); return; }
+    if (!cfg.key) {                                  // 키 없음 = 로컬 코워커 (알고리즘 전용)
+      inEl.value = '';
+      addMsg('user', (pendingImgs.length ? '📷 이미지 ' + pendingImgs.length + '장' + (t ? '\n' : '') : '') + t);
+      const imgs = pendingImgs.slice(); pendingImgs = []; renderAtt();
+      runLocal(t, imgs);
+      return;
+    }
     inEl.value = '';
     addMsg('user', (pendingImgs.length ? '📷 이미지 ' + pendingImgs.length + '장' + (t ? '\n' : '') : '') + t);
     let selCtx = ''; // 선택 연동: 현재 선택 개체를 자동으로 함께 전달 → "이것들 ~해줘" 지원
@@ -988,7 +1104,7 @@
   else init();
 
   // 테스트 훅
-  window.__WEBCAD_AI_TEST__ = { execTool, send, attachImage,
+  window.__WEBCAD_AI_TEST__ = { execTool, send, attachImage, localReply,
     get history() { return history; }, get cfg() { return cfg; },
     get lastImg() { return lastImg; }, setLastImg: (v) => { lastImg = v; },
     get pendingImgs() { return pendingImgs; },

@@ -3082,6 +3082,55 @@ function tests(){
         } else ok(true, '(AI 도구 훅 없음)');
         S4.SK.strokes = []; S4.SK.fitOv = {}; S4.closePreview(); S4.SK.rev++;
       }
+      { // API 없이 — 건축 지식 엔진(arch) · 이미지 벡터화(vision) · 로컬 코워커
+        const A = AW.PARTI_ARCH, VZ = AW.PARTI_VISION;
+        ok(!!A && !!VZ, '★arch.js·vision.js 로드');
+        // ① 평면 생성: 실 면적 합 = 전체, 벽·문·창·슬래브 생성, 3D 솔리드까지
+        const b1 = C.state.entities.length;
+        const pl = A.buildPlan({ areaM2: 33, program: 'oneroom' });
+        const sum = pl.cells.reduce((a, c2) => a + c2.w * c2.h, 0) / 1e6;
+        ok(Math.abs(sum - pl.areaM2) < 0.5, '★평면 생성 — 실 면적 합 = 전체 면적 (' + sum.toFixed(1) + '/' + pl.areaM2.toFixed(1) + '㎡)');
+        ok(pl.counts.wall >= 4 && pl.counts.door >= 1 && pl.counts.slab === 1, '★벽·문·슬래브 생성 (벽' + pl.counts.wall + '·문' + pl.counts.door + ')');
+        const gen = C.state.entities.slice(b1);
+        ok(C.bimSolids().filter(s2 => gen.some(e2 => e2.id === s2.eid)).length > 0, '  생성 평면이 3D 솔리드로');
+        ok(A.programOf('25평 투룸 그려줘') === 'tworoom' && A.programOf('원룸') === 'oneroom', '  자연어 → 실 구성 프리셋');
+        C.state.entities.length = b1;
+        // ② 이미지 벡터화: 합성 평면도(이중선 벽 + 문 틈) → 벽·문 검출 → 건물화
+        const cv2 = AD.createElement('canvas'); cv2.width = 800; cv2.height = 600;
+        const g2 = cv2.getContext('2d');
+        g2.fillStyle = '#fff'; g2.fillRect(0, 0, 800, 600);
+        g2.strokeStyle = '#000'; g2.lineWidth = 2;
+        const dbl = (x1, y1, x2, y2, t2) => { const dx = x2 - x1, dy = y2 - y1, L = Math.hypot(dx, dy), nx = -dy / L * t2 / 2, ny = dx / L * t2 / 2;
+          g2.beginPath(); g2.moveTo(x1 + nx, y1 + ny); g2.lineTo(x2 + nx, y2 + ny); g2.moveTo(x1 - nx, y1 - ny); g2.lineTo(x2 - nx, y2 - ny); g2.stroke(); };
+        dbl(80, 80, 720, 80, 10); dbl(80, 520, 720, 520, 10); dbl(80, 80, 80, 520, 10); dbl(720, 80, 720, 520, 10);
+        dbl(400, 80, 400, 250, 8); dbl(400, 350, 400, 520, 8);   // 내벽 + 100px(=1000mm) 문 틈
+        // 비동기 — 기존 규약(.then + finishAsync) 그대로. 동기 요약 뒤에 결과가 덧붙는다.
+        VZ.traceImage(cv2.toDataURL('image/png'), { widthMM: 8000 }).then(vr => {
+          eqi(vr.meta.walls, 5, '★이미지 벡터화 — 벽 5개 (외곽 4 + 문 틈 병합된 내벽 1)');
+          eqi(vr.meta.doors, 1, '★문 틈 검출 — 벽을 잇고 개구부로 (끊긴 두 벽이 아니라)');
+          const an2 = P.analyze(vr.strokes, {});
+          const ro2 = BF.heuristic(an2);
+          const b2 = C.state.entities.length;
+          const ct2 = BF.build(an2, ro2);
+          const ents2 = C.state.entities.slice(b2);
+          eqi(ct2.door, 1, '★이미지 → 건물화: 문 1개 개구부 생성');
+          const op2 = ents2.find(e2 => e2.bim && e2.bim.kind === 'opening');
+          ok(op2 && Math.abs(Math.hypot(op2.x2 - op2.x1, op2.y2 - op2.y1) - 1000) < 60, '  개구 폭 ≈ 실제 틈 1000mm');
+          C.state.entities.length = b2;
+          // ③ 로컬 코워커: 키 없이 의도 파싱
+          const H = AW.__WEBCAD_AI_TEST__;
+          if (!H || !H.localReply) { ok(true, '(로컬 봇 훅 없음)'); return null; }
+          const LR = H.localReply, SKl = AW.WEBCAD_SKETCH;
+          const b3 = C.state.entities.length;
+          return LR('10평 원룸 그려줘')
+            .then(r => { ok(/원룸 평면을 만들었습니다/.test(r), '★로컬 봇 — "10평 원룸 그려줘" → 평면 생성'); return LR('벽 높이 2700'); })
+            .then(r => { ok(/높이 2700/.test(r), '★로컬 봇 — 벽 속성 변경'); C.state.entities.length = b3; return LR('선이 자꾸 곡선으로 인식돼'); })
+            .then(() => { eqi(SKl.getParams().corner, 0.45, '★로컬 봇 — 인식 불만 → 보정값 조정 (인식 명령과 구분)'); SKl.setParams({ preset: 'basic' }); return LR('도움말'); })
+            .then(r => { ok(/로컬 모드/.test(r), '  도움말 응답'); return LR('오늘 날씨 어때'); })
+            .then(r => { ok(/이해하지 못했/.test(r), '  미해석은 솔직하게'); });
+        }).then(finishAsync)
+          .catch(e => { record(false, 'API 없는 경로 오류: ' + e.message); finishAsync(); });
+      }
       { // 커스텀 창호 기호(owlib) — 저장(정규화)·평면 렌더·3D 프리즘·문서 왕복
         // ① 저장: 기준선 2000mm + 원 + 대각선 → 1000 정규화
         const base2 = { type: 'LINE', x1: 0, y1: 0, x2: 2000, y2: 0 };
