@@ -266,5 +266,74 @@ function buildMassing(spec) {
   return { W, D, H, floors: o.floors, bays: o.bays, floorH: o.floorH, counts };
 }
 
-return { STD, roomType, PROGRAMS, programOf, planLayout, buildPlan, buildMassing };
+// ---------- 다동(多棟) 배치 — 콘셉트 스케치 대응 ----------
+// 투시 스케치는 픽셀만으로 복원할 수 없다(깊이·왜곡). 대신 스케치의 '구성'(N동·지붕형·
+// 마당 배치)을 사용자에게 확인받아 그 구성대로 세운다. 각 동은 축 정렬(회전 없음) —
+// roofSolids 가 축 정렬 bbox 기반이라 회전 동은 지붕이 틀어진다. 초기 검토용으로 충분.
+function buildComplex(spec) {
+  const br = B(); if (!br) return null;
+  const o = Object.assign({ count: 5, floors: 1, w: 8000, d: 12000, floorH: STD.ceil + 600,
+    arrange: 'circle', roof: 'gable', glass: true, courtyardR: 0 }, spec || {});
+  const n = Math.max(1, Math.min(12, Math.round(o.count)));
+  const H = o.floors * o.floorH;
+  const rise = Math.round(Math.min(o.w, o.d) * 0.35);
+  br.pushUndo();
+  br.ensureLayer('벽', '#cfc7ba'); br.ensureLayer('개구부', '#ff9f0a');
+  br.ensureLayer('지붕', '#b8695a'); br.ensureLayer('조경', '#6aa84f'); br.ensureLayer('문자', '#8fa3c8');
+  const counts = { wall: 0, window: 0, roof: 0, court: 0 };
+  // 마당 반지름: 동들이 겹치지 않게 자동 (둘레에 n동 + 여유)
+  const foot = Math.max(o.w, o.d);
+  const R = o.courtyardR || Math.max(6000, Math.round((n * (foot + 3000)) / (2 * Math.PI)));
+  const ring = R + foot / 2 + 2500;                       // 동 중심 반지름
+  const wall = (x1, y1, x2, y2) => {
+    const e = br.addEntity({ type: 'LINE', layer: '벽', x1: Math.round(x1), y1: Math.round(y1), x2: Math.round(x2), y2: Math.round(y2) });
+    e.bim = { kind: 'wall', h: H, t: STD.wallExt, base: 0 }; counts.wall++;
+  };
+  for (let i = 0; i < n; i++) {
+    let cx, cy;
+    if (o.arrange === 'row') { cx = i * (o.w + 4000); cy = 0; }
+    else { const a = -Math.PI / 2 + (i * 2 * Math.PI) / n; cx = Math.round(ring * Math.cos(a)); cy = Math.round(ring * Math.sin(a)); }
+    const x0 = cx - o.w / 2, x1 = cx + o.w / 2, y0 = cy - o.d / 2, y1 = cy + o.d / 2;
+    wall(x0, y0, x1, y0); wall(x1, y0, x1, y1); wall(x1, y1, x0, y1); wall(x0, y1, x0, y0);
+    // 지붕 — 용마루는 동의 긴 변 방향
+    if (o.roof && o.roof !== 'none') {
+      const r2 = br.addEntity({ type: 'LWPOLYLINE', layer: '지붕', closed: true, points: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]] });
+      r2.bim = { kind: 'roof', rtype: o.roof, eave: H, rise, dir: (o.w >= o.d ? 'x' : 'y') };
+      counts.roof++;
+    }
+    // 유리면 — 마당(원점)을 향한 벽에 큰 고정창 (스케치의 전면 유리 표현)
+    if (o.glass) {
+      const sides = [
+        { k: 'S', d2: Math.abs(cy - o.d / 2), horiz: true, fy: y0, fa: x0, fb: x1 },
+        { k: 'N', d2: Math.abs(cy + o.d / 2), horiz: true, fy: y1, fa: x0, fb: x1 },
+        { k: 'W', d2: Math.abs(cx - o.w / 2), horiz: false, fx: x0, fa: y0, fb: y1 },
+        { k: 'E', d2: Math.abs(cx + o.w / 2), horiz: false, fx: x1, fa: y0, fb: y1 },
+      ];
+      // 벽 중심이 원점에 가장 가까운 면 = 마당 쪽
+      let best = sides[0], bd = Infinity;
+      for (const s of sides) {
+        const mx = s.horiz ? (s.fa + s.fb) / 2 : s.fx, my = s.horiz ? s.fy : (s.fa + s.fb) / 2;
+        const dd = o.arrange === 'row' ? (s.k === 'S' ? 0 : 1e9) : mx * mx + my * my;
+        if (dd < bd) { bd = dd; best = s; }
+      }
+      const m = 600;                                       // 양끝 벽 여유
+      const e = best.horiz
+        ? br.addEntity({ type: 'LINE', layer: '개구부', x1: best.fa + m, y1: best.fy, x2: best.fb - m, y2: best.fy })
+        : br.addEntity({ type: 'LINE', layer: '개구부', x1: best.fx, y1: best.fa + m, x2: best.fx, y2: best.fb - m });
+      e.bim = { kind: 'opening', ot: 'window', wt: 'fix', h: H - 600, sill: 300, t: STD.wallExt };
+      counts.window++;
+    }
+    const tx = br.addEntity({ type: 'TEXT', layer: '문자', x: cx, y: cy, h: 400, text: (i + 1) + '동' });
+    void tx;
+  }
+  // 원형 마당 — 잔디 슬래브 (스케치의 원형 조경)
+  if (o.arrange !== 'row') {
+    const ct = br.addEntity({ type: 'CIRCLE', layer: '조경', cx: 0, cy: 0, r: R });
+    ct.bim = { kind: 'slab', t: 100, top: 0 }; counts.court = 1;
+  }
+  br.refresh();
+  return { n, floors: o.floors, H, rise, R, counts };
+}
+
+return { STD, roomType, PROGRAMS, programOf, planLayout, buildPlan, buildMassing, buildComplex };
 })();

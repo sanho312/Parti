@@ -235,31 +235,53 @@ async function traceImage(src, opts) {
 }
 
 /* ------------------------------------------------------------
-   이미지 종류 판별 — 도면(선그림)인가 사진인가
+   이미지 종류 판별 — 도면 / 사진(정면) / 손스케치(투시)
    ------------------------------------------------------------
    ★사용자 문장("건물의 도면 만들어줘")의 키워드로 라우팅하면 '건물'이라는 단어 때문에
    도면 이미지가 사진(매싱) 경로로 오판된다. 이미지 픽셀 자체로 판별해야 한다.
-   근거: 도면은 거의 흰 배경 + 소량의 진한 선 → 중간톤이 거의 없다.
-        사진은 하늘·벽면·그림자 등 중간톤이 화면 대부분을 차지한다.
+   근거: · 도면 = 거의 흰 배경 + 소량의 무채색 선 → 중간톤·채도 낮음
+        · 정면 사진 = 중간톤/채도 풍부 + 엣지가 수평·수직 지배적
+        · 투시 스케치 = 종이 배경(흰 비율 높음) + '대각선 획'이 많다 — 투시선·지붕 경사가
+          죄다 사선이라, 축 정렬이 지배적인 도면·정면 사진과 확실히 갈린다.
+          이걸 못 가르면 콘셉트 스케치가 파사드 격자 매싱으로 엉뚱하게 세워진다(실사용 보고).
    ------------------------------------------------------------ */
 async function classifyImage(src) {
   const im = await loadImage(src);
   const { ctx, w, h } = toCanvas(im, 400);
   const d = ctx.getImageData(0, 0, w, h).data;
-  let mid = 0, ink = 0, sat = 0;
+  let mid = 0, ink = 0, sat = 0, white = 0;
   const total = w * h;
-  for (let i = 0; i < d.length; i += 4) {
+  const gray = new Float32Array(total);
+  for (let i = 0, p = 0; i < d.length; i += 4, p++) {
     const a = d[i + 3];
     const g = a < 40 ? 255 : (d[i] * 299 + d[i + 1] * 587 + d[i + 2] * 114) / 1000;
+    gray[p] = g;
     if (g >= 70 && g <= 200) mid++;
     if (g < 70) ink++;
+    if (g >= 225) white++;
     sat += Math.max(d[i], d[i + 1], d[i + 2]) - Math.min(d[i], d[i + 1], d[i + 2]);
   }
-  const midR = mid / total, inkR = ink / total, satAvg = sat / total;
-  // 도면: 흑백(채도≈0) + 중간톤 적음 + 잉크 소량. 사진: 중간톤이 지배적이거나 채도가 있다.
-  // ★중간톤만으로는 단색 벽면 사진이 도면으로 오분류된다(실측) — 채도를 함께 본다.
-  const kind = (midR < 0.35 && inkR < 0.25 && satAvg < 12) ? 'plan' : 'photo';
-  return { kind, midRatio: +midR.toFixed(3), inkRatio: +inkR.toFixed(3), satAvg: +satAvg.toFixed(1) };
+  // 대각선 획 비율 — 강한 엣지 중 방향이 축(수평/수직)에서 20° 이상 벗어난 것의 비중
+  let axis = 0, diag = 0;
+  for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+    const p = y * w + x;
+    const dx = gray[p + 1] - gray[p - 1], dy = gray[p + w] - gray[p - w];
+    const mag = Math.abs(dx) + Math.abs(dy);
+    if (mag < 40) continue;                                // 약한 엣지는 잡음
+    const ang = Math.atan2(Math.abs(dy), Math.abs(dx)) * 180 / Math.PI;  // 0=수직엣지, 90=수평엣지
+    if (ang < 20 || ang > 70) axis++; else diag++;
+  }
+  const edges = axis + diag;
+  const midR = mid / total, inkR = ink / total, satAvg = sat / total,
+    whiteR = white / total, diagR = edges ? diag / edges : 0;
+  let kind;
+  // 임계 근거(실측): 직교 도면 diag 0.01 · 정면 사진 0.03 vs 투시 스케치 0.34 — 0.22 로 확실히 갈린다
+  if (midR < 0.35 && inkR < 0.25 && satAvg < 12 && diagR < 0.22) kind = 'plan';
+  // 스케치: 종이 밝은 배경 + 사선 획 상당. (정면 사진은 사선이 거의 없고 종이 흰색도 없다)
+  else if (diagR >= 0.22 && whiteR >= 0.25) kind = 'sketch';
+  else kind = 'photo';
+  return { kind, midRatio: +midR.toFixed(3), inkRatio: +inkR.toFixed(3), satAvg: +satAvg.toFixed(1),
+    whiteRatio: +whiteR.toFixed(3), diagRatio: +diagR.toFixed(3) };
 }
 
 /* ------------------------------------------------------------
@@ -399,10 +421,23 @@ async function traceFacade(src, opts) {
     if (isWin) { rowW[y - y0]++; colW[x - x0]++; }
   }
   let rb = bandsOf(rowW, 0.3), cb = bandsOf(colW, 0.3);
+  const direct = rb.length >= 1 && cb.length >= 1;         // 밴드를 직접 잡았는가(신뢰의 근거)
   // 밴드가 안 잡히면(민무늬 파사드) 엣지 주기로 후퇴
   const cv2 = colV.slice(x0, x1 + 1), rv2 = rowH.slice(y0, y1 + 1);
   if (rb.length < 1) { const p = periodOf(rv2, fh * 0.06, fh / 2) || fh; rb = []; for (let i = 0; i < Math.round(fh / p); i++) rb.push([i * p + p * 0.25, i * p + p * 0.75]); }
   if (cb.length < 1) { const p = periodOf(cv2, fw * 0.06, fw / 2) || fw; cb = []; for (let i = 0; i < Math.round(fw / p); i++) cb.push([i * p + p * 0.25, i * p + p * 0.75]); }
+  // 신뢰도 — 밴드 간격이 고르면(진짜 창 격자) 높고, 들쭉날쭉·후퇴 경로면 낮다.
+  // 격자가 아닌 이미지(콘셉트 스케치·비정면 사진)에 자신 있게 매스를 세우는 걸 막는 게이트.
+  const spacingCV = (bands) => {
+    if (bands.length < 2) return 1;
+    const cs = bands.map(b2 => (b2[0] + b2[1]) / 2), ds = [];
+    for (let i = 1; i < cs.length; i++) ds.push(cs[i] - cs[i - 1]);
+    const m = ds.reduce((a2, v) => a2 + v, 0) / ds.length;
+    const sd = Math.sqrt(ds.reduce((a2, v) => a2 + (v - m) * (v - m), 0) / ds.length);
+    return m > 0 ? sd / m : 1;
+  };
+  const conf = !direct ? 0.2
+    : Math.max(0, Math.min(1, 1 - Math.max(spacingCV(rb), spacingCV(cb)) * 1.6));
   const floors = Math.max(1, Math.min(60, rb.length));
   const bays = Math.max(1, Math.min(30, cb.length));
   const perX = bays > 1 ? fw / bays : fw, perY = floors > 1 ? fh / floors : fh;
@@ -420,7 +455,7 @@ async function traceFacade(src, opts) {
   const depthMM = o.depthMM || Math.max(4000, Math.round(widthMM * 0.6 / 100) * 100);
   return { floors, bays, aspect: +aspect.toFixed(2), windows,
     meta: { imgW: im.width, imgH: im.height, facadePx: { x0, y0, x1, y1 }, periodPx: { x: +perX.toFixed(1), y: +perY.toFixed(1) },
-      floorH: o.floorH, widthMM, depthMM, heightMM } };
+      floorH: o.floorH, widthMM, depthMM, heightMM, conf: +conf.toFixed(2) } };
 }
 
 return { traceImage, traceFacade, classifyImage, _internal: { binarize, extractLines, mergeCollinear, pairWalls, peaksOf, span, gradients, periodOf, bandsOf, windowMask } };

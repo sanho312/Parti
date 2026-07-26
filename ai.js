@@ -978,6 +978,7 @@
     + '· "10평 원룸 그려줘" / "25평 투룸" / "84㎡ 쓰리룸" — 평면 자동 생성(벽·문·창·실명)\n'
     + '· 도면 이미지 첨부 후 "이 도면 따라 그려줘" — 이미지를 선으로 벡터화\n'
     + '· 건물 사진 첨부 후 "이 건물 매스로 만들어줘" — 층수·베이를 읽어 매스 근사\n'
+    + '· "박공 5동 1층 원형 배치로 세워줘" — 여러 동 + 지붕 + 원형 마당 (콘셉트 스케치 구성)\n'
     + '· "인식해줘" / "건물화해줘" — 스케치를 도형·3D 건물로\n'
     + '· "벽 높이 2700" / "벽 두께 200" — 벽 속성 변경\n'
     + '· "3D 보여줘" / "평면" / "4분할" · "단면 만들어줘" / "입면"\n'
@@ -998,13 +999,25 @@
       const forceMass = /매스|매싱|볼륨|파사드|외관/.test(t);
       const forcePlan = /평면도|도면 (그대로|따라)|트레이스/.test(t);
       const fh = numOf(t, /층고\s*(\d{3,5})/) || 3000;
-      const lines = []; let planN = 0, massN = 0, cursorX = 0;
+      const lines = []; let planN = 0, massN = 0, sketchN = 0, cursorX = 0;
       const allStrokes = [];
       for (const img of imgs) {
         const cls = forceMass ? { kind: 'photo' } : forcePlan ? { kind: 'plan' } : await V.classifyImage(img.dataUrl);
+        if (cls.kind === 'sketch') {
+          // ★투시 콘셉트 스케치 — 픽셀만으로는 복원 불가(깊이·투시 왜곡). 엉뚱한 박스를
+          //   자신 있게 세우는 대신(실사용 보고), 구성을 확인받아 그대로 세운다.
+          sketchN++;
+          lines.push('· 투시 스케치로 보입니다 — 사선 획 ' + Math.round((cls.diagRatio || 0) * 100) + '%');
+          continue;
+        }
         if (cls.kind === 'photo' && window.PARTI_ARCH) {
           const f = await V.traceFacade(img.dataUrl, { floorH: fh,
             depthMM: numOf(t, /(?:깊이|안길이)\s*(\d+(?:\.\d+)?)\s*m/) * 1000 || null });
+          if (!forceMass && (f.meta.conf || 0) < 0.45) {
+            // 창 격자가 흐릿하면 결과가 임의 값에 가깝다 — 세우지 않고 사실대로 말한다
+            lines.push(`· 사진에서 창 격자를 확신할 수 없습니다(신뢰도 ${Math.round((f.meta.conf || 0) * 100)}%) — 정면에서 찍은 사진일수록 잘 읽힙니다. 그래도 세우려면 "매스로 만들어줘"라고 답해 주세요.`);
+            continue;
+          }
           const m = window.PARTI_ARCH.buildMassing({ floors: f.floors, bays: f.bays, windows: f.windows,
             widthMM: f.meta.widthMM, depthMM: f.meta.depthMM, floorH: f.meta.floorH, ox: cursorX });
           cursorX += m.W + 4000; massN++;
@@ -1027,7 +1040,28 @@
       let tail = '';
       if (planN) tail = '\n도면은 스케치로 올렸습니다 — **건물화(🏠)** 를 누르면 3D 까지 만들어지고, 틀린 선은 유령선을 탭해 고칠 수 있어요. 실제 치수를 알면 "가로 12m" 처럼 알려주세요.';
       if (massN) tail += '\n매스는 초기 검토용입니다 — 깊이(폭×0.6)·층고(' + fh + 'mm)는 가정값이라 "깊이 12m 층고 3300" 처럼 알려주시면 다시 세웁니다.';
+      if (sketchN) tail += '\n\n투시 스케치는 깊이 정보가 없어 알고리즘만으로 정확히 복원할 수 없습니다 — 대신 **구성을 알려주시면 그대로 세웁니다**:\n'
+        + '· 예) **"박공 5동 1층 원형 배치로 세워줘"** (동 수·층수·지붕[박공/평]·배치[원형/일렬])\n'
+        + '· 각 동 크기도 지정 가능: "한 동 8×12m"';
       return `이미지 ${imgs.length}장을 처리했습니다:\n` + lines.join('\n') + tail;
+    }
+    // ①-b 다동 배치 — "박공 5동 1층 원형 배치" (투시 스케치 후속 대화 or 직접 요청)
+    if (window.PARTI_ARCH && /(\d+)\s*동/.test(t) && /배치|세워|만들|박공|지어/.test(t)) {
+      const n = numOf(t, /(\d+)\s*동/) || 5;
+      const fl = numOf(t, /(\d+)\s*층/) || 1;
+      const wD = numOf(t, /(\d+(?:\.\d+)?)\s*[x×]\s*\d+(?:\.\d+)?\s*m/) * 1000 || 8000;
+      const dD = numOf(t, /\d+(?:\.\d+)?\s*[x×]\s*(\d+(?:\.\d+)?)\s*m/) * 1000 || 12000;
+      const roof = /평지붕|평평/.test(t) ? 'flat' : /외쪽|한쪽/.test(t) ? 'shed' : 'gable';
+      const arrange = /일렬|한 ?줄|나란/.test(t) ? 'row' : 'circle';
+      const r = window.PARTI_ARCH.buildComplex({ count: n, floors: fl, w: wD, d: dD, roof, arrange,
+        glass: !/유리 ?없/.test(t) });
+      if (!r) return '배치를 만들지 못했습니다.';
+      execTool('set_view', { mode: '3d' });
+      const roofKo = { gable: '박공지붕', flat: '평지붕', shed: '외쪽지붕' }[roof];
+      return `${r.n}동을 ${arrange === 'row' ? '일렬로' : '원형 마당(반지름 ' + (r.R / 1000).toFixed(1) + 'm) 둘레에'} 세웠습니다 — `
+        + `각 동 ${(wD / 1000).toFixed(0)}×${(dD / 1000).toFixed(0)}m · ${fl}층(${(r.H / 1000).toFixed(1)}m) · ${roofKo}`
+        + (r.counts.window ? ' · 마당 쪽 전면 유리' : '') + '.\n'
+        + '동 수·크기·지붕·배치는 같은 문장으로 다시 말하면 새로 세웁니다. (되돌리기: Ctrl+Z)';
     }
     // ② 평면 생성 — "N평/N㎡ + 실 구성"
     const prog = window.PARTI_ARCH && window.PARTI_ARCH.programOf(t);

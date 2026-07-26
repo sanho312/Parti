@@ -3132,11 +3132,42 @@ function tests(){
             }
             return cc.toDataURL('image/png');
           };
+          // 투시 콘셉트 스케치 — 종이 배경 + 사선 획 (박공 동 5개 + 원형 마당)
+          const mkSketch = () => {
+            const cv3 = AD.createElement('canvas'); cv3.width = 900; cv3.height = 500;
+            const g4 = cv3.getContext('2d');
+            g4.fillStyle = '#efe9dc'; g4.fillRect(0, 0, 900, 500);
+            g4.strokeStyle = '#222'; g4.lineWidth = 3;
+            for (let i = 0; i < 5; i++) { const x = 60 + i * 165, y = 120 + ((i % 2) ? 18 : 0);
+              g4.beginPath(); g4.moveTo(x, y + 120); g4.lineTo(x + 30, y + 35); g4.lineTo(x + 95, y); g4.lineTo(x + 150, y + 55);
+              g4.lineTo(x + 140, y + 165); g4.lineTo(x + 18, y + 185); g4.closePath(); g4.stroke();
+              g4.fillStyle = '#7fa8d9'; g4.beginPath();
+              g4.moveTo(x + 50, y + 60); g4.lineTo(x + 130, y + 40); g4.lineTo(x + 125, y + 150); g4.lineTo(x + 48, y + 160); g4.closePath(); g4.fill();
+              g4.fillStyle = '#000'; }
+            g4.fillStyle = '#7dbb57'; g4.beginPath(); g4.ellipse(450, 400, 180, 60, 0, 0, 7); g4.fill();
+            return cv3.toDataURL('image/png');
+          };
           const facadeUrl = mkFacade(6, 4, 640, 560);
           return VZ.classifyImage(cv2.toDataURL('image/png'))
             .then(ci => { eqi(ci.kind, 'plan', '★이미지 분류 — 흑백 선도면은 plan (문장 키워드 아님)'); return VZ.classifyImage(facadeUrl); })
-            .then(cf => { eqi(cf.kind, 'photo', '★이미지 분류 — 채색 사진은 photo (채도 기준)'); return VZ.traceFacade(facadeUrl, { floorH: 3000 }); })
+            .then(cf => { eqi(cf.kind, 'photo', '★이미지 분류 — 채색 사진은 photo (채도 기준)'); return VZ.classifyImage(mkSketch()); })
+            .then(cs => {
+              eqi(cs.kind, 'sketch', '★이미지 분류 — 투시 스케치는 sketch (사선 획 비율)');
+              // 다동 배치 — 콘셉트 스케치 구성으로 세우기
+              const b5 = C.state.entities.length;
+              const cx5 = A.buildComplex({ count: 5, floors: 1, w: 8000, d: 12000, roof: 'gable', arrange: 'circle' });
+              const ce = C.state.entities.slice(b5);
+              eqi(cx5.n, 5, '★다동 배치 — 5동');
+              eqi(ce.filter(e5 => e5.bim && e5.bim.kind === 'roof').length, 5, '  박공지붕 5매');
+              eqi(ce.filter(e5 => e5.bim && e5.bim.kind === 'opening').length, 5, '  마당 쪽 전면 유리 5면');
+              eqi(ce.filter(e5 => e5.type === 'CIRCLE' && e5.bim && e5.bim.kind === 'slab').length, 1, '  원형 마당');
+              const rs = C.bimSolids().filter(s5 => s5.rf && ce.some(e5 => e5.id === s5.eid));
+              eqi(rs.filter(s5 => s5.zt).length, 10, '  경사 지붕 솔리드 10면 (동당 2면)');
+              C.state.entities.length = b5;
+              return VZ.traceFacade(facadeUrl, { floorH: 3000 });
+            })
             .then(fa => {
+            ok((fa.meta.conf || 0) >= 0.45, '★파사드 신뢰도 — 또렷한 격자는 게이트 통과 (' + fa.meta.conf + ')');
             eqi(fa.floors, 6, '★건물 사진 — 층수 검출 (창 밴드 계수)');
             eqi(fa.bays, 4, '★건물 사진 — 베이 검출');
             eqi(fa.windows.length, 24, '  창 격자 6×4');
