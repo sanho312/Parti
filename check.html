@@ -44,7 +44,7 @@
 <main>
   <label id="drop">
     <input type="file" accept="image/*" hidden id="file">
-    <div id="ph">그림을 끌어다 놓거나 눌러서 고르세요<br><span class="mut">사진·스캔·아이패드 캡처 모두 됩니다</span></div>
+    <div id="ph">그림을 끌어다 놓거나 <b>Ctrl+V 로 붙여넣거나</b> 눌러서 고르세요<br><span class="mut">사진·스캔·아이패드 캡처 모두 됩니다</span></div>
   </label>
   <div id="out"><p class="mut">아직 넣은 그림이 없습니다.</p></div>
 </main>
@@ -71,6 +71,17 @@ drop.addEventListener('drop', (e) => {
   if (f) load(f);
 });
 file.addEventListener('change', () => { if (file.files[0]) load(file.files[0]); });
+// ★붙여넣기(Ctrl+V) — 사진을 파일로 저장하지 않고 클립보드에서 바로 받는다.
+//   손그림은 대개 폰으로 찍어 복사해 오므로, 저장을 요구하면 그 한 단계에서 검증이 멈춘다.
+window.addEventListener('paste', (e) => {
+  const it = (e.clipboardData && e.clipboardData.items) || [];
+  for (const x of it) {
+    if (x.type && x.type.indexOf('image') === 0) {
+      const f = x.getAsFile();
+      if (f) { load(f); e.preventDefault(); return; }
+    }
+  }
+});
 
 function load(f) {
   const rd = new FileReader();
