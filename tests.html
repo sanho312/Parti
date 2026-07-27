@@ -5017,6 +5017,35 @@ function tests(){
                 ok(Math.min.apply(null, spts.map(p0 => p0[0])) < mx0
                   && Math.max.apply(null, spts.map(p0 => p0[0])) > mx1,
                   '  대지가 건물보다 넓다 (여백을 두고 깔린다)');
+                // ── ★3D 마감 — 창 리빌 · 창대 ──
+                // 유리가 벽 두께를 그대로 채우면 창이 벽면과 같은 면에 붙어 그림자가 없다.
+                // 얇게 넣어 양쪽에 깊이를 만들고, 창 밑에 물끊기 턱을 두면 가로 그림자가 생긴다.
+                const winE = esF.filter(e0 => e0.bim && e0.bim.kind === 'opening'
+                  && e0.bim.ot === 'window');
+                const winId = new Set(winE.map(e0 => e0.id));
+                const thickOf = (s0) => { const P = s0.poly; let mn = 1e18;
+                  for (let i0 = 0; i0 < P.length; i0++) { const q0 = P[(i0 + 1) % P.length];
+                    mn = Math.min(mn, Math.hypot(q0[0] - P[i0][0], q0[1] - P[i0][1])); }
+                  return Math.round(mn); };
+                const glassS = solF.filter(s0 => s0.glass && winId.has(s0.eid));
+                ok(glassS.length > 0, '  유리 솔리드 ' + glassS.length + '개');
+                const gT = [...new Set(glassS.map(thickOf))];
+                ok(gT.every(v => v < A.STD.wallExt),
+                  '★유리가 벽보다 얇다 = 창 리빌이 생긴다 (유리 ' + gT.join('/')
+                  + ' < 벽 ' + A.STD.wallExt + 'mm)');
+                ok(gT.every(v => v >= 40 && v <= 80), '  유리 두께 40~80mm (벽 두께의 1/3)');
+                // ★창대 — 창 밑에 내민 턱. 벽면 밖으로 나와야 그림자가 진다.
+                const sillS = solF.filter(s0 => winId.has(s0.eid)
+                  && Math.round(s0.z1 - s0.z0) === 50 && thickOf(s0) > A.STD.wallExt);
+                ok(sillS.length >= winE.length * 0.8,
+                  '★창마다 창대 (' + sillS.length + ' / 창 ' + winE.length + '개)');
+                ok(sillS.every(s0 => thickOf(s0) >= A.STD.wallExt + 80),
+                  '  창대가 벽면 밖으로 내민다 (' + [...new Set(sillS.map(thickOf))].join('/')
+                  + ' > 벽 ' + A.STD.wallExt + ')');
+                // 창대는 창 밑에만 — 문에는 없다
+                const doorId = new Set(esF.filter(e0 => e0.bim && e0.bim.ot === 'door').map(e0 => e0.id));
+                eqi(solF.filter(s0 => doorId.has(s0.eid) && Math.round(s0.z1 - s0.z0) === 50
+                  && thickOf(s0) > A.STD.wallExt).length, 0, '  문에는 창대를 달지 않는다');
                 C.state.entities.length = bR;
                 // ── ★실마다 창 ──
                 // 창을 외피에만 균일하게 뚫으면 어떤 방은 창이 없고 어떤 방은 여러 개다.

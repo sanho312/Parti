@@ -4311,14 +4311,20 @@ function bimSolids() {
           cuts.push({ s0: Math.max(0, s - ow / 2), s1: Math.min(L, s + ow / 2), o });
       }
       cuts.sort((a, b) => a.s0 - b.s0);
-      const band = (s0, s1, z0, z1, color, glass, beid) => {
+      const band = (s0, s1, z0, z1, color, glass, beid, tOv) => {
         if (s1 - s0 < 1e-6 || z1 - z0 < 0) return; // z1===z0(높이 0) 허용 — 라이노처럼 납작한 '면'으로 렌더
         const ax = x1 + ux * s0, ay = y1 + uy * s0, bx = x1 + ux * s1, by = y1 + uy * s1;
-        const nx = -uy * t / 2, ny = ux * t / 2;
+        // ★두께를 덮어쓸 수 있다 — 유리를 벽 두께 그대로 채우면 창이 벽면과 같은 면에 붙어
+        //   그림자가 없다. 얇게 넣어 양쪽에 리빌(깊이)을 만들면 그 한 줄 그림자가 3D 를
+        //   모형 사진처럼 만든다.
+        const tb = (tOv != null && tOv < t) ? tOv : t;
+        const nx = -uy * tb / 2, ny = ux * tb / 2;
         let A1 = [ax + nx, ay + ny], A2 = [ax - nx, ay - ny];
         let B1 = [bx + nx, by + ny], B2 = [bx - nx, by - ny];
-        if (s0 <= 0.01) { A1 = mitO[k]; A2 = mitI[k]; }            // 세그 시작 = 마이터 코너
-        if (s1 >= L - 0.01) { B1 = mitO[k2]; B2 = mitI[k2]; }      // 세그 끝 = 마이터 코너
+        if (tb === t) {   // ★얇게 넣은 유리는 마이터 코너를 쓰지 않는다 — 벽 두께 기준이라 튀어나온다
+          if (s0 <= 0.01) { A1 = mitO[k]; A2 = mitI[k]; }          // 세그 시작 = 마이터 코너
+          if (s1 >= L - 0.01) { B1 = mitO[k2]; B2 = mitI[k2]; }    // 세그 끝 = 마이터 코너
+        }
         const sol = { poly: [A1, B1, B2, A2], z0, z1, color, glass, eid: beid !== undefined ? beid : w.id, open: t <= 2 || glass, seg: k,
           curv: w.type === 'CIRCLE' || w.type === 'ARC' || smoothW,
           // 곡선 벽 구로 셰이딩용 진짜 원 중심 — 밴드(얇은 사각) 자체 무게중심으로 법선을 만들면
@@ -4355,7 +4361,9 @@ function bimSolids() {
         const sill = c.o.bim.sill || 0, oh = c.o.bim.h || 2100;
         if (sill > 0) band(c.s0, c.s1, base, base + sill, wallCol);            // 창 아래
         if (base + h > base + sill + oh) band(c.s0, c.s1, base + sill + oh, base + h, wallCol); // 인방(상부)
-        if (c.o.bim.ot === 'window') band(c.s0 + 10, c.s1 - 10, base + sill, base + sill + oh, '#7ec8ff', true, c.o.id); // 유리
+        // 유리 — 벽 두께의 1/3(최대 80mm)만 차지한다. 남는 두께가 창 리빌(그림자)이 된다.
+        if (c.o.bim.ot === 'window') band(c.s0 + 10, c.s1 - 10, base + sill, base + sill + oh,
+          '#7ec8ff', true, c.o.id, Math.max(40, Math.min(80, t / 3)));
         if (!wz) pushOpening3D(solids, c, { x1, y1, ux, uy, t, base, h, sh: wSh });   // 창호 3D — 문짝·창틀 (유형별)
         cur = c.s1;
       }
@@ -4393,6 +4401,21 @@ function pushOpening3D(solids, c, g) {
     solids.push(so);
   };
   // 경첩 끝의 세그먼트 s 위치 → c.s0/s1 어느 쪽인지 (개구선과 세그먼트 방향이 반대일 수 있음)
+  // ── ★창대(sill) ──
+  // 창 밑에 물끊기 턱이 없으면 3D 에서 창이 벽에 '뚫린 구멍'으로만 보인다. 얇은 판 하나가
+  // 창 아래 가로 그림자를 만들어 창이 벽에 '앉은' 것으로 읽힌다(실제로도 빗물받이다).
+  if (o.bim.ot === 'window' && sill > 100) {
+    const PJ = 45, TH = 50;                                   // 내밀기 45 · 두께 50
+    const d0 = g.t / 2 + PJ;
+    const f0 = shF(z0 - TH), f1 = shF(z0);
+    const sx = g.sh ? g.sh[0] * f0 : 0, sy = g.sh ? g.sh[1] * f0 : 0;
+    const P = [at(c.s0 - 30, d0), at(c.s1 + 30, d0), at(c.s1 + 30, -d0), at(c.s0 - 30, -d0)]
+      .map(p => [p[0] + sx, p[1] + sy]);
+    const so = { poly: P, z0: z0 - TH, z1: z0, color: FRAME, eid: o.id };
+    if (g.sh) { const dx2 = g.sh[0] * (f1 - f0), dy2 = g.sh[1] * (f1 - f0);
+      so.ptop = P.map(p => [p[0] + dx2, p[1] + dy2]); }
+    solids.push(so);
+  }
   const sO1 = (o.x1 - g.x1) * g.ux + (o.y1 - g.y1) * g.uy;
   const sO2 = (o.x2 - g.x1) * g.ux + (o.y2 - g.y1) * g.uy;
   const hingeS = o.bim.hinge ? sO2 : sO1;
