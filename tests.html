@@ -3082,6 +3082,50 @@ function tests(){
         } else ok(true, '(AI 도구 훅 없음)');
         S4.SK.strokes = []; S4.SK.fitOv = {}; S4.closePreview(); S4.SK.rev++;
       }
+      { // ★범용 매스(mass) — '어떤 형상이든' 만드는 일반 프리미티브
+        const A0 = AW.PARTI_ARCH;
+        ok(A0 && A0.buildShape && A0.SHAPES, '★범용 형상 빌더 로드');
+        const areaOf = (poly) => { let a = 0;
+          for (let i = 0; i < poly.length; i++) { const q = poly[(i + 1) % poly.length]; a += poly[i][0] * q[1] - q[0] * poly[i][1]; }
+          return Math.abs(a / 2); };
+        // 형상 9종이 모두 실제 3D 솔리드가 되는가
+        let allOk = true; const names = [];
+        for (const sh of Object.keys(A0.SHAPES)) {
+          const bm = C.state.entities.length;
+          const r0 = A0.buildShape({ shape: sh, w: 10000, d: 8000, h: 6000, sides: 6, n: 4 });
+          const em = C.state.entities.slice(bm);
+          const sm = C.bimSolids().filter(s0 => em.some(x0 => x0.id === s0.eid));
+          if (!r0 || !sm.length) { allOk = false; names.push(sh); }
+          C.state.entities.length = bm;
+        }
+        ok(allOk, '★형상 ' + Object.keys(A0.SHAPES).length + '종 모두 3D 솔리드 생성' + (names.length ? ' (실패: ' + names.join(',') + ')' : ''));
+        // 전단 프리즘 — 윗면이 통째로 밀리되 면적은 보존된다(기울어진 매스의 정의)
+        const bL = C.state.entities.length;
+        A0.buildShape({ shape: 'lean', w: 10000, d: 8000, h: 6000 });
+        const eL = C.state.entities.slice(bL);
+        const sL = C.bimSolids().find(s0 => eL.some(x0 => x0.id === s0.eid));
+        ok(sL && sL.ptop, '★기울어진 매스 — 윗면 다각형(ptop)이 따로 있다');
+        ok(sL && Math.abs(areaOf(sL.ptop) - areaOf(sL.poly)) < 1e5, '  전단이라 윗면 면적은 보존');
+        const mv = sL ? Math.hypot(sL.ptop[0][0] - sL.poly[0][0], sL.ptop[0][1] - sL.poly[0][1]) : 0;
+        ok(mv > 1000, '  윗면이 실제로 밀렸다 (' + Math.round(mv) + 'mm)');
+        C.state.entities.length = bL;
+        // 각뿔 — 윗면이 한 점으로 수렴
+        const bP = C.state.entities.length;
+        A0.buildShape({ shape: 'pyramid', w: 10000, d: 10000, h: 8000, sides: 6 });
+        const eP = C.state.entities.slice(bP);
+        const sP = C.bimSolids().find(s0 => eP.some(x0 => x0.id === s0.eid));
+        eqi(sP ? sP.poly.length : 0, 6, '★육각 각뿔 — 바닥 6각');
+        ok(sP && areaOf(sP.ptop) < areaOf(sP.poly) * 0.01, '  윗면이 한 점으로 수렴');
+        C.state.entities.length = bP;
+        // 정점별 상단 높이 — 임의 경사면
+        const bW = C.state.entities.length;
+        A0.buildPolyMass([[0, 0], [8000, 0], [8000, 6000], [0, 6000]], { h: 4000, zt: [2000, 2000, 7000, 7000] });
+        const eW = C.state.entities.slice(bW);
+        const sW = C.bimSolids().find(s0 => eW.some(x0 => x0.id === s0.eid));
+        ok(sW && sW.zt && Math.max.apply(null, sW.zt) - Math.min.apply(null, sW.zt) === 5000,
+          '★임의 다각형 + 정점별 상단 높이 — 원하는 경사면을 직접 지정');
+        C.state.entities.length = bW;
+      }
       { // API 없이 — 건축 지식 엔진(arch) · 이미지 벡터화(vision) · 로컬 코워커
         const A = AW.PARTI_ARCH, VZ = AW.PARTI_VISION;
         ok(!!A && !!VZ, '★arch.js·vision.js 로드');

@@ -3072,6 +3072,35 @@ function bimSolids() {
       for (const s of stairSolids(e)) { s.eid = e.id; s.color = bimSolidColor(e, s.color); solids.push(s); }
     } else if (e.bim.kind === 'railing') {
       for (const s of railingSolids(e)) solids.push(s); // 손스침 + 동자기둥
+    } else if (e.bim.kind === 'mass') {
+      // ── 범용 매스: '어떤 형상이든' 만들기 위한 일반 프리미티브 ──
+      // 임의 닫힌 다각형(또는 원)을 바닥으로, 정점별 바닥/상단 높이를 줄 수 있고,
+      // 윗면을 밀거나(shear) 줄이거나(taper) 돌려서(twist) 각뿔대·전단 프리즘·비틀린
+      // 매스까지 한 개체로 표현한다. 기울어진 텐트·접힌 판·좁아지는 타워가 전부 여기에 든다.
+      const b = e.bim;
+      const poly = e.type === 'CIRCLE' ? circlePoly(e.cx, e.cy, e.r, segN)
+        : (e.points || []).map(p => [p[0], p[1]]);
+      if (poly.length >= 3) {
+        const nv = poly.length, base = b.base || 0;
+        const zb = (Array.isArray(b.zb) && b.zb.length === nv) ? b.zb.slice() : poly.map(() => base);
+        const zt = (Array.isArray(b.zt) && b.zt.length === nv) ? b.zt.slice()
+          : poly.map((p, i) => zb[i] + (b.h != null ? b.h : 3000));
+        let ptop = null;
+        if (b.shear || b.taper != null || b.twist) {
+          let cx = 0, cy = 0; for (const p of poly) { cx += p[0]; cy += p[1]; }
+          cx /= nv; cy /= nv;
+          const k = (b.taper != null && isFinite(b.taper)) ? b.taper : 1;
+          const th = (b.twist || 0) * Math.PI / 180, cs = Math.cos(th), sn = Math.sin(th);
+          const sx = b.shear ? (b.shear[0] || 0) : 0, sy = b.shear ? (b.shear[1] || 0) : 0;
+          ptop = poly.map(p => {
+            const dx = (p[0] - cx) * k, dy = (p[1] - cy) * k;
+            return [cx + dx * cs - dy * sn + sx, cy + dx * sn + dy * cs + sy];
+          });
+        }
+        solids.push({ poly, ptop, zb, zt, z0: Math.min.apply(null, zb), z1: Math.max.apply(null, zt),
+          color: bimSolidColor(e, '#c9c2b4'), eid: e.id, curv: e.type === 'CIRCLE',
+          ...(e.type === 'CIRCLE' ? { cc: [e.cx, e.cy] } : {}) });
+      }
     } else if (e.bim.kind === 'column') {
       const isC = e.type === 'CIRCLE';
       const poly = isC ? circlePoly(e.cx, e.cy, e.r, segN) : e.points.map(p => [p[0], p[1]]);
@@ -3958,7 +3987,10 @@ function renderScene(isActive) {
     // zb = 정점별 바닥 높이(선택) — 지형·표면 위 곡선을 따라 세운 벽처럼 바닥이 기울어진 솔리드용.
     // 없으면 예전대로 평평한 s.z0. (s.z0은 항상 min(zb)로 유지되므로 다른 코드는 그대로 동작)
     const zb = s.zb || s.poly.map(() => s.z0);
-    const top = s.poly.map((p, i) => proj3D(p[0], p[1], zt[i]));
+    // ptop = 윗면 다각형(선택). 바닥과 XY 가 달라도 되므로 기울어진·좁아지는·비틀린
+    // 매스(각뿔대·전단 프리즘)를 한 솔리드로 표현할 수 있다. 없으면 예전대로 수직 프리즘.
+    const pTop = s.ptop && s.ptop.length === n ? s.ptop : s.poly;
+    const top = pTop.map((p, i) => proj3D(p[0], p[1], zt[i]));
     const bot = s.poly.map((p, i) => proj3D(p[0], p[1], zb[i]));
     const cull = !s.open; // 닫힌 솔리드만 백페이스 컬링 (서피스·유리는 양면 표시)
     let ccx = 0, ccy = 0; for (const p of s.poly) { ccx += p[0]; ccy += p[1]; } ccx /= n; ccy /= n;
@@ -4015,7 +4047,7 @@ function renderScene(isActive) {
       const mTop = { color: s.color, glass: s.glass, eid: s.eid, rf: s.rf, fk: 'top' };
       const dTop = top.reduce((a, p) => a + p[2], 0) / n;
       pickFaces.push({ pts: top, d: dTop, eid: s.eid, fk: 'top', fi: null, si: s.seg != null ? s.seg : null, sz0: s.z0 });
-      if (litOn && !v3._fast && !s.glow) pushLitPoly(faces, s.poly, zt, 1, mTop, s.eid + '|t|' + (s.seg != null ? s.seg : '') + '|' + Math.round(s.z1), !!s.lit); // 넓은 면에도 빛 웅덩이가 보이게 (조작 중엔 생략)
+      if (litOn && !v3._fast && !s.glow) pushLitPoly(faces, pTop, zt, 1, mTop, s.eid + '|t|' + (s.seg != null ? s.seg : '') + '|' + Math.round(s.z1), !!s.lit); // 넓은 면에도 빛 웅덩이가 보이게 (조작 중엔 생략)
       else faces.push({ ...mTop, pts: top, d: dTop, shade: s.glow ? 1 : 1.0 });
     }
     if (!cull || facesCam(ccx, ccy, Math.min(...zb), 0, 0, -1)) { // 하면 (아래 향함)
@@ -5013,14 +5045,15 @@ function surfaceSnap3D(px, py, exclude) {
     if (exclude && exclude.has(s.eid)) continue;
     const P = s.poly; if (!P || P.length < 3) continue;
     const zt = s.zt || P.map(() => s.z1);
+    const Q = (s.ptop && s.ptop.length === P.length) ? s.ptop : P;   // 어긋난 윗면 지원
     for (let i = 1; i < P.length - 1; i++) { // 팬 삼각화: 바닥·윗면
       tri([P[0][0], P[0][1], s.z0], [P[i][0], P[i][1], s.z0], [P[i + 1][0], P[i + 1][1], s.z0]);
-      tri([P[0][0], P[0][1], zt[0]], [P[i][0], P[i][1], zt[i]], [P[i + 1][0], P[i + 1][1], zt[i + 1]]);
+      tri([Q[0][0], Q[0][1], zt[0]], [Q[i][0], Q[i][1], zt[i]], [Q[i + 1][0], Q[i + 1][1], zt[i + 1]]);
     }
-    for (let i = 0; i < P.length; i++) { // 옆면(수직 사각형 → 삼각형 2개)
+    for (let i = 0; i < P.length; i++) { // 옆면(사각형 → 삼각형 2개)
       const j = (i + 1) % P.length;
       const a = [P[i][0], P[i][1], s.z0], b = [P[j][0], P[j][1], s.z0];
-      const c = [P[j][0], P[j][1], zt[j]], d = [P[i][0], P[i][1], zt[i]];
+      const c = [Q[j][0], Q[j][1], zt[j]], d = [Q[i][0], Q[i][1], zt[i]];
       tri(a, b, c); tri(a, c, d);
     }
   }

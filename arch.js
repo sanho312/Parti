@@ -524,5 +524,108 @@ function buildComplex(spec) {
   return { n, floors: o.floors, H, R: Math.round(R), L, widths: Ws, counts, arrange: o.arrange };
 }
 
-return { STD, roomType, PROGRAMS, programOf, planLayout, buildPlan, buildMassing, buildComplex };
+// ---------- 범용 형상 빌더 — '어떤 형상이든' ----------
+// 고정된 지붕 유형이 아니라 임의 다면체를 직접 세운다. bim.kind='mass' 프리미티브가
+// 바닥 다각형 + 정점별 상단 높이 + 윗면 밀기/줄이기/돌리기를 받으므로,
+// 아래 조합만으로 텐트·기울어진 쐐기·각뿔·좁아지는 타워·톱니 지붕이 전부 나온다.
+const SHAPES = {
+  box:      { ko: '상자' },
+  wedge:    { ko: '쐐기' },        // 한쪽만 높은 단면 (한쪽으로 기운 판)
+  tent:     { ko: '텐트' },        // 가운데가 솟은 박공형 단면
+  lean:     { ko: '기운 상자' },   // 윗면을 통째로 민 전단 프리즘
+  taper:    { ko: '좁아지는 매스' },
+  pyramid:  { ko: '각뿔' },
+  cylinder: { ko: '원통' },
+  cone:     { ko: '원뿔' },
+  saw:      { ko: '톱니' },        // 톱니 지붕 (여러 쐐기 반복)
+};
+function shapeOf(text) {
+  const t = String(text || '');
+  if (/톱니|saw|셰드 ?연속/i.test(t)) return 'saw';
+  if (/원뿔|콘|cone/i.test(t)) return 'cone';
+  if (/원통|실린더|cylinder|기둥형/i.test(t)) return 'cylinder';
+  if (/각뿔|피라미드|pyramid/i.test(t)) return 'pyramid';
+  if (/좁아지|테이퍼|taper|사다리꼴 ?매스/i.test(t)) return 'taper';
+  if (/기울|기운|비스듬|lean|전단/i.test(t)) return 'lean';
+  if (/텐트|tent|박공 ?매스|삼각/i.test(t)) return 'tent';
+  if (/쐐기|wedge|외쪽|한쪽만/i.test(t)) return 'wedge';
+  if (/상자|박스|box|직육면체/i.test(t)) return 'box';
+  return null;
+}
+// 정다각형/원 바닥
+function ngon(cx, cy, r, n, rot) {
+  const p = [];
+  for (let i = 0; i < n; i++) { const a = (rot || 0) + i * 2 * Math.PI / n; p.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]); }
+  return p;
+}
+// spec: { shape, w, d, h, ox, oy, rot(도), sides, lean(0~1), taper(0~1), twist(도), n(반복) }
+function buildShape(spec) {
+  const br = B(); if (!br) return null;
+  const o = Object.assign({ shape: 'box', w: 10000, d: 8000, h: 6000, ox: 0, oy: 0,
+    rot: 0, sides: 6, lean: 0.45, taper: 0.45, twist: 0, n: 1, layer: '매스' }, spec || {});
+  br.pushUndo();
+  br.ensureLayer('매스', '#cfc7ba');
+  const th = o.rot * Math.PI / 180, cs = Math.cos(th), sn = Math.sin(th);
+  const RT = (x, y) => [o.ox + x * cs - y * sn, o.oy + x * sn + y * cs];
+  const W2 = o.w / 2, D2 = o.d / 2;
+  const rect = () => [RT(-W2, -D2), RT(W2, -D2), RT(W2, D2), RT(-W2, D2)];
+  const put = (pts, bim, circle) => {
+    const e = circle
+      ? br.addEntity({ type: 'CIRCLE', layer: o.layer, cx: Math.round(circle[0]), cy: Math.round(circle[1]), r: Math.round(circle[2]) })
+      : br.addEntity({ type: 'LWPOLYLINE', layer: o.layer, closed: true,
+        points: pts.map(p => [Math.round(p[0]), Math.round(p[1])]) });
+    e.bim = Object.assign({ kind: 'mass' }, bim);
+    return e;
+  };
+  const made = [];
+  const S = o.shape;
+  if (S === 'saw') {                                   // 톱니 지붕 — 쐐기 n개 반복
+    const cnt = Math.max(2, Math.min(12, o.n || 4)), bw = o.w / cnt;
+    for (let i = 0; i < cnt; i++) {
+      const x0 = -W2 + i * bw, x1 = x0 + bw;
+      const P = [RT(x0, -D2), RT(x1, -D2), RT(x1, D2), RT(x0, D2)];
+      // 앞(-D2)이 낮고 뒤(+D2)가 높은 외쪽 — 정점 순서대로 상단 높이를 준다
+      made.push(put(P, { base: 0, zt: [o.h * 0.55, o.h * 0.55, o.h, o.h] }));
+    }
+  } else if (S === 'wedge') {
+    made.push(put(rect(), { base: 0, zt: [o.h * 0.35, o.h * 0.35, o.h, o.h] }));
+  } else if (S === 'tent') {
+    // 가운데가 솟은 단면 — 사각을 세로로 반 갈라 두 조각(맞배 매스)
+    made.push(put([RT(-W2, -D2), RT(W2, -D2), RT(W2, 0), RT(-W2, 0)], { base: 0, zt: [o.h * 0.3, o.h * 0.3, o.h, o.h] }));
+    made.push(put([RT(-W2, 0), RT(W2, 0), RT(W2, D2), RT(-W2, D2)], { base: 0, zt: [o.h, o.h, o.h * 0.3, o.h * 0.3] }));
+  } else if (S === 'lean') {
+    made.push(put(rect(), { base: 0, h: o.h, shear: [o.d * o.lean * cs * -sn + o.d * o.lean * 0, o.d * o.lean] }));
+  } else if (S === 'taper') {
+    made.push(put(rect(), { base: 0, h: o.h, taper: Math.max(0.05, 1 - o.taper), twist: o.twist }));
+  } else if (S === 'pyramid') {
+    made.push(put(ngon(o.ox, o.oy, Math.max(o.w, o.d) / 2, Math.max(3, o.sides), th), { base: 0, h: o.h, taper: 0.02 }));
+  } else if (S === 'cone') {
+    made.push(put(null, { base: 0, h: o.h, taper: 0.02 }, [o.ox, o.oy, Math.max(o.w, o.d) / 2]));
+  } else if (S === 'cylinder') {
+    made.push(put(null, { base: 0, h: o.h }, [o.ox, o.oy, Math.max(o.w, o.d) / 2]));
+  } else {                                             // box
+    made.push(put(rect(), { base: 0, h: o.h, taper: o.taper && o.shape === 'taper' ? 1 - o.taper : undefined,
+      twist: o.twist || undefined }));
+  }
+  br.refresh();
+  return { shape: S, ko: (SHAPES[S] || {}).ko || S, count: made.length, w: o.w, d: o.d, h: o.h };
+}
+// 임의 좌표 다각형을 그대로 매스로 — 사용자가 점을 주거나 스케치에서 뽑은 윤곽용
+function buildPolyMass(points, spec) {
+  const br = B(); if (!br || !points || points.length < 3) return null;
+  const o = Object.assign({ h: 6000, base: 0, zt: null, shear: null, taper: null, twist: 0, layer: '매스' }, spec || {});
+  br.pushUndo(); br.ensureLayer('매스', '#cfc7ba');
+  const e = br.addEntity({ type: 'LWPOLYLINE', layer: o.layer, closed: true,
+    points: points.map(p => [Math.round(p[0]), Math.round(p[1])]) });
+  e.bim = { kind: 'mass', base: o.base, h: o.h };
+  if (o.zt) e.bim.zt = o.zt;
+  if (o.shear) e.bim.shear = o.shear;
+  if (o.taper != null) e.bim.taper = o.taper;
+  if (o.twist) e.bim.twist = o.twist;
+  br.refresh();
+  return { n: points.length, h: o.h };
+}
+
+return { STD, roomType, PROGRAMS, programOf, planLayout, buildPlan, buildMassing, buildComplex,
+  SHAPES, shapeOf, buildShape, buildPolyMass };
 })();
