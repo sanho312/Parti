@@ -726,11 +726,15 @@ function buildComplex(spec) {
           // 면적표와 같은 번호로 서로 참조되게 한다(한국 실무 실별 면적표 방식).
           const cm2 = PXY(c.x + c.w / 2, c.y + c.h / 2);
           const TH2 = 280;
+          // ★크기는 height 다. h 로 넣으면 e.height 가 undefined 가 되어 글자 크기가 NaN 이 되고,
+          //   경계상자도 NaN 이라 이름표가 도면 범위·시트 배치에서 통째로 빠진다.
+          // ★층을 달아 둔다 — 층별 평면도가 '1층 것'을 2층 도면에 얹지 않으려면 필요하다.
           br.addEntity({ type: 'TEXT', layer: '문자', x: Math.round(cm2[0]),
-            y: Math.round(cm2[1] + TH2 * 0.7), h: TH2, text: nos[0] + ' ' + c.room.name });
+            y: Math.round(cm2[1] + TH2 * 0.7), height: TH2, text: nos[0] + ' ' + c.room.name,
+            bim: { kind: 'label', floor: 1 } });
           br.addEntity({ type: 'TEXT', layer: '문자', x: Math.round(cm2[0]),
-            y: Math.round(cm2[1] - TH2 * 0.7), h: TH2 * 0.8,
-            text: (a2 / 1e6).toFixed(1) + '㎡' });
+            y: Math.round(cm2[1] - TH2 * 0.7), height: TH2 * 0.8,
+            text: (a2 / 1e6).toFixed(1) + '㎡', bim: { kind: 'label', floor: 1 } });
           counts.room++;
         }
         // ── 실내문 ──
@@ -830,7 +834,7 @@ function buildComplex(spec) {
         }
       }
       const cM = PT((aL + aR) / 2, (r0 + r1i) / 2);
-      br.addEntity({ type: 'TEXT', layer: '문자', x: Math.round(cM[0]), y: Math.round(cM[1]), h: 400, text: (i + 1) + '동' });
+      br.addEntity({ type: 'TEXT', layer: '문자', x: Math.round(cM[0]), y: Math.round(cM[1]), height: 400, text: (i + 1) + '동' });
     }
     // ★내부 홈통(box gutter) — 데드밸리 방지
     // 용마루가 방사 방향이면 지붕은 각도 방향으로만 기울어, 이웃과 맞닿는 방사선에서 양쪽
@@ -903,7 +907,7 @@ function buildComplex(spec) {
         band(1, '벽');
       }
       if (o.glass) curtain(P[0], P[1], i === (n >> 1));
-      br.addEntity({ type: 'TEXT', layer: '문자', x: Math.round(C[0]), y: Math.round(C[1]), h: 400, text: (i + 1) + '동' });
+      br.addEntity({ type: 'TEXT', layer: '문자', x: Math.round(C[0]), y: Math.round(C[1]), height: 400, text: (i + 1) + '동' });
     };
     if (o.arrange === 'row') {
       let s = 0;

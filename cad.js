@@ -3036,7 +3036,7 @@ const SHEET_SCALES = [20, 30, 50, 100, 200, 300, 500, 1000];
 // 한 장 안에서 순서는 배치일 뿐이지만, 여러 장이 되면 번호가 곧 순서이고 목차다.
 const SHEET_SERIES = [
   { kind: 'gen',  base: 1,   name: '건축개요 · 면적표' },
-  { kind: 'plan', base: 101, name: '평면도' },
+  { kind: 'plan', base: 101, name: '평면도', per: 1 },   // 평면은 장당 하나 — 크고, 층마다 따로다
   { kind: 'elev', base: 201, name: '입면도' },
   { kind: 'sec',  base: 301, name: '단면도' },
   { kind: 'ow',   base: 601, name: '창호일람표' },
@@ -3074,6 +3074,61 @@ function entsBBox(ents) {
   }
   return x1 > x0 ? { x0, y0, x1, y1, w: x1 - x0, h: y1 - y0 } : null;
 }
+// ── 층별 평면도 ──
+// ★평면 한 장에 모든 층이 겹쳐 있었다. 3층이면 벽·개구부·실이 세 겹으로 포개져 있고
+//   (실측: 실 42개 = 14개 × 3층, 개구부 66개 = 22개 × 3층) 도면에서는 어느 것이 몇 층인지
+//   알 수가 없다. 실제 도면집은 층마다 한 장이다.
+function planFloorSplit(ents) {
+  // 층고 — 실 객체가 '층'과 '높이'를 함께 갖고 있으므로 거기서 바로 잰다(추정하지 않는다).
+  const rs = ents.filter(e => e.bim && e.bim.kind === 'room' && e.points);
+  const cal = rs.filter(r => r.bim.floor > 1 && r.bim.top > 0)
+    .map(r => r.bim.top / (r.bim.floor - 1)).sort((a, b) => a - b);
+  let fh = cal.length ? cal[cal.length >> 1] : 0;
+  if (!fh) {                                   // 실이 없으면 벽 밑면 높이에서
+    const bs = [...new Set(ents.filter(e => e.bim && e.bim.kind === 'wall' && e.bim.base > 0)
+      .map(e => e.bim.base))].sort((a, b) => a - b);
+    fh = bs.length ? bs[0] : 0;
+  }
+  if (!fh) return [];                          // 층을 가를 근거가 없으면 가르지 않는다
+  const maxF = Math.max(1, ...rs.map(r => r.bim.floor || 1));
+  // 지붕(-1) · 공통(0) · 층(1..maxF). ★공통은 대지·조경·치수·동 이름처럼 층에 안 매인 것들이다.
+  const floorOf = (e) => {
+    const b = e.bim;
+    if (!b) return 0;
+    if (b.kind === 'roof') return -1;
+    if (b.floor != null) return b.floor;
+    const z = b.base != null ? b.base : (b.sill != null ? b.sill
+      : (b.kind === 'slab' ? b.top : null));
+    if (z == null) return 0;
+    const f = Math.floor(z / fh + 0.05) + 1;
+    return f > maxF ? -1 : Math.max(1, f);      // 층수를 넘는 높이(박공벽·파라펫)는 지붕 쪽
+  };
+  // 2층 이상은 모델에 실 이름표가 없다 — 겹쳐 보이지 않게 1층 것만 그리기 때문이다.
+  // 층별 평면도에서는 그 층 실 객체에서 그 층 번호로 만들어 붙인다(모델은 건드리지 않는다).
+  const labelOf = (r) => {
+    const P = r.points, n = P.length;
+    const cx = P.reduce((a, p) => a + p[0], 0) / n, cy = P.reduce((a, p) => a + p[1], 0) / n;
+    const TH = 280;
+    return [
+      { type: 'TEXT', layer: '문자', x: Math.round(cx), y: Math.round(cy + TH * 0.7),
+        height: TH, text: r.bim.no + ' ' + r.bim.name, rotation: 0 },
+      { type: 'TEXT', layer: '문자', x: Math.round(cx), y: Math.round(cy - TH * 0.7),
+        height: TH * 0.8, text: (r.bim.areaM2 || 0).toFixed(1) + '㎡', rotation: 0 },
+    ];
+  };
+  const tag = ents.map(floorOf);
+  const out = [];
+  for (let f = 1; f <= maxF; f++) {
+    const es = ents.filter((e, i) => tag[i] === f || tag[i] === 0);
+    if (!es.length) continue;
+    const lab = f === 1 ? [] : rs.filter(r => r.bim.floor === f).flatMap(labelOf);
+    out.push({ name: f + '층 평면도', ents: es.concat(lab), kind: 'plan', floor: f });
+  }
+  if (tag.some(t => t === -1))
+    out.push({ name: '지붕 평면도', kind: 'plan', floor: 0,
+      ents: ents.filter((e, i) => tag[i] === -1 || tag[i] === 0) });
+  return out.length > 1 ? out : [];             // 한 층뿐이면 가를 것이 없다
+}
 // 시트에 올릴 뷰 모으기 — 현재 도면(평면·표) + 이미 만들어 둔 단면/입면 탭
 // ★표는 표마다 따로 뽑는다(drawTable 이 달아 둔 tbl 이름표로). 면적표와 창호일람표는
 //   도면 체계에서 자리가 다르다 — 하나로 뭉치면 세트를 나눌 수가 없다.
@@ -3097,7 +3152,10 @@ function sheetSources() {
     const nm = d.fileName || (i === base ? '평면' : '도면-' + (i + 1));
     if (i === base) {
       const plan = ents.filter(e => e.layer !== '일람표');
-      if (plan.length) out.push({ name: '평면도', ents: plan, kind: 'plan' });
+      if (plan.length) {
+        const fv = planFloorSplit(plan);       // 여러 층이면 층마다 한 장
+        if (fv.length) out.push(...fv); else out.push({ name: '평면도', ents: plan, kind: 'plan' });
+      }
       const tbl = ents.filter(e => e.layer === '일람표');
       const groups = new Map();
       for (const e of tbl) {
@@ -3124,20 +3182,23 @@ function sheetSources() {
 // 어떤 뷰를 몇 장에 어떻게 나눌지 — 그리기와 분리해 둔다(순수 함수라 그대로 시험할 수 있다).
 function sheetPlan(srcs, opt) {
   const o = Object.assign({ perSheet: 2 }, opt || {});
-  const per = Math.max(1, o.perSheet);
   const pages = [];
-  const push = (base, name, part, seq, many) => pages.push({
+  // 장당 1뷰인 계열(평면)은 장 이름이 곧 그 뷰 이름이다 — '평면도 (2)' 가 아니라 '2층 평면도'.
+  const push = (base, name, part, seq, many, per) => pages.push({
     no: 'A-' + String(base + seq).padStart(3, '0'),
-    name: name + (many ? ' (' + (seq + 1) + ')' : ''), views: part });
+    name: (per === 1 && part[0] && part[0].name) ? part[0].name
+      : name + (many ? ' (' + (seq + 1) + ')' : ''), views: part });
   for (const S of SHEET_SERIES) {
+    const per = Math.max(1, S.per || o.perSheet);
     const mine = srcs.filter(s => s.kind === S.kind);
     for (let i = 0; i < mine.length; i += per)
-      push(S.base, S.name, mine.slice(i, i + per), Math.floor(i / per), mine.length > per);
+      push(S.base, S.name, mine.slice(i, i + per), Math.floor(i / per), mine.length > per, per);
   }
   // 체계에 없는 종류는 뒤에 몰아 붙인다 — 조용히 빠뜨리는 것보다 낫다
   const rest = srcs.filter(s => !SHEET_SERIES.some(S => S.kind === s.kind));
-  for (let i = 0; i < rest.length; i += per)
-    push(901, '기타', rest.slice(i, i + per), Math.floor(i / per), rest.length > per);
+  const perR = Math.max(1, o.perSheet);
+  for (let i = 0; i < rest.length; i += perR)
+    push(901, '기타', rest.slice(i, i + perR), Math.floor(i / perR), rest.length > perR, perR);
   return pages;
 }
 // 종이 위의 자리 잡기 — 그리기와 분리해 둔다. ★목록표에 각 장의 축척을 적으려면
@@ -16690,6 +16751,7 @@ window.__CADTEST__ = {
   areaData, areaRows, areaCSV, cmdAreaTable, drawTable, polyAreaM2,
   autoSecLines, cmdAutoSection, sheetBuild, cmdSheet, sheetSources, entsBBox, SHEET_SIZES,
   sheetPlan, sheetDraw, sheetLayout, sheetIndexDraw, sheetSetBuild, cmdSheetSet, SHEET_SERIES, buildPDFSet, pdfWrap,
+  planFloorSplit,
   switchDoc, curDocIdx: () => curDoc, docCount: () => docs.length,
   autoDimPlan, cmdAutoDim, buildPDF, PAPER_SIZES,
   MAT_PRESETS, MAT_ALIAS, matOf, matKey, matHex, matBoxUV, matGeo, matBuild, matTextures, matDrawTex, cmdMaterial, rtGeoSig, bimSolidColor, secHatchFor, computePatternSegs, owWt, OPENING_TYPES, owSaveDef, owPlaced, layerAutoBim, applyLayerRoleTo, addEntity, renderLayers,
