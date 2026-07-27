@@ -356,22 +356,89 @@ async function traceConcept(src, opts) {
   let mode = 200, mv = 0;
   for (let v = 0; v < 256; v++) if (lh[v] > mv) { mv = lh[v]; mode = v; }
   const inkThr = Math.max(40, Math.min(200, mode - 28));
-  let green = 0, blue = 0, gSumX = 0, gSumY = 0, gMinX = w, gMaxX = 0, gMinY = h;
-  const colBlue = new Float32Array(w);               // 열별 파란 픽셀 수 — 유리면 군집 검출용
+  const blueA = new Uint8Array(total), greenA = new Uint8Array(total);
   for (let i = 0, p = 0; i < d.length; i += 4, p++) {
     const r = d[i], g = d[i + 1], b = d[i + 2];
     const isGreen = g > r + 12 && g > b + 12;
     const isBlue = b > r + 12 && b > g + 4;
-    if (isGreen) { green++; gSumX += p % w; gSumY += (p / w) | 0; const x = p % w, y = (p / w) | 0;
-      if (x < gMinX) gMinX = x; if (x > gMaxX) gMaxX = x; if (y < gMinY) gMinY = y; }
-    if (isBlue) { blue++; colBlue[p % w]++; }
+    if (isGreen) greenA[p] = 1;
+    if (isBlue) blueA[p] = 1;
     // 건물 = 종이보다 어두운 자국 또는 파란 유리. 초록(조경)은 제외.
     if (!isGreen && (lum[p] < inkThr || isBlue)) bldg[p] = 1;
+  }
+
+  // ── ★스케치북 한 페이지에 그림이 여러 장 있으면 한 장만 고른다 ──
+  //   실사용 이미지가 '위 투시 + 가운데 입면 + 아래 연필 스터디' 3단 구성이었는데,
+  //   페이지 전체를 한 건물로 봐서 층수·지붕형·동 수가 통째로 틀렸다.
+  //   빈 줄로 끊기는 덩어리로 나누고, '채색이 가장 많은' 덩어리를 본 그림으로 본다
+  //   (연필 스터디는 무채색, 최종안은 색을 칠한다).
+  const rowInk = new Float32Array(h), rowG = new Float32Array(h), rowB = new Float32Array(h);
+  for (let y = 0; y < h; y++) { let a = 0, g2 = 0, b2 = 0;
+    for (let x = 0; x < w; x++) { const p = y * w + x; if (bldg[p]) a++; if (greenA[p]) g2++; if (blueA[p]) b2++; }
+    rowInk[y] = a; rowG[y] = g2; rowB[y] = b2; }
+  const blocks = [];
+  {
+    // ★분리 기준은 '잉크'가 아니라 '그림 내용 전체'여야 한다. 초록(마당)은 bldg 에서
+    //   제외되므로 잉크만 보면 마당이 어느 블록에도 안 들어가고, 그 그림이 '대지 없는
+    //   그림'으로 평가돼 배치 정보를 가진 투시도가 밀려난다(실측: 모든 블록 g=0).
+    const thr = w * 0.006, minH = Math.max(12, Math.round(h * 0.08));
+    let s = -1, blank = 0;
+    for (let y = 0; y < h; y++) {
+      if (rowInk[y] + rowG[y] > thr) { if (s < 0) s = y; blank = 0; }
+      // ★빈 줄 임계가 작으면 '투시도'와 '그 아래 마당'이 서로 다른 그림으로 쪼개진다(실측).
+      //   한 그림과 그 대지는 한 덩어리다 — 페이지 높이의 3.5% 이상 비어야 다른 그림으로 본다.
+      else if (s >= 0 && ++blank > Math.max(8, h * 0.035)) {
+        if (y - blank - s >= minH) blocks.push([s, y - blank]); s = -1; blank = 0;
+      }
+    }
+    if (s >= 0 && h - s >= minH) blocks.push([s, h - 1]);
+    // ★초록만 있는 덩어리는 '그림'이 아니라 그 위 그림의 대지다 — 위 덩어리에 합친다.
+    //   (건물과 마당 사이 여백이 넓으면 쪼개져, 마당만 남은 조각을 본 그림으로 골랐다)
+    for (let i = blocks.length - 1; i >= 0; i--) {
+      let g3 = 0, k3 = 0;
+      for (let y = blocks[i][0]; y <= blocks[i][1]; y++) { g3 += rowG[y]; k3 += rowInk[y]; }
+      if (g3 > 0 && g3 / (g3 + k3) > 0.6) {
+        if (i > 0) { blocks[i - 1][1] = blocks[i][1]; blocks.splice(i, 1); }
+        else if (blocks.length > 1) { blocks[1][0] = blocks[0][0]; blocks.splice(0, 1); }
+      }
+    }
+  }
+  let by0 = 0, by1 = h - 1, blockDbg = null;
+  if (blocks.length > 1) {
+    // 초록(대지·마당)을 가장 무겁게 — 배치를 읽을 수 있는 그림이 우리가 원하는 것이다.
+    // 그다음 파랑(유리=최종안), 잉크는 보조. 연필 스터디는 무채색이라 자연히 밀린다.
+    let best = -1, bestScore = -1;
+    blockDbg = [];
+    for (let i = 0; i < blocks.length; i++) {
+      let gg = 0, bb = 0, ink = 0, gTop = -1, gBot = -1;
+      for (let y = blocks[i][0]; y <= blocks[i][1]; y++) {
+        gg += rowG[y]; bb += rowB[y]; ink += rowInk[y];
+        if (rowG[y] > w * 0.01) { if (gTop < 0) gTop = y; gBot = y; }
+      }
+      // ★초록을 '개수'로만 보면 입면의 지면선(얇고 긴 띠)이 마당을 이긴다(실측).
+      //   마당은 세로로도 퍼진 덩어리다 — 세로 폭이 얇으면 대지선으로 보고 가중치를 낮춘다.
+      const site = (gBot - gTop) >= h * 0.02 ? 1 : 0.15;
+      const score = gg * 5 * site + bb + ink * 0.25;
+      blockDbg.push([blocks[i][0], blocks[i][1], Math.round(gg), Math.round(bb), Math.round(ink), site, Math.round(score)]);
+      if (score > bestScore) { bestScore = score; best = i; }
+    }
+    by0 = blocks[best][0]; by1 = blocks[best][1];
+    for (let y = 0; y < h; y++) if (y < by0 || y > by1)
+      for (let x = 0; x < w; x++) { const p = y * w + x; bldg[p] = 0; blueA[p] = 0; greenA[p] = 0; }
+  }
+
+  let green = 0, blue = 0, gSumX = 0, gSumY = 0, gMinX = w, gMaxX = 0, gMinY = h;
+  const colBlue = new Float32Array(w);               // 열별 파란 픽셀 수 — 유리면 군집 검출용
+  for (let y = by0; y <= by1; y++) for (let x = 0; x < w; x++) {
+    const p = y * w + x;
+    if (greenA[p]) { green++; gSumX += x; gSumY += y;
+      if (x < gMinX) gMinX = x; if (x > gMaxX) gMaxX = x; if (y < gMinY) gMinY = y; }
+    if (blueA[p]) { blue++; colBlue[x]++; }
   }
   // ★높이의 기준선은 '이미지 바닥'이 아니라 '건물이 앉은 지면선'이어야 한다.
   //   이미지 바닥부터 재면 건물 아래 여백까지 높이에 들어가 층수가 통째로 과대 추정된다(실측).
   let baseY = 0;
-  for (let y = h - 1; y >= 0; y--) { let any = false;
+  for (let y = by1; y >= by0; y--) { let any = false;
     for (let x = 0; x < w; x += 2) if (bldg[y * w + x]) { any = true; break; }
     if (any) { baseY = y; break; } }
   // 실루엣 상단선 — 열마다 가장 위쪽 건물 픽셀. 없으면 높이 0.
@@ -521,7 +588,8 @@ async function traceConcept(src, opts) {
     meta: { w, h, maxH: Math.round(maxH), promAvg: +promAvg.toFixed(1), inkThr,
       greenRatio: +greenR.toFixed(3), blueRatio: +blueR.toFixed(3),
       courtyard: hasCourt, courtFront, enclosed, attached, bTop, bBot, baseY,
-      plateau: +plateau.toFixed(2), eaveRatio: +eaveRatio.toFixed(2), comps, gcy: Math.round(gcy) },
+      plateau: +plateau.toFixed(2), eaveRatio: +eaveRatio.toFixed(2), comps,
+      blocks: blocks.length, block: [by0, by1], blockDbg, gcy: Math.round(gcy) },
   };
 }
 

@@ -3209,6 +3209,46 @@ function tests(){
                   ok(cr9.meta.enclosed, '  둘러쌈 판정');
                 });
               }).then(() => {
+                // ★스케치북 한 페이지에 그림이 여러 장 — 본 그림 하나만 골라야 한다.
+                //   실사용 이미지가 '투시 + 입면 + 연필 스터디' 3단이었는데 페이지 전체를
+                //   한 건물로 봐서 동 수·층수·지붕형이 통째로 틀렸다.
+                const cvP = AD.createElement('canvas'); cvP.width = 736; cvP.height = 1000;
+                const gP = cvP.getContext('2d');
+                gP.fillStyle = '#efe9de'; gP.fillRect(0, 0, 736, 1000);
+                // ① 투시 — 박공 5동 + 원형 마당 (본 그림)
+                const wsP = [80, 100, 92, 88, 140], hsP = [95, 120, 135, 112, 102];
+                for (let i9 = 0, x9 = 55; i9 < 5; i9++, x9 += wsP[i9 - 1]) {
+                  const wd = wsP[i9], ap = 200 - hsP[i9];
+                  gP.fillStyle = '#fdfbf6'; gP.beginPath(); gP.moveTo(x9, 200); gP.lineTo(x9, 152);
+                  gP.lineTo(x9 + wd * 0.42, ap); gP.lineTo(x9 + wd, 158); gP.lineTo(x9 + wd, 200);
+                  gP.closePath(); gP.fill();
+                  gP.strokeStyle = '#2b2b29'; gP.lineWidth = 1.7; gP.stroke();
+                  gP.fillStyle = 'rgba(96,150,205,0.85)'; gP.beginPath(); gP.moveTo(x9 + wd * 0.12, 186);
+                  gP.lineTo(x9 + wd * 0.4, ap + 18); gP.lineTo(x9 + wd * 0.62, ap + 26);
+                  gP.lineTo(x9 + wd * 0.6, 190); gP.closePath(); gP.fill();
+                }
+                gP.fillStyle = 'rgba(112,178,72,0.9)'; gP.beginPath(); gP.ellipse(270, 258, 110, 34, 0, 0, 7); gP.fill();
+                // ② 입면 — 유리는 더 많지만 대지는 얇은 띠뿐
+                for (let i9 = 0, x9 = 45; i9 < 5; i9++, x9 += 125) {
+                  const ht = 150 + ((i9 % 2) ? 30 : 0);
+                  gP.fillStyle = '#fdfbf6'; gP.beginPath(); gP.moveTo(x9, 545); gP.lineTo(x9, 545 - ht * 0.6);
+                  gP.lineTo(x9 + 56, 545 - ht); gP.lineTo(x9 + 125, 545 - ht * 0.55); gP.lineTo(x9 + 125, 545);
+                  gP.closePath(); gP.fill();
+                  gP.strokeStyle = '#2b2b29'; gP.lineWidth = 1.7; gP.stroke();
+                  gP.fillStyle = 'rgba(70,140,205,0.9)'; gP.fillRect(x9 + 14, 545 - ht * 0.55, 95, ht * 0.5);
+                }
+                gP.fillStyle = 'rgba(112,178,72,0.85)'; gP.fillRect(30, 545, 660, 10);
+                // ③ 연필 스터디 — 무채색
+                gP.strokeStyle = '#8a8880'; gP.lineWidth = 1.4;
+                for (let i9 = 0; i9 < 4; i9++) gP.strokeRect(70 + i9 * 100, 890, 100, 60);
+                return VZ.traceConcept(cvP.toDataURL('image/png')).then(cp9 => {
+                  ok(cp9.meta.blocks >= 2, '★스케치북 페이지 — 그림 덩어리를 나눈다 (' + cp9.meta.blocks + '장)');
+                  ok(cp9.meta.block[1] < 250, '★대지(마당)를 가진 투시도를 고른다 (입면이 아니라)');
+                  ok(cp9.meta.courtyard, '  고른 그림에 마당이 살아 있다');
+                  eqi(cp9.masses, 5, '★페이지에서 고른 그림으로 5동 판독');
+                  eqi(cp9.arrange, 'arc', '  부채꼴 배치');
+                });
+              }).then(() => {
                 // ★라우팅 근거 지표 — 전역 임계값 추측이 실물에서 두 번 뒤집힌 뒤 도입한 증거들.
                 //   도면은 무채색·축정렬·이중선, 손그림은 사선 지배 → 이 표가 오판을 막는다.
                 return VZ.traceImage(cv2.toDataURL('image/png'), { widthMM: 8000 }).then(rp => {
