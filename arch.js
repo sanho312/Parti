@@ -466,6 +466,7 @@ function buildComplex(spec) {
     return made > 0;
   };
 
+  const roomSeq = new Map();                       // 층별 실번호 카운터 (101, 102, …)
   let R = 0, courtC = [o.ox, o.oy], entryFront = null;
 
   if (o.arrange === 'arc') {
@@ -706,16 +707,28 @@ function buildComplex(spec) {
             PXY(c.x + c.w, c.y + c.h), PXY(c.x, c.y + c.h)];
           const a2 = Math.abs(RP2.reduce((acc, p, k) =>
             acc + (p[0] * RP2[(k + 1) % 4][1] - RP2[(k + 1) % 4][0] * p[1]), 0)) / 2;   // 실측 폴리곤 면적
+          // ★실번호 — 층 백단위 + 순번(101, 102 …). 도면 표기와 면적표가 이 번호로 이어진다.
+          const nos = [];
           for (let f = 0; f < Math.max(1, o.floors); f++) {
+            const fl = f + 1;
+            const seq = (roomSeq.get(fl) || 0) + 1; roomSeq.set(fl, seq);
+            const no = fl * 100 + seq;
+            nos.push(no);
             const rp = br.addEntity({ type: 'LWPOLYLINE', layer: '실', closed: true,
               points: RP2.map(p => [Math.round(p[0]), Math.round(p[1])]) });
             rp.bim = { kind: 'room', name: c.room.name, areaM2: +(a2 / 1e6).toFixed(2),
-              top: f * o.floorH, floor: f + 1 };
+              top: f * o.floorH, floor: fl, no };
           }
-          // 실 이름
+          // ── 실명·면적 표기 ──
+          // 이름만 찍으면 도면에서 크기를 읽을 수 없다. 번호·이름 한 줄, 면적 한 줄로 적어
+          // 면적표와 같은 번호로 서로 참조되게 한다(한국 실무 실별 면적표 방식).
           const cm2 = PXY(c.x + c.w / 2, c.y + c.h / 2);
-          br.addEntity({ type: 'TEXT', layer: '문자', x: Math.round(cm2[0]), y: Math.round(cm2[1]),
-            h: 300, text: c.room.name });
+          const TH2 = 280;
+          br.addEntity({ type: 'TEXT', layer: '문자', x: Math.round(cm2[0]),
+            y: Math.round(cm2[1] + TH2 * 0.7), h: TH2, text: nos[0] + ' ' + c.room.name });
+          br.addEntity({ type: 'TEXT', layer: '문자', x: Math.round(cm2[0]),
+            y: Math.round(cm2[1] - TH2 * 0.7), h: TH2 * 0.8,
+            text: (a2 / 1e6).toFixed(1) + '㎡' });
           counts.room++;
         }
         // ── 실내문 ──

@@ -2889,7 +2889,9 @@ function areaData() {
     const f = r.bim.floor || 1;
     byFloor.set(f, (byFloor.get(f) || 0) + (r.bim.areaM2 || polyAreaM2(r.points)));
   }
+  // 실별 — 번호가 있으면 실마다 한 줄(도면 표기와 같은 번호로 참조), 없으면 이름별로 묶는다
   const byRoom = new Map();
+  const numbered = rooms.filter(r => r.bim.no != null).sort((a, b) => a.bim.no - b.bim.no);
   for (const r of rooms) {
     if ((r.bim.floor || 1) !== 1) continue;               // 실별 면적은 기준층(1층) 기준
     const k = r.bim.name || '실';
@@ -2907,7 +2909,9 @@ function areaData() {
   return { foot: +foot.toFixed(2), gross: +gross.toFixed(2),
     floors: byFloor.size, height: Math.round(hi), bays: slabs.length,
     byFloor: [...byFloor.entries()].sort((a, b) => a[0] - b[0]),
-    byRoom: [...byRoom.entries()].sort((a, b) => b[1].a - a[1].a) };
+    byRoom: [...byRoom.entries()].sort((a, b) => b[1].a - a[1].a),
+    rooms: numbered.map(r => ({ no: r.bim.no, name: r.bim.name,
+      floor: r.bim.floor || 1, area: r.bim.areaM2 || polyAreaM2(r.points) })) };
 }
 const AREA_COLS = ['구분', '내용', '값', '단위'];
 function areaRows(siteM2) {
@@ -2925,7 +2929,10 @@ function areaRows(siteM2) {
     out.push(['지표', '용적률', (d.gross / siteM2 * 100).toFixed(1), '%']);
   }
   for (const [f, a] of d.byFloor) out.push(['층별', f + '층 바닥면적', num(a.toFixed(2)), '㎡']);
-  for (const [nm, v] of d.byRoom)
+  // 실별 — 도면에 적힌 번호 그대로. 번호가 없는 모델은 이름별 합계로 낸다.
+  if (d.rooms && d.rooms.length)
+    for (const r of d.rooms) out.push(['실별', r.no + ' ' + r.name, num(r.area.toFixed(2)), '㎡']);
+  else for (const [nm, v] of d.byRoom)
     out.push(['실별', nm + (v.n > 1 ? ' ×' + v.n : ''), num(v.a.toFixed(2)), '㎡']);
   return out;
 }

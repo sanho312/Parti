@@ -4114,6 +4114,35 @@ function tests(){
                   + (madeV || []).length + ')');
                 eqi(C.state.entities.length, nB,
                   '★생성 후 원본 도면으로 복귀한다 (다음 작업이 원본에서 이어진다)');
+                // ── ★실명·면적 도면 표기 ──
+                // 이름만 찍으면 도면에서 크기를 읽을 수 없다. 번호·이름 한 줄, 면적 한 줄로
+                // 적고 면적표가 같은 번호를 쓰게 해 서로 참조되게 한다.
+                const txtV = C.state.entities.slice(bV)
+                  .filter(e0 => e0.type === 'TEXT' && e0.layer === '문자');
+                const namedV = txtV.filter(e0 => /^[0-9]{3} /.test(e0.text));
+                const areaTV = txtV.filter(e0 => /㎡$/.test(e0.text));
+                ok(namedV.length >= 6, '★실마다 번호·이름을 적는다 (' + namedV.length + '개)');
+                eqi(areaTV.length, namedV.length, '  면적도 함께 적는다');
+                const rowsV = C.areaRows(0).filter(r0 => r0[0] === '실별');
+                const nosV = new Set(rowsV.map(r0 => r0[1].split(' ')[0]));
+                ok(namedV.every(e0 => nosV.has(e0.text.split(' ')[0])),
+                  '★도면의 실 번호가 전부 면적표에 있다 (표와 도면이 같은 번호로 이어진다)');
+                // 도면에 적힌 면적이 실 면적과 맞는가
+                const rmV2 = C.state.entities.slice(bV)
+                  .filter(e0 => e0.bim && e0.bim.kind === 'room' && e0.bim.floor === 1);
+                let mismV = 0;
+                for (const r0 of rmV2) {
+                  const cx0 = r0.points.reduce((a0, p0) => a0 + p0[0] / 4, 0);
+                  const cy0 = r0.points.reduce((a0, p0) => a0 + p0[1] / 4, 0);
+                  const near = areaTV.filter(e0 => Math.hypot(e0.x - cx0, e0.y - cy0) < 600);
+                  if (!near.some(e0 => Math.abs(parseFloat(e0.text) - r0.bim.areaM2) < 0.15)) mismV++;
+                }
+                eqi(mismV, 0, '★도면에 적힌 면적이 실 면적과 같다 (표기와 데이터가 어긋나지 않는다)');
+                // 실 번호는 층 백단위 + 순번 — 중복이 없어야 한다
+                const allNo = C.state.entities.slice(bV)
+                  .filter(e0 => e0.bim && e0.bim.kind === 'room').map(e0 => e0.bim.no);
+                eqi(allNo.length, new Set(allNo).size, '  실 번호에 중복이 없다 (' + allNo.length + '개)');
+                ok(allNo.some(n0 => n0 >= 200), '  2층은 200번대');
                 C.state.entities.length = bV;
               }).then(() => {
                 // ── ★내부 실 구획 ──
