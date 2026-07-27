@@ -4044,6 +4044,15 @@ function tests(){
                 ok(ad.foot > 100 && ad.gross > ad.foot, '★건축면적 ' + ad.foot + '㎡ · 연면적 ' + ad.gross + '㎡');
                 ok(Math.abs(ad.gross - ad.foot * 2) / ad.gross < 0.05,
                   '  2층이면 연면적이 건축면적의 약 2배');
+                // ★실 면적 합 = 건축면적 이어야 한다. 실 경계를 호로 되돌리면 현으로 그린
+                //   벽·바닥판보다 바깥으로 부풀어 0.9% 가 더 나왔다(실측). 쐐기 네 꼭짓점의
+                //   겹선형 보간을 쓰면 실이 벽과 같은 현 위에 놓여 정확히 맞는다.
+                const rm1 = C.state.entities.slice(bA)
+                  .filter(e0 => e0.bim && e0.bim.kind === 'room' && e0.bim.floor === 1);
+                const rsum = rm1.reduce((a0, e0) => a0 + e0.bim.areaM2, 0);
+                ok(Math.abs(rsum - ad.foot) / ad.foot < 0.003,
+                  '★실 면적 합 = 건축면적 (' + rsum.toFixed(2) + ' vs ' + ad.foot
+                    + ' — 차이 ' + ((rsum - ad.foot) / ad.foot * 100).toFixed(2) + '%)');
                 ok(ad.height > 3000, '  최고 높이 ' + ad.height + 'mm');
                 const noSite = C.areaRows(0), withSite = C.areaRows(1200);
                 ok(!noSite.some(r0 => r0[1] === '건폐율'),
@@ -4121,6 +4130,12 @@ function tests(){
                 const C1 = runC({});
                 eqi(C1.corr.length, 3, '★복도 — 동마다 하나');
                 ok(C1.corr.every(e0 => e0.bim.areaM2 > 5), '  복도도 면적을 가진 실이다');
+                // ★쐐기는 앞이 좁다 — 매개변수 폭을 그대로 쓰면 복도가 앞에서 유효폭 미만이 된다
+                const cwid = C1.corr.map(e0 => Math.hypot(e0.points[1][0] - e0.points[0][0],
+                  e0.points[1][1] - e0.points[0][1]));
+                ok(Math.min.apply(null, cwid) >= 1150,
+                  '★복도는 가장 좁은 앞쪽에서도 유효폭 1.2m ('
+                    + Math.round(Math.min.apply(null, cwid)) + 'mm)');
                 eqi(C1.stair.length, 0, '  1층이면 계단 없음');
                 // 방들이 복도로 열리는가 — 문 한쪽이 복도 안이면 복도에 면한 것
                 const inP = (p, x, y) => { let c0 = false;

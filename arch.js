@@ -578,7 +578,9 @@ function buildComplex(spec) {
         // → 복도를 앞뒤로 관통시키고(중복도) 방을 양쪽 밴드에 '깊이로만' 나눈다.
         //   그러면 밴드의 모든 방이 복도변에 자기 면을 갖는다 — 동선이 원리적으로 보장된다.
         //   폭이 좁아 밴드가 성립하지 않으면(복도폭+5m 미만) 예전처럼 이분할기로 돌아간다.
-        const CORR = STD.corridor;
+        // ★쐐기는 앞이 좁고 뒤가 넓다 — 매개변수 폭을 그대로 쓰면 복도가 앞에서 유효폭 미만이
+        //   된다. 가장 좁은 앞쪽(현 chord)에서 STD.corridor 를 지키도록 되돌려 잡는다.
+        const CORR = STD.corridor * Math.max(1, arcW / Math.max(1, chord));
         const useCorr = o.corridor !== false && arcW >= CORR + 5000 && items.length >= 3;
         const xc0 = (arcW - CORR) / 2, xc1 = xc0 + CORR;     // 복도 좌·우 선
         let cells, corrCell = null;
@@ -615,11 +617,16 @@ function buildComplex(spec) {
         } else {
           cells = slice({ x: 0, y: 0, w: arcW, h: Ds[i] }, items);
         }
-        // (호길이 x, 깊이 y) → 세계 좌표. 각은 aL 에서 줄어드는 방향이다.
-        const sgnA = aL >= aR ? -1 : 1;
+        // ── (x, y) → 세계 좌표 ──
+        // ★쐐기 네 꼭짓점의 겹선형(bilinear) 보간을 쓴다. 호를 다시 각도로 되돌리면
+        //   실 경계가 호를 여러 조각으로 근사하는 셈이라, 현 하나로 그린 '벽·바닥판'보다
+        //   바깥으로 부푼다(실측: 실 면적 합이 건축면적보다 0.9% 컸다).
+        //   벽이 현이면 실도 같은 현 위에 있어야 한다 — 그래야 실 면적 합 = 건축면적이다.
         const PXY = (x, y) => {
-          const p = PT(aL + sgnA * (x / rmid), r0 + y);
-          return wSh ? [p[0] + wSh[0], p[1] + wSh[1]] : p;   // 기운 동이면 벽도 같이 기운다
+          const u = Math.max(0, Math.min(1, x / arcW)), v = Math.max(0, Math.min(1, y / Ds[i]));
+          const px = (1 - u) * (1 - v) * FL[0] + u * (1 - v) * FR[0] + u * v * BR[0] + (1 - u) * v * BL[0];
+          const py = (1 - u) * (1 - v) * FL[1] + u * (1 - v) * FR[1] + u * v * BR[1] + (1 - u) * v * BL[1];
+          return wSh ? [px + wSh[0], py + wSh[1]] : [px, py];   // 기운 동이면 벽도 같이 기운다
         };
         const EPS2 = 1;
         const onEdge = (a2, b2, lim) => Math.abs(a2 - lim) < EPS2 && Math.abs(b2 - lim) < EPS2;
@@ -664,7 +671,7 @@ function buildComplex(spec) {
           const RP2 = [PXY(c.x, c.y), PXY(c.x + c.w, c.y),
             PXY(c.x + c.w, c.y + c.h), PXY(c.x, c.y + c.h)];
           const a2 = Math.abs(RP2.reduce((acc, p, k) =>
-            acc + (p[0] * RP2[(k + 1) % 4][1] - RP2[(k + 1) % 4][0] * p[1]), 0)) / 2;
+            acc + (p[0] * RP2[(k + 1) % 4][1] - RP2[(k + 1) % 4][0] * p[1]), 0)) / 2;   // 실측 폴리곤 면적
           for (let f = 0; f < Math.max(1, o.floors); f++) {
             const rp = br.addEntity({ type: 'LWPOLYLINE', layer: '실', closed: true,
               points: RP2.map(p => [Math.round(p[0]), Math.round(p[1])]) });
