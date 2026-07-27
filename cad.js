@@ -3140,23 +3140,23 @@ function sheetPlan(srcs, opt) {
     push(901, '기타', rest.slice(i, i + per), Math.floor(i / per), rest.length > per);
   return pages;
 }
-// 현재 문서에 시트 한 장을 그린다. 축척은 '이 장에 올릴 뷰'로만 정한다 —
-// ★이게 세트의 실익이다. 한 장에 다 넣으면 가장 큰 뷰에 끌려가 전부 작아진다.
-function sheetDraw(srcs, opt) {
-  const o = Object.assign({ size: 'A1', title: null, scale: 0 }, opt || {});
+// 종이 위의 자리 잡기 — 그리기와 분리해 둔다. ★목록표에 각 장의 축척을 적으려면
+// '그리기 전에' 축척을 알아야 한다. 그리면서 정하면 첫 장에 적을 값이 아직 없다.
+function sheetLayout(srcs, opt) {
+  const o = Object.assign({ size: 'A1', scale: 0 }, opt || {});
   const [SW, SH] = SHEET_SIZES[o.size] || SHEET_SIZES.A1;
-  // 도면틀 여백(왼쪽은 철하는 쪽이라 넓게) · 표제란
-  const M = 10, ML = 20, TBW = 180, TBH = 55;
+  const M = 10, ML = 20, TBW = 180, TBH = 55;                   // 왼쪽은 철하는 쪽이라 넓게
   const ax0 = ML, ay0 = M, ax1 = SW - M, ay1 = SH - M;          // 도면틀 안쪽
   const tx0 = SW - M - TBW, ty0 = M, tx1 = SW - M, ty1 = M + TBH;   // 표제란 — 오른쪽 아래
-  const cols = Math.ceil(Math.sqrt(srcs.length)), rows = Math.ceil(srcs.length / cols);
+  const n = Math.max(1, srcs.length);
+  const cols = Math.ceil(Math.sqrt(n)), rows = Math.ceil(n / cols);
   const cw = (ax1 - ax0) / cols, ch = (ay1 - ay0) / rows;
-  // 칸 — 표제란과 겹치는 칸은 그만큼 '올리고 낮춘다'.
+  // 표제란과 겹치는 칸은 그만큼 '올리고 낮춘다'.
   // ★올리기만 하면 칸 높이는 그대로라 위로 넘친다. 뷰가 한 개뿐인 장(세트)에서 드러났다 —
   //   그때는 칸이 곧 용지 전체라 61mm 올린 만큼 그대로 용지 밖으로 나갔다.
   const cellOf = (i) => {
     const c = i % cols, r = Math.floor(i / cols);
-    const bx = ax0 + c * cw, by = ay1 - (r + 1) * ch;          // 위 칸부터 채운다
+    const bx = ax0 + c * cw, by = ay1 - (r + 1) * ch;           // 위 칸부터 채운다
     const hit = (bx + cw > tx0 - 4 && by < ty1 + 4);
     return hit ? { bx, by: by + TBH + 6, ch: Math.max(20, ch - TBH - 6) } : { bx, by, ch };
   };
@@ -3168,23 +3168,27 @@ function sheetDraw(srcs, opt) {
     const pad = srcs[i].kind === 'gen' || srcs[i].kind === 'ow' ? 6 : 12;   // 뷰 이름표 자리
     k = Math.min(k, (cw - 8) / Math.max(1, b.w), (cellOf(i).ch - pad) / Math.max(1, b.h));
   });
-  let denom = o.scale > 0 ? o.scale : 0;
-  if (!denom) {
-    denom = SHEET_SCALES.find(d => 1 / d <= k) || SHEET_SCALES[SHEET_SCALES.length - 1];
-  }
-  k = 1 / denom;
+  const denom = o.scale > 0 ? o.scale
+    : (isFinite(k) ? (SHEET_SCALES.find(d => 1 / d <= k) || SHEET_SCALES[SHEET_SCALES.length - 1]) : 1);
+  return { SW, SH, M, ML, TBW, TBH, ax0, ay0, ax1, ay1, tx0, ty0, tx1, ty1, cols, cw, ch, cellOf, boxes, denom };
+}
+// 도면틀 + 표제란 — 목록표 장과 도면 장이 같은 틀을 쓴다(어긋나면 묶었을 때 눈에 띈다)
+function sheetFrame(L, o) {
   ensureLayer('도면틀', '#8d9099'); ensureLayer('표제란', '#cfd3da'); ensureLayer('뷰이름', '#e0a33a');
   const rect = (x0, y0, x1, y1, ly) => addEntity({ type: 'LWPOLYLINE', layer: ly, closed: true,
     points: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]] });
-  rect(0, 0, SW, SH, '도면틀');                                   // 용지
-  rect(ML - 5, M - 5, SW - M + 5, SH - M + 5, '도면틀');           // 도면틀
+  rect(0, 0, L.SW, L.SH, '도면틀');                               // 용지
+  rect(L.ML - 5, L.M - 5, L.SW - L.M + 5, L.SH - L.M + 5, '도면틀');  // 도면틀
+  const { tx0, ty0, tx1, ty1 } = L;
   rect(tx0, ty0, tx1, ty1, '표제란');
   addEntity({ type: 'LINE', layer: '표제란', x1: tx0, y1: ty1 - 18, x2: tx1, y2: ty1 - 18 });
   addEntity({ type: 'LINE', layer: '표제란', x1: tx0, y1: ty0 + 14, x2: tx1, y2: ty0 + 14 });
   const T = (x, y, h, s) => addEntity({ type: 'TEXT', layer: '표제란', x, y, height: h, text: s, rotation: 0 });
   T(tx0 + 5, ty1 - 13, 7, o.title || (currentFileName || 'PARTI PROJECT'));
   if (o.name) T(tx0 + 5, ty0 + 27, 6, o.name);                    // 도면명 (세트일 때만)
-  T(tx0 + 5, o.name ? ty0 + 17 : ty0 + 20, 4.5, '축척  1:' + denom + '        용지  ' + o.size);
+  const sc = o.denomText || ('1:' + L.denom);                     // 목록표 장은 축척이 없다
+  T(tx0 + 5, o.name ? ty0 + 17 : ty0 + 20, 4.5,
+    '축척  ' + (sc === '-' ? '없음' : sc) + '        용지  ' + o.size);
   const d = new Date();
   const ds = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0')
     + '-' + String(d.getDate()).padStart(2, '0');
@@ -3195,22 +3199,74 @@ function sheetDraw(srcs, opt) {
     T(tx1 - 51, ty0 + 4.5, 6.5, o.no);
     if (o.pages > 1) T(tx1 - 22, ty0 + 4.5, 4.5, o.page + ' / ' + o.pages);
   }
+}
+// 현재 문서에 시트 한 장을 그린다. 축척은 '이 장에 올릴 뷰'로만 정한다 —
+// ★이게 세트의 실익이다. 한 장에 다 넣으면 가장 큰 뷰에 끌려가 전부 작아진다.
+function sheetDraw(srcs, opt) {
+  const o = Object.assign({ size: 'A1', title: null, scale: 0 }, opt || {});
+  const L = sheetLayout(srcs, o);
+  const k = 1 / L.denom;
+  sheetFrame(L, o);
   // 뷰 배치 — 칸 가운데 정렬
   const placed = [];
   srcs.forEach((s, i) => {
-    const b = boxes[i]; if (!b) return;
-    const { bx, by: oy, ch: chi } = cellOf(i);
-    const tx = bx + (cw - b.w * k) / 2 - b.x0 * k;
+    const b = L.boxes[i]; if (!b) return;
+    const { bx, by: oy, ch: chi } = L.cellOf(i);
+    const tx = bx + (L.cw - b.w * k) / 2 - b.x0 * k;
     const ty = oy + (chi - b.h * k) / 2 - b.y0 * k + 3;
     let n = 0;
     for (const e of s.ents) { const q = sheetClone(e, k, tx, ty); if (q) { addEntity(q); n++; } }
     addEntity({ type: 'TEXT', layer: '뷰이름', x: bx + 4, y: oy + 2, height: 5,
-      text: s.name + '   S=1:' + denom, rotation: 0 });
+      text: s.name + '   S=1:' + L.denom, rotation: 0 });
     placed.push({ name: s.name, n });
   });
-  state.view = { x: SW / 2, y: SH / 2, scale: 1 };
+  state.view = { x: L.SW / 2, y: L.SH / 2, scale: 1 };
   renderLayers(); draw(); updateStat(); renderDocTabs();
-  return { size: o.size, denom, views: placed, sheetW: SW, sheetH: SH };
+  return { size: o.size, denom: L.denom, views: placed, sheetW: L.SW, sheetH: L.SH };
+}
+// 표지 · 도면목록 — ★세트에 목록이 없으면 받은 쪽은 몇 장이 와야 하는지를 모른다.
+//   빠진 장을 알아채는 유일한 장치라서, 실무에서 제일 먼저 넘기는 장이 이것이다.
+function sheetIndexDraw(list, opt) {
+  const o = Object.assign({ size: 'A1', title: null }, opt || {});
+  const L = sheetLayout([], o);
+  sheetFrame(L, Object.assign({}, o, { denomText: '-' }));       // 목록표는 축척이 없다
+  ensureLayer('목록표', '#cfd3da');
+  const proj = o.title || currentFileName || 'PARTI PROJECT';
+  addEntity({ type: 'TEXT', layer: '목록표', x: L.ax0 + 6, y: L.ay1 - 16, height: 11,
+    text: proj, rotation: 0 });
+  // 표 크기는 용지에 맞춰 키운다 — A2 에 A4 크기 표를 얹으면 한쪽 구석만 차지한다
+  const kz = Math.max(1, Math.min(2, L.SW / 420));
+  const CW = [26, 92, 28, 18].map(v => v * kz);                  // 번호 · 도면명 · 축척 · 용지
+  const W = CW.reduce((a, v) => a + v, 0);
+  addEntity({ type: 'LINE', layer: '목록표', x1: L.ax0 + 6, y1: L.ay1 - 22,
+    x2: L.ax0 + 6 + W, y2: L.ay1 - 22 });
+  const top = L.ay1 - 34;
+  // ★표가 표제란 옆을 지나가지 않으면 용지 아래까지 쓸 수 있다. 큰 용지에서 굳이
+  //   위쪽 구석에만 몰아넣을 이유가 없다.
+  const clearTB = (L.ax0 + 6 + W) < L.tx0 - 4;
+  const avail = top - (clearTB ? L.ay0 + 4 : L.ty1 + 10);
+  // 행 높이에 하한을 두지 않는다 — 하한을 두면 장이 많을 때 표가 표제란을 뚫고 내려간다.
+  // 작은 용지에 많은 장을 담으면 글자가 작아지는 게 맞다(그건 용지를 키워 풀 문제다).
+  const RH = Math.min(9 * kz, avail / (list.length + 1));
+  const TH = Math.min(4.2 * kz, RH * 0.5);
+  const ln = (x1, y1, x2, y2) => addEntity({ type: 'LINE', layer: '목록표', x1, y1, x2, y2 });
+  const rows = [['도면번호', '도면명', '축척', '용지']]
+    .concat(list.map(s => [s.no, s.name, s.denom > 1 ? '1:' + s.denom : '-', o.size]));
+  for (let r = 0; r <= rows.length; r++) ln(L.ax0 + 6, top - RH * r, L.ax0 + 6 + W, top - RH * r);
+  let x = L.ax0 + 6;
+  for (let c = 0; c <= CW.length; c++) { ln(x, top, x, top - RH * rows.length); x += CW[c] || 0; }
+  rows.forEach((rw, r) => {
+    let cx = L.ax0 + 6;
+    rw.forEach((txt, c) => {
+      addEntity({ type: 'TEXT', layer: '목록표', x: cx + 3, y: top - RH * (r + 1) + RH * 0.32,
+        height: TH, text: String(txt), rotation: 0 });
+      cx += CW[c];
+    });
+  });
+  state.view = { x: L.SW / 2, y: L.SH / 2, scale: 1 };
+  renderLayers(); draw(); updateStat(); renderDocTabs();
+  return { size: o.size, denom: 1, views: [{ name: '도면목록', n: rows.length }],
+    sheetW: L.SW, sheetH: L.SH };
 }
 function sheetBuild(opt) {
   const o = Object.assign({ size: 'A1' }, opt || {});
@@ -3220,21 +3276,26 @@ function sheetBuild(opt) {
   setFileName('도면-' + o.size);
   return sheetDraw(srcs, o);
 }
-// 세트 — 종류마다 장을 따로 내고 번호를 붙인다. 장마다 새 탭이다.
+// 세트 — 종류마다 장을 따로 내고 번호를 붙인다. 장마다 새 탭이고, 첫 장은 도면목록이다.
 function sheetSetBuild(opt) {
-  const o = Object.assign({ size: 'A2', title: null, scale: 0, perSheet: 2 }, opt || {});
+  const o = Object.assign({ size: 'A2', title: null, scale: 0, perSheet: 2, index: true }, opt || {});
   const srcs = sheetSources();
   if (!srcs.length) return null;
   const pages = sheetPlan(srcs, o);
+  // ★축척을 먼저 계산해 둔다 — 목록표(첫 장)에 각 장의 축척을 적어야 하는데,
+  //   그리면서 정하면 첫 장을 그릴 때 아직 아무 값도 없다.
+  for (const pg of pages) pg.denom = sheetLayout(pg.views, o).denom;
+  const list = (o.index ? [{ no: 'A-000', name: '도면목록', denom: 1, index: true }] : []).concat(pages);
   // ★프로젝트명은 원본 도면 이름이다. 탭을 만들기 전에 잡아 둬야 한다 —
   //   새 탭을 연 뒤에 읽으면 방금 만든 시트 이름이 프로젝트명으로 박힌다.
   const proj = o.title || currentFileName || 'PARTI PROJECT';
   const made = [];
-  pages.forEach((pg, i) => {
+  list.forEach((pg, i) => {
     newDocTab();
     setFileName(pg.no + ' ' + pg.name);
-    const r = sheetDraw(pg.views, Object.assign({}, o, { title: proj, no: pg.no,
-      name: pg.name, page: i + 1, pages: pages.length }));
+    const co = Object.assign({}, o, { title: proj, no: pg.no, name: pg.name,
+      page: i + 1, pages: list.length });
+    const r = pg.index ? sheetIndexDraw(list, co) : sheetDraw(pg.views, co);
     made.push({ no: pg.no, name: pg.name, denom: r.denom, views: r.views.length, doc: curDoc });
   });
   return { size: o.size, sheets: made, count: made.length,
@@ -3270,7 +3331,7 @@ function cmdSheetSet(arg) {
   const per = (a.match(/(\d)\s*(?:뷰|장당|per)/) || [])[1];
   const home = curDoc;
   const r = sheetSetBuild({ size: size ? size.toUpperCase() : 'A2', scale: sc ? +sc : 0,
-    perSheet: per ? +per : 2 });
+    perSheet: per ? +per : 2, index: !/목록\s*없|noindex/i.test(a) });
   if (!r) { switchDoc(home); logLine('  묶을 도면이 없습니다 — 평면이나 단면을 먼저 만들어 주세요.', 'info'); return; }
   for (const s of r.sheets)
     logLine('  ' + s.no + '  ' + s.name + '   축척 1:' + s.denom + ' · 뷰 ' + s.views, 'info');
@@ -16628,7 +16689,7 @@ window.__CADTEST__ = {
   owSchedRows, owSchedCSV, owSchedDraw, cmdOwSchedule, owTypeKo,
   areaData, areaRows, areaCSV, cmdAreaTable, drawTable, polyAreaM2,
   autoSecLines, cmdAutoSection, sheetBuild, cmdSheet, sheetSources, entsBBox, SHEET_SIZES,
-  sheetPlan, sheetDraw, sheetSetBuild, cmdSheetSet, SHEET_SERIES, buildPDFSet, pdfWrap,
+  sheetPlan, sheetDraw, sheetLayout, sheetIndexDraw, sheetSetBuild, cmdSheetSet, SHEET_SERIES, buildPDFSet, pdfWrap,
   switchDoc, curDocIdx: () => curDoc, docCount: () => docs.length,
   autoDimPlan, cmdAutoDim, buildPDF, PAPER_SIZES,
   MAT_PRESETS, MAT_ALIAS, matOf, matKey, matHex, matBoxUV, matGeo, matBuild, matTextures, matDrawTex, cmdMaterial, rtGeoSig, bimSolidColor, secHatchFor, computePatternSegs, owWt, OPENING_TYPES, owSaveDef, owPlaced, layerAutoBim, applyLayerRoleTo, addEntity, renderLayers,

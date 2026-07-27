@@ -4374,6 +4374,44 @@ function tests(){
                 ok(offsZ.length >= 5 && offsZ.every((o0, i0) =>
                   pdfZ.slice(o0, o0 + 14).indexOf((i0 + 1) + ' 0 obj') === 0),
                   '★객체 오프셋이 전부 제 객체를 가리킨다 (' + offsZ.length + '개)');
+                // ④ 표지 · 도면목록 — 세트에 목록이 없으면 받은 쪽은 몇 장이 와야 하는지 모른다.
+                C.switchDoc(setZ.docs[0]);
+                const idxE = C.state.entities.filter(e0 => e0.layer === '목록표');
+                ok(idxE.length > 0, '★첫 장은 도면목록이다 (' + setZ.sheets[0].no + ')');
+                eqi(setZ.sheets[0].no, 'A-000', '  목록표는 A-000');
+                const txtI = idxE.filter(e0 => e0.type === 'TEXT').map(e0 => e0.text);
+                ok(txtI.indexOf('도면번호') >= 0 && txtI.indexOf('도면명') >= 0
+                  && txtI.indexOf('축척') >= 0, '  머리행 — 도면번호·도면명·축척·용지');
+                // ★목록에 모든 장이 빠짐없이 들어가야 한다. 이게 빠진 장을 알아채는 유일한 장치다.
+                const missI = setZ.sheets.filter(s => txtI.indexOf(s.no) < 0);
+                eqi(missI.length, 0, '★모든 장이 목록에 들어간다 (' + setZ.count + '장, 빠진 것 '
+                  + missI.map(s => s.no).join(',') + ')');
+                ok(setZ.sheets.filter(s => s.denom > 1)
+                  .every(s => txtI.indexOf('1:' + s.denom) >= 0), '★각 장의 축척을 목록에 적는다');
+                ok(idxE.every(e0 => e0.x == null || (e0.x >= -1 && e0.x <= SWz + 1)),
+                  '  목록표가 용지 안에 들어간다');
+                // 목록표 장 자신도 매수에 든다 — 1 / N
+                ok(C.state.entities.some(e0 => e0.layer === '표제란' && e0.type === 'TEXT'
+                  && e0.text === '1 / ' + setZ.count), '★목록표도 매수에 든다 (1 / ' + setZ.count + ')');
+                // ★장이 많고 용지가 작으면? 행 높이에 하한을 두면 표가 표제란을 뚫는다.
+                const bigL = [];
+                for (let q = 0; q < 40; q++) bigL.push({ no: 'A-' + (100 + q), name: '도면 ' + q, denom: 100 });
+                const nI = C.state.entities.length;
+                C.sheetIndexDraw(bigL, { size: 'A4', no: 'A-000', name: '도면목록', page: 1, pages: 40 });
+                const bigE = C.state.entities.slice(nI);
+                const ptsB = (e0) => e0.type === 'LINE' ? [[e0.x1, e0.y1], [e0.x2, e0.y2]]
+                  : e0.points ? e0.points : e0.type === 'TEXT' ? [[e0.x, e0.y]] : [];
+                eqi(bigE.filter(e0 => ptsB(e0).some(p0 =>
+                  p0[0] < -1 || p0[0] > 298 || p0[1] < -1 || p0[1] > 211)).length, 0,
+                  '★40장짜리 목록도 A4 용지 안에 들어간다');
+                eqi(bigE.filter(e0 => e0.layer === '목록표' && ptsB(e0).some(p0 =>
+                  p0[0] > 108 && p0[0] < 286 && p0[1] > 11 && p0[1] < 64)).length, 0,
+                  '★목록이 길어져도 표제란을 뚫지 않는다');
+                C.state.entities.length = nI;
+                // 목록 빼기
+                C.switchDoc(0);
+                const noIdx = C.cmdSheetSet('A2 목록없이');
+                ok(!noIdx.sheets.some(s => s.no === 'A-000'), '  "목록없이" 라면 넣지 않는다');
                 C.switchDoc(0);
                 C.state.entities.length = bZ;
                 C.switchDoc(homeZ);
