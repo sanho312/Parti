@@ -3920,6 +3920,51 @@ function tests(){
                       '★안 칠한 그림에는 재료를 내지 않는다 — 흰 벽과 종이는 구분할 수 없다');
                   });
               }).then(() => {
+                // ── ★창호일람표 ──
+                // 판독·생성된 개구부를 기호·종류·크기·수량으로 묶어 표로 낸다.
+                // ★판독으로 '추정'한 값은 비고에 표시한다 — 단정해 적으면 그대로 시공도가 된다.
+                const bS = C.state.entities.length;
+                A.buildComplex({ count: 2, floors: 1, w: 9000, d: 10000, roof: 'gable',
+                  arrange: 'arc', attached: true, glass: false, lean: 0, massList: [
+                    { wFrac: 0.5, hFrac: 1, wins: [
+                      { u: 0.3, v: 0.5, wFrac: 0.16, hFrac: 0.28, kind: 'wslide', kindConf: 0.6 },
+                      { u: 0.7, v: 0.5, wFrac: 0.16, hFrac: 0.28, kind: 'wslide', kindConf: 0.6 }] },
+                    { wFrac: 0.5, hFrac: 1, wins: [
+                      { u: 0.5, v: 0.12, wFrac: 0.14, hFrac: 0.26, dkind: 'dswing', dkindConf: 0.5,
+                        kind: 'fix', kindConf: 0 },
+                      { u: 0.25, v: 0.55, wFrac: 0.12, hFrac: 0.24, kind: 'fix', kindConf: 0.15 },
+                      { u: 0.78, v: 0.55, wFrac: 0.12, hFrac: 0.24, kind: 'hung', kindConf: 0.6 }] }] });
+                const sr = C.owSchedRows();
+                ok(sr.length >= 3, '★창호일람표 — 같은 규격끼리 묶어 ' + sr.length + '종으로 정리');
+                eqi(sr.filter(r9 => r9.ot === 'window')[0].mark, 'W1', '  창은 W1 부터, 폭 큰 것부터');
+                ok(sr.some(r9 => r9.ot === 'door' && /^D/.test(r9.mark)), '  문은 D 번호로 따로');
+                ok(sr.some(r9 => r9.n >= 2), '  같은 규격 2개는 수량 2로 묶인다');
+                const csv = C.owSchedCSV(sr);
+                ok(csv.charCodeAt(0) === 0xFEFF, '  CSV 에 BOM — 엑셀에서 한글이 안 깨진다');
+                ok(/기호,종류,개폐방식/.test(csv), '  머리행이 실무 열 구성');
+                ok(/추정/.test(csv), '★확신도가 낮은 개폐방식은 "추정"으로 표시 (그림에 표시가 없었던 것)');
+                const lines9 = csv.split(String.fromCharCode(10));
+                ok(!lines9.filter(l9 => l9.indexOf('미서기창') >= 0).some(l9 => l9.indexOf('추정') >= 0),
+                  '  실제로 읽은 종류에는 추정 표시가 붙지 않는다');
+                // 도면에 그리기
+                const b2 = C.state.entities.length;
+                C.owSchedDraw(sr);
+                const tab = C.state.entities.slice(b2).filter(e9 => e9.layer === '일람표');
+                ok(tab.filter(e9 => e9.type === 'TEXT').length >= 8, '★표를 도면 위에 그린다 (DXF·PDF 로 함께 나간다)');
+                ok(tab.filter(e9 => e9.type === 'LINE').length >= 6, '  격자선도 함께');
+                ok(tab.some(e9 => e9.text === '창호일람표'), '  제목');
+                // 모델과 겹치지 않아야 한다
+                let mxx = -1e9;
+                C.state.entities.slice(bS, b2).forEach(e9 => {
+                  const xs = e9.type === 'LINE' ? [e9.x1, e9.x2]
+                    : e9.points ? e9.points.map(p9 => p9[0]) : [e9.x || 0];
+                  xs.forEach(v9 => { if (v9 > mxx) mxx = v9; });
+                });
+                const tminx = Math.min.apply(null, tab.map(e9 =>
+                  e9.type === 'LINE' ? Math.min(e9.x1, e9.x2) : (e9.x || 0)));
+                ok(tminx > mxx, '★표가 모델을 덮지 않는다 (오른쪽 여백에)');
+                C.state.entities.length = bS;
+              }).then(() => {
                 // ★라우팅 근거 지표 — 전역 임계값 추측이 실물에서 두 번 뒤집힌 뒤 도입한 증거들.
                 //   도면은 무채색·축정렬·이중선, 손그림은 사선 지배 → 이 표가 오판을 막는다.
                 return VZ.traceImage(cv2.toDataURL('image/png'), { widthMM: 8000 }).then(rp => {

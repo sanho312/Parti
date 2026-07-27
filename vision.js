@@ -1117,7 +1117,8 @@ async function traceConcept(src, opts) {
     if (S2 < 12) return L2 >= 74 ? null : 'concrete';    // 밝은 무채색 = 종이와 구분 불가
     if (H2 < 22 && S2 >= 25) return 'brick';
     if (H2 >= 22 && H2 <= 50) return S2 >= 32 ? 'wood' : (L2 >= 70 ? null : 'concrete');
-    if (H2 > 60 && H2 < 170 && S2 >= 20) return 'grass';
+    // ★초록은 파사드 재료로 판정하지 않는다 — 이 판독기에서 초록은 '조경'이고, 건물 발치의
+    //   잔디가 면 통계에 섞이면 벽이 잔디가 된다. 초록 건물보다 잘못 읽을 위험이 훨씬 크다.
     return null;
   };
   const faceMat = (x0, x1, eh) => {

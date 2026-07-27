@@ -1147,8 +1147,7 @@
         });
         const kindTxt = Object.keys(tally).map(k => (KO[k] || k) + ' ' + tally[k]).join('·');
         // 판독한 재료 — 채색한 면만 나온다(안 칠한 면은 종이색과 구분할 수 없어 기본값으로 둔다)
-        const MKO = { brick: '벽돌', wood: '목재', concrete: '콘크리트', metal: '금속',
-          glass: '유리', grass: '잔디' };
+        const MKO = { brick: '벽돌', wood: '목재', concrete: '콘크리트', metal: '금속', glass: '유리' };
         const mTally = {};
         (spec.massList || []).forEach(m => {
           if (m && m.mat && (m.matConf || 0) >= 0.3) mTally[m.mat] = (mTally[m.mat] || 0) + 1;

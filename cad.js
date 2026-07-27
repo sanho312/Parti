@@ -2759,6 +2759,123 @@ function importLayersTplFile() {
   });
   inp.click();
 }
+// ── 창호일람표 (Window/Door Schedule) ──
+// 판독·생성으로 만들어진 개구부를 기호·종류·크기·수량으로 묶어 표로 낸다.
+// ★판독으로 '추정'한 값은 비고에 표시한다 — 사용자가 어디를 고쳐야 하는지 알아야 한다.
+//   (창 종류 판독은 확신도 wtConf 를 함께 싣는다. 손그림은 개폐방식을 아예 안 그리는
+//    경우가 더 많아서, 표에 단정해 적으면 그대로 시공 도면이 되어 버린다.)
+function owSchedRows() {
+  const ops = state.entities.filter(e => e.bim && e.bim.kind === 'opening' && !e.bim.auto);
+  const wOf = (e) => {
+    if (e.type === 'LINE') return Math.round(Math.hypot(e.x2 - e.x1, e.y2 - e.y1));
+    if (e.points && e.points.length >= 2) {
+      let L = 0;
+      for (let i = 1; i < e.points.length; i++)
+        L += Math.hypot(e.points[i][0] - e.points[i - 1][0], e.points[i][1] - e.points[i - 1][1]);
+      return Math.round(L);
+    }
+    return 0;
+  };
+  const groups = new Map();
+  for (const e of ops) {
+    const b = e.bim, wt = owWt(e), w = wOf(e);
+    if (w < 100) continue;                       // 길이 0 인 잔재는 표에 넣지 않는다
+    const h = Math.round(b.h || 0), sill = Math.round(b.sill || 0);
+    const mat = matKey ? (matKey(e) || (e.mat || '')) : (e.mat || '');
+    const k = [b.ot, wt, w, h, sill, mat].join('|');
+    if (!groups.has(k)) {
+      groups.set(k, { ot: b.ot, wt, w, h, sill, mat, n: 0,
+        conf: b.wtConf == null ? null : b.wtConf, ids: [] });
+    }
+    const g = groups.get(k);
+    g.n++; g.ids.push(e.id);
+    // 한 무리 안에서 확신도가 갈리면 가장 낮은 값을 쓴다(가장 보수적으로 표시)
+    if (b.wtConf != null) g.conf = g.conf == null ? b.wtConf : Math.min(g.conf, b.wtConf);
+  }
+  const rows = [...groups.values()];
+  // 창 먼저, 그 다음 문. 각각 폭 큰 것부터 — 실무 일람표의 통상 정렬.
+  rows.sort((a, b) => (a.ot === b.ot ? (b.w - a.w || b.h - a.h) : (a.ot === 'window' ? -1 : 1)));
+  let nw = 0, nd = 0;
+  for (const r of rows) r.mark = r.ot === 'window' ? ('W' + (++nw)) : ('D' + (++nd));
+  return rows;
+}
+const OWSCHED_COLS = ['기호', '종류', '개폐방식', '폭(W)', '높이(H)', '창대', '수량', '비고'];
+function owSchedCells(r) {
+  const note = [];
+  if (r.conf != null && r.conf < 0.4) note.push('개폐방식 추정 — 확인 필요');
+  if (r.mat && MAT_PRESETS[r.mat]) note.push(MAT_PRESETS[r.mat].ko);
+  return [r.mark, r.ot === 'window' ? '창' : '문', owTypeKo(r.wt),
+    String(r.w), String(r.h), r.ot === 'window' ? String(r.sill) : '-', String(r.n),
+    note.join(' · ')];
+}
+function owSchedCSV(rows) {
+  const esc = (s) => /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  let out = '﻿' + OWSCHED_COLS.join(',') + '\n';      // BOM — 엑셀에서 한글이 깨지지 않게
+  for (const r of rows) out += owSchedCells(r).map(esc).join(',') + '\n';
+  const guess = rows.filter(r => r.conf != null && r.conf < 0.4).length;
+  if (guess) out += '\n# 개폐방식이 "추정"인 행이 ' + guess + '건 있습니다 — 그림에 표시가 없어 기본값으로 넣은 값입니다.\n';
+  return out;
+}
+// 도면 위에 표를 그린다 — 모델 오른쪽 여백에. 실제 엔티티라 DXF·PDF 로도 함께 나간다.
+function owSchedDraw(rows) {
+  ensureLayer('일람표', '#cfd3da');
+  const TH = 300, RH = 700, PAD = 220;                     // 글자 · 행 높이 · 셀 여백
+  const cells = [OWSCHED_COLS].concat(rows.map(owSchedCells));
+  const cw = OWSCHED_COLS.map((_, c) =>
+    Math.max.apply(null, cells.map(rw => (rw[c] || '').length)) * TH * 0.62 + PAD * 2);
+  const W = cw.reduce((a, v) => a + v, 0), H = RH * cells.length;
+  // 모델 오른쪽에 놓는다
+  let mx = 0, my = 0, any = false;
+  for (const e of state.entities) {
+    const xs = e.type === 'LINE' ? [e.x1, e.x2] : e.points ? e.points.map(p => p[0]) : [e.x || 0];
+    const ys = e.type === 'LINE' ? [e.y1, e.y2] : e.points ? e.points.map(p => p[1]) : [e.y || 0];
+    for (const v of xs) { if (!any || v > mx) mx = v; }
+    for (const v of ys) { if (!any || v > my) my = v; any = true; }
+  }
+  const X0 = (any ? mx : 0) + 4000, Y1 = (any ? my : 0);
+  const ln = (x1, y1, x2, y2) => addEntity({ type: 'LINE', layer: '일람표',
+    x1: Math.round(x1), y1: Math.round(y1), x2: Math.round(x2), y2: Math.round(y2) });
+  // 격자
+  let y = Y1;
+  for (let r = 0; r <= cells.length; r++) { ln(X0, y, X0 + W, y); y -= RH; }
+  let x = X0;
+  for (let c = 0; c <= cw.length; c++) { ln(x, Y1, x, Y1 - H); x += cw[c] || 0; }
+  // 글자
+  cells.forEach((rw, r) => {
+    let cx = X0;
+    rw.forEach((txt, c) => {
+      if (txt) addEntity({ type: 'TEXT', layer: '일람표',
+        x: Math.round(cx + PAD), y: Math.round(Y1 - RH * r - RH * 0.68),
+        height: TH, text: String(txt), rotation: 0 });
+      cx += cw[c];
+    });
+  });
+  addEntity({ type: 'TEXT', layer: '일람표', x: Math.round(X0), y: Math.round(Y1 + RH * 0.5),
+    height: TH * 1.3, text: '창호일람표', rotation: 0 });
+  return { X0, Y1, W, H, n: cells.length };
+}
+function cmdOwSchedule(arg) {
+  const rows = owSchedRows();
+  if (!rows.length) { logLine('  개구부가 없습니다 — 창·문을 먼저 만들어 주세요.', 'info'); return; }
+  const a = String(arg || '').trim().toLowerCase();
+  if (a === 'csv' || a === '내보내기') {
+    dl3d(owSchedCSV(rows), (currentFileName || 'parti') + '_창호일람표.csv', 'text/csv;charset=utf-8');
+    logLine('  창호일람표 ' + rows.length + '종을 CSV 로 내보냈습니다.', 'ok');
+    return;
+  }
+  pushUndo();
+  const g = owSchedDraw(rows);
+  draw(); updateStat();
+  for (const r of rows)
+    logLine('  ' + r.mark + '  ' + owTypeKo(r.wt) + '  ' + r.w + '×' + r.h + '  ' + r.n + '개'
+      + (r.conf != null && r.conf < 0.4 ? '  (개폐방식 추정)' : ''), 'info');
+  const guess = rows.filter(r => r.conf != null && r.conf < 0.4).length;
+  logLine('  창호일람표 ' + rows.length + '종을 도면에 그렸습니다'
+    + (guess ? ' — 그중 ' + guess + '종은 개폐방식이 추정값입니다(그림에 표시가 없었습니다).' : '.')
+    + '  CSV 로 받으려면 "창호일람표 csv"', 'ok');
+  void g;
+}
+
 function cmdOwList() {
   const ks = Object.keys(state.owlib || {});
   if (!ks.length) { logLine('  저장된 창호 기호가 없습니다. 기호를 그리고 선택 → 창호저장', 'info'); return; }
@@ -11890,6 +12007,7 @@ const INSTANT_CMDS = {
   railing: cmdRailingTag,
   setaslight: cmdSetAsLight,
   owsave: cmdOwSave, owlist: cmdOwList, owdel: () => cmdOwDel(prompt('삭제할 창호 기호 이름 (@ 없이):') || ''),   // 커스텀 창호 기호
+  owsched: cmdOwSchedule,
   raytrace: cmdRaytrace,
   rendered: cmdRendered,
   material: cmdMaterial,
@@ -12355,6 +12473,7 @@ const CMD_ALIASES = {
   railing: 'railing', handrail: 'railing', 난간: 'railing', 손스침: 'railing',
   setaslight: 'setaslight', light: 'setaslight', lamp: 'setaslight', 조명: 'setaslight', 광원지정: 'setaslight', 광원: 'setaslight',
   창호저장: 'owsave', 창호목록: 'owlist', 창호삭제: 'owdel',
+  owsched: 'owsched', schedule: 'owsched', 창호일람표: 'owsched', 일람표: 'owsched', 창호표: 'owsched',
   unsetlight: 'unsetlight', 광원해제: 'unsetlight',
   raytrace: 'raytrace', rt: 'raytrace', raytraced: 'raytrace', 레이트레이싱: 'raytrace', 렌더: 'raytrace',
   rendered: 'rendered', 렌더링: 'rendered', 렌더링뷰: 'rendered', 렌더뷰: 'rendered',
@@ -15922,6 +16041,7 @@ window.__CADTEST__ = {
   bimSolids, pushLitPoly, lineClipPoly, genSectionView, stairSolids, stairSteps, railingSolids, railingPath, cmdRailingTag, lightEmitters, lightGizmos, renderLightList, cmdSetAsLight, cmdUnsetLight, cmdLighting, cmdRaytrace, rtBuildScene, rtTrisByEntity, rtSyncCamera, rtGeoSig, rtSupported, rtPreview, rtFullRes, rtLightsChanged, litCacheSig, rtSetEnv, rtEnvWanted, cmdRtEnv, parseIES, iesCandelaAt, iesSummary, iesToTexture, iesFluxFactor, lightCandela, cmdIes, selectedLights, cmdRtDenoise, rtExposure, cmdExposure, RT_EXPOSURE, RT_EXPOSURE_DAY,
   vpIsPlan, vpPlanIndex, vpRect, vpRectCss, planCvRect, syncPlanCv, open3D, close3D, is3DActive, resize, worldToScreen, screenToWorld,
   rview, rviewFrame, rviewBuildScene, rviewSyncSun, rviewSig, cmdRendered,
+  owSchedRows, owSchedCSV, owSchedDraw, cmdOwSchedule, owTypeKo,
   MAT_PRESETS, MAT_ALIAS, matOf, matKey, matHex, matBoxUV, matGeo, matBuild, matTextures, matDrawTex, cmdMaterial, rtGeoSig, bimSolidColor, secHatchFor, computePatternSegs, owWt, OPENING_TYPES, owSaveDef, owPlaced, layerAutoBim, applyLayerRoleTo, addEntity, renderLayers,
   runCommandInput, feedCmdArg,
   skyCloud, sunDirectIlluminanceClear, skyBlend, SKY_OVERCAST_E, SKY_OVERCAST_RGB,
