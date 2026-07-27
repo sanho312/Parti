@@ -5,13 +5,29 @@
 (function () {
   'use strict';
   const LS = 'webcad_ai_cfg';
+  // ★모델 ID 는 여기 한 곳에만 둔다(가격표도 같은 키를 쓴다). 새 모델이 나오면 이 표만 고친다.
   const MODELS = [
     ['claude-sonnet-5', 'Sonnet 5 (권장)'],
     ['claude-haiku-4-5-20251001', 'Haiku 4.5 (빠름·저렴)'],
-    ['claude-opus-4-8', 'Opus 4.8 (고급)'],
+    ['claude-opus-5', 'Opus 5 (고급)'],
   ];
+  // ★옛 ID 가 설정에 남아 있으면 API 가 404 를 낸다 — 화면에는 목록의 첫 항목이 선택된 것처럼
+  //   보이는데 실제로는 죽은 ID 로 요청이 나간다. 불러올 때 현행으로 옮긴다.
+  const MODEL_MOVED = {
+    'claude-opus-4-8': 'claude-opus-5', 'claude-opus-4-5': 'claude-opus-5',
+    'claude-opus-4-1': 'claude-opus-5', 'claude-opus-4-20250514': 'claude-opus-5',
+    'claude-sonnet-4-5': 'claude-sonnet-5', 'claude-sonnet-4-20250514': 'claude-sonnet-5',
+    'claude-3-5-sonnet-latest': 'claude-sonnet-5', 'claude-3-7-sonnet-latest': 'claude-sonnet-5',
+    'claude-3-5-haiku-latest': 'claude-haiku-4-5-20251001',
+  };
   let cfg = { key: '', model: MODELS[0][0] };
   try { Object.assign(cfg, JSON.parse(localStorage.getItem(LS) || '{}')); } catch (e) {}
+  {
+    const was = cfg.model;
+    if (MODEL_MOVED[cfg.model]) cfg.model = MODEL_MOVED[cfg.model];
+    if (!MODELS.some(m => m[0] === cfg.model)) cfg.model = MODELS[0][0];
+    if (cfg.model !== was) { try { localStorage.setItem(LS, JSON.stringify(cfg)); } catch (e) {} }
+  }
   function saveCfg() { try { localStorage.setItem(LS, JSON.stringify(cfg)); } catch (e) {} }
   const B = () => window.WEBCAD_AI_BRIDGE;
 
@@ -654,13 +670,18 @@
   let busy = false;
   const TOOL_KO = { get_drawing: '도면 파악', add_entities: '개체 생성', update_entities: '속성 수정', delete_entities: '삭제', transform_entities: '이동/회전', boolean_op: '불리언', set_view: '뷰 전환', select_entities: '선택 표시', get_screenshot: '화면 확인', measure: '측정', edit_node_graph: '노드 그래프', set_underlay: '밑그림 삽입', make_views: '입면/단면 생성', organize_layers: '레이어 정리' };
   // 비용 표시: $/MTok [입력, 출력] · 캐시 읽기=입력×0.1, 캐시 쓰기=입력×1.25
-  const PRICE = { 'claude-sonnet-5': [3, 15], 'claude-haiku-4-5-20251001': [1, 5], 'claude-opus-4-8': [5, 25] };
+  // ★가격은 모델 ID 를 키로 쓴다 — MODELS 를 고치면 여기도 같이 고쳐야 한다.
+  //   값이 없으면 Sonnet 값으로 떨어져 '틀린 금액'을 조용히 보여 주므로, costLine 에서 밝힌다.
+  const PRICE = { 'claude-sonnet-5': [3, 15], 'claude-haiku-4-5-20251001': [1, 5], 'claude-opus-5': [5, 25] };
   const KRW_PER_USD = 1450; // 대략치 (표시용)
   function costLine(u) {
+    const known = !!PRICE[cfg.model];
     const p = PRICE[cfg.model] || [3, 15];
     const usd = (u.in * p[0] + u.cw * p[0] * 1.25 + u.cr * p[0] * 0.1 + u.out * p[1]) / 1e6;
     return '📊 토큰 입력 ' + (u.in + u.cr + u.cw).toLocaleString() + (u.cr ? ' (캐시 적중 ' + u.cr.toLocaleString() + ')' : '') +
-      ' · 출력 ' + u.out.toLocaleString() + ' · 약 ₩' + Math.max(1, Math.round(usd * KRW_PER_USD)).toLocaleString();
+      ' · 출력 ' + u.out.toLocaleString() + ' · 약 ₩' + Math.max(1, Math.round(usd * KRW_PER_USD)).toLocaleString()
+      // ★가격표에 없는 모델이면 Sonnet 값으로 계산된 것이다 — 금액을 사실처럼 보이게 두지 않는다
+      + (known ? '' : ' (이 모델 단가가 표에 없어 Sonnet 기준으로 어림한 값입니다)');
   }
 
   async function send(content) { // content: 문자열 또는 [이미지블록…, 텍스트블록] 배열
@@ -1442,6 +1463,7 @@
   }
 
   window.__WEBCAD_AI_TEST__ = { execTool, send, attachImage, localReply, parseComplexSpec, planVerdict,
+    MODELS, PRICE, MODEL_MOVED,
     get history() { return history; }, get cfg() { return cfg; },
     get lastImg() { return lastImg; }, setLastImg: (v) => { lastImg = v; },
     get pendingImgs() { return pendingImgs; },

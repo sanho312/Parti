@@ -5333,6 +5333,22 @@ function tests(){
               ok(/A-101/.test(r), '★도면번호를 답에 밝힌다 (A-101 …)');
               ok(/\d+장/.test(r), '  몇 장인지 밝힌다');
               ok(!/뷰 \d+개/.test(r), '  한 장짜리 문구를 섞지 않는다');
+              // ── ★모델 목록 ──
+              // ★가격표 키가 모델 목록과 어긋나면 비용이 조용히 Sonnet 값으로 계산된다.
+              //   모델을 올릴 때 제일 잘 빠뜨리는 곳이라 여기서 못박는다.
+              const MD = H.MODELS || [], PR = H.PRICE || {};
+              ok(MD.length >= 3, '★모델 목록 ' + MD.length + '개');
+              eqi(MD.map(m => m[0]).filter(v => !PR[v]).length, 0,
+                '★모델마다 단가가 있다 (없으면 Sonnet 값으로 조용히 계산된다)');
+              eqi(Object.keys(PR).filter(k => !MD.some(m => m[0] === k)).length, 0,
+                '  가격표에 목록에 없는 모델이 남아 있지 않다');
+              ok(!MD.some(m => /-4-8|-4-5-2025|3-5-sonnet|-4-1$/.test(m[0]) && !/haiku/.test(m[0])),
+                '★목록에 지난 세대 모델이 없다 — ' + MD.map(m => m[0]).join(' · '));
+              // ★옛 ID 가 저장돼 있으면 현행으로 옮긴다 (안 옮기면 죽은 ID 로 요청이 나간다)
+              const MV = H.MODEL_MOVED || {};
+              ok(MV['claude-opus-4-8'] === 'claude-opus-5', '★옛 Opus 4.8 설정은 Opus 5 로 옮긴다');
+              eqi(Object.values(MV).filter(v => !MD.some(m => m[0] === v)).length, 0,
+                '  옮겨 갈 곳은 전부 현행 목록 안에 있다');
               C.state.entities.length = b3;
               // ★"1층은 상가" 의 '1층' 은 층수가 아니다 — 먼저 떼어 내지 않으면 4층 건물이 1층이 된다
               return LR('3동 4층 박공 부채꼴로 세워줘, 1층은 상가로');
