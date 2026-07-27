@@ -144,6 +144,10 @@ async function run(dataUrl, name) {
     // ★왜 그렇게 읽었는지 — 판정의 근거가 된 내부 값. 틀린 값을 봤을 때 '어디서'가 여기 있다.
     const m = cp.meta || {};
     html.push(table('② 왜 그렇게 읽었나 (판정 근거)', [
+      ['★확신도', (cp.conf == null ? '-' : Math.round(cp.conf * 100) + '%'),
+        cp.conf != null && cp.conf < 0.6 ? 'bad' : 'ok'],
+      ['★못 미더운 이유', (cp.why || []).length ? cp.why.join(' · ') : '없음',
+        (cp.why || []).length ? 'warn' : 'mut'],
       ['봉우리 자리', (cp.peaks || []).join(', ') + ' (px)'],
       ['봉우리 평균 돌출 / 최고 높이', m.promAvg + ' / ' + m.maxH
         + '  →  ' + (m.maxH ? (m.promAvg / m.maxH).toFixed(3) : '-') + ' (0.08 넘어야 박공)'],

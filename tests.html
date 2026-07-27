@@ -3312,6 +3312,53 @@ function tests(){
             g4.fillStyle = '#86c05a'; g4.beginPath(); g4.ellipse(430, 385, 175, 55, 0, 0, 7); g4.fill();
             return cv3.toDataURL('image/png');
           };
+          const abstainCheck = (V, AD, mkSketch) => {
+            // ── ★기권 신호 (읽을 수 없는 그림을 읽었다고 하지 않기) ──
+            // 판독기는 지금까지 어떤 그림에도 확신에 찬 값을 냈다. 대지·조경 투시를 넣어도
+            // "3층 박공 7동이 마당을 두른 단지"라고 답하고 유보하는 말이 하나도 없었다.
+            // ★값은 그대로 내되, 스스로 이미 알고 있는 '범위 밖' 신호를 버리지 않는다.
+            // ★가장 중요한 것: 노리는 그림에서는 절대 울리지 않아야 한다(늑대 소년 금지).
+            const mkTerrain = () => {
+              const c9 = AD.createElement('canvas'); c9.width = 580; c9.height = 360;
+              const g9 = c9.getContext('2d');
+              g9.fillStyle = '#fff'; g9.fillRect(0, 0, 580, 360);
+              g9.strokeStyle = '#333'; g9.lineWidth = 2;
+              // 휘어 나가는 둔덕 능선 + 등고 테라스 (지면선이 없다)
+              g9.beginPath(); g9.moveTo(20, 300); g9.bezierCurveTo(200, 90, 380, 70, 570, 120); g9.stroke();
+              for (let i = 0; i < 5; i++) {
+                g9.beginPath(); g9.moveTo(60 + i * 10, 320);
+                g9.bezierCurveTo(220, 130 + i * 14, 400, 110 + i * 14, 575, 160 + i * 12); g9.stroke();
+              }
+              // 원통 건물 — 촘촘한 수직 해칭
+              g9.strokeRect(60, 180, 120, 130);
+              for (let i = 0; i < 16; i++) {
+                g9.beginPath(); g9.moveTo(60 + i * 7.5, 180); g9.lineTo(60 + i * 7.5, 310); g9.stroke();
+              }
+              // 능선 위 침엽수 — 화면 위쪽에 흩어져 있다
+              g9.fillStyle = '#3f7d3f';
+              [[120, 95], [250, 70], [330, 60], [420, 75], [500, 95], [180, 140]].forEach(([x9, y9]) => {
+                g9.beginPath(); g9.moveTo(x9, y9); g9.lineTo(x9 - 14, y9 + 46);
+                g9.lineTo(x9 + 14, y9 + 46); g9.closePath(); g9.fill();
+              });
+              return c9.toDataURL('image/png');
+            };
+            return Promise.all([V.traceConcept(mkSketch(3)), V.traceConcept(mkTerrain())])
+              .then(([okC, bad]) => {
+                // ★노리는 그림 — 경고가 울리면 안 된다
+                eqi(okC.conf, 1, '★판독기가 노리는 그림에서는 확신도 100% (늑대 소년이 되면 안 된다)');
+                eqi((okC.why || []).length, 0, '  못 미더운 이유가 하나도 없다');
+                // ★범위 밖 그림 — 값은 내되 확신은 낮춰야 한다
+                ok(bad.conf <= 0.4, '★지형·조경 스케치는 확신도가 무너진다 ('
+                  + Math.round(bad.conf * 100) + '%)');
+                ok((bad.why || []).length >= 3, '  이유를 셋 이상 댄다: ' + (bad.why || []).join(' / '));
+                ok((bad.why || []).some(v => /지면선/.test(v)),
+                  '★"지면선을 찾지 못함" — baseY 는 건물 밑단이 아니라 맨 아래 잉크 행으로 후퇴한다');
+                ok((bad.why || []).some(v => /층수 추정이 범위/.test(v)),
+                  '★"층수 범위 밖" — 안에서 5층을 계산해 3층으로 자른 사실을 삼키지 않는다');
+                ok(bad.masses >= 1 && bad.floors >= 1,
+                  '  그래도 값은 낸다 (기권이 침묵은 아니다 — 사람이 고칠 수 있게 세워는 준다)');
+              });
+          };
           const facadeUrl = mkFacade(6, 4, 640, 560);
           let ci0 = null;
           return VZ.classifyImage(cv2.toDataURL('image/png'))
@@ -3324,7 +3371,7 @@ function tests(){
             })
             .then(cs => {
               ok(cs.kind !== 'plan', '★투시 스케치는 도면으로 오인하지 않는다');
-              return VZ.traceConcept(mkSketch()).then(cc2 => {
+              return abstainCheck(VZ, AD, mkSketch).then(() => VZ.traceConcept(mkSketch())).then(cc2 => {
                 eqi(cc2.masses, 5, '★콘셉트 판독 — 지붕 봉우리로 동 수 (5동)');
                 eqi(cc2.roof, 'gable', '  뾰족한 봉우리 → 박공지붕');
                 // 마당이 건물 무리보다 '앞'에 있으면 부채꼴 배치 — 마당을 빙 두르는 링이 아니다

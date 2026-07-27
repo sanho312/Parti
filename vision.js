@@ -1432,6 +1432,34 @@ async function traceConcept(src, opts) {
     massList2 = Array.from({ length: ringMasses }, () => ({ wFrac: per, hFrac: 1, lean: +leanAvg.toFixed(3) }));
     masses2 = ringMasses;
   }
+  // ── ★기권(abstain) 신호 ──
+  // 이 판독기는 지금까지 어떤 그림에도 확신에 찬 값을 냈다. 대지·조경 투시를 넣어도
+  // "3층 박공 7동이 마당을 두른 단지"라고 답한다 — 유보하는 말이 하나도 없다.
+  // ★고칠 것은 임계가 아니라 '출력 계약'이다. 값은 그대로 내되, 스스로 이미 알고 있는
+  //   '범위 밖' 신호를 버리지 않고 함께 낸다. 아래 셋은 전부 이미 계산해 둔 값이다.
+  const why = [];
+  // ① 클램프에 물린 값 = 알고리즘이 스스로 "범위 밖"이라고 말한 것
+  const rawFloors = Math.round(eaveRatio / 0.42);
+  if (rawFloors > 3) why.push('층수 추정이 범위를 크게 벗어남 (' + rawFloors + '층 → 3층으로 자름)');
+  if (clusterLean != null && Math.abs(clusterLean) >= 0.9) why.push('기울기가 상한(42°)에 물림');
+  // ② 하늘 여백이 없다 — 건물 스케치는 위에 빈 곳이 있다. 지형·전개도는 종이를 꽉 채운다.
+  if (maxH > 0 && maxH / h > 0.9) why.push('그림이 위아래로 꽉 참 (하늘 여백이 없다)');
+  // ③ 지면선을 못 찾았다 — baseY 는 '건물 밑단'이 아니라 '맨 아래 잉크 행'으로 후퇴한다.
+  //    진짜 지면선이라면 그 행 근처에 폭의 상당 부분을 잇는 가로 잉크가 있어야 한다.
+  {
+    let run = 0, best = 0;
+    for (let y = Math.max(0, baseY - 2); y <= Math.min(h - 1, baseY + 2); y++) {
+      run = 0;
+      for (let x = 0; x < w; x++) { if (bldg[y * w + x]) { run++; if (run > best) best = run; } else run = 0; }
+    }
+    if (best < w * 0.18) why.push('지면선을 찾지 못함 (바닥에 이어지는 가로선이 없다)');
+  }
+  // ④ 마당으로 읽은 초록이 화면 위쪽에 있다 = 중정이 아니라 원경 수목일 수 있다
+  if (hasCourt && gcy < h * 0.4) why.push('마당으로 읽은 초록이 화면 위쪽에 있음 (원경 수목일 수 있다)');
+  // ⑤ 읽은 것을 버리고 균등 매스로 갈아치웠다
+  if (ringMasses && ringMasses !== masses) why.push('링 배치로 판정해 그림에서 읽은 폭·창·재료를 버림');
+  // 신뢰도 — 근거 하나당 0.22 씩 깎는다. 두 개면 이미 절반 아래다.
+  const conf = +Math.max(0, Math.min(1, 1 - why.length * 0.22)).toFixed(2);
   return {
     masses: masses2, massList: massList2, attached, floors, lean: +leanAvg.toFixed(3), depthRatio, depthConf,
     // 고원 비율이 크면 평지붕. 뾰족한 봉우리라야 박공이다.
@@ -1440,6 +1468,8 @@ async function traceConcept(src, opts) {
     arrange: courtFront ? 'arc' : enclosed ? 'circle' : 'row',
     glass: blueR > 0.008,
     peaks: peaks.map(p => Math.round(p.i)),
+    conf, why,               // ★기권 신호 — 값은 내되 확신은 따로 밝힌다
+
     meta: { w, h, maxH: Math.round(maxH), promAvg: +promAvg.toFixed(1), inkThr,
       greenRatio: +greenR.toFixed(3), blueRatio: +blueR.toFixed(3),
       courtyard: hasCourt, courtFront, enclosed, ringMasses, attached, bTop, bBot, baseY,

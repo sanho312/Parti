@@ -1178,6 +1178,13 @@
         cpxN++; lastConcept = spec;
         const roofKo = { gable: '박공지붕', flat: '평지붕', shed: '외쪽지붕' }[spec.roof] || spec.roof;
         const arrKo = { arc: '부채꼴로 늘어서고 마당은 그 앞', circle: '마당을 둘러싼 배치', row: '일렬 배치' }[spec.arrange] || spec.arrange;
+        // ★판독기가 스스로 '범위 밖'이라고 말한 것을 삼키지 않는다.
+        //   값은 그대로 내되, 왜 못 미더운지 먼저 밝힌다 — 조용히 틀린 답보다 낫다.
+        if ((c.conf != null && c.conf < 0.6) && (c.why || []).length) {
+          lines.push('⚠ **이 그림은 제가 읽을 수 있는 종류가 아닐 수 있습니다** (확신도 '
+            + Math.round(c.conf * 100) + '%) — ' + c.why.join(' · ')
+            + '. 아래는 그래도 세워 본 것이니, 틀렸으면 말로 고쳐 주세요 (예: "3동 2층 일렬로 다시").');
+        }
         lines.push(`· 스케치 판독 → **${r.n}동 · ${spec.floors}층 · ${roofKo} · ${arrKo}**`
           + (spec.glass ? ' · 마당 쪽 전면 유리' : '')
           + `  (봉우리 ${c.masses}개${c.attached ? ' · 서로 붙은 덩어리' : ''}${c.meta.courtyard ? ' · 마당 초록 검출' : ''}`
