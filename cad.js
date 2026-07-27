@@ -3063,6 +3063,135 @@ function cmdAutoDim(arg) {
   return r;
 }
 
+// ── 상세도 자동 ──
+// ★상세도는 1:100 도면에서 안 보이는 것을 1:10 으로 보여 주는 장이다. 처마가 얼마나
+//   나왔는지, 바닥이 지면에서 얼마나 떴는지, 창이 어느 높이에 있는지는 축척이 커야 읽힌다.
+// ★모르는 것은 그리지 않는다. 방수층·단열재 두께 같은 건 모델에 없으므로 그리지 않는다 —
+//   상세도라고 그럴듯한 겹을 지어내면 그 도면대로 지을 수 없다. 모델이 아는 것만 그린다:
+//   벽 두께 · 슬래브 두께 · 처마 내밀기 · 처마 높이 · 기단 · 지면 레벨 · 창 sill/head.
+function detailSources() {
+  const E = state.entities;
+  const kind = (k) => E.filter(e => e.bim && e.bim.kind === k);
+  const roofs = kind('roof').filter(e => e.layer === '지붕' && e.points);
+  const walls = kind('wall').filter(e => e.bim.t !== 100 && e.bim.h > 1000);
+  const slabs = kind('slab').filter(e => e.bim.t === 150 && (e.bim.top || 0) === 0);
+  const site = kind('slab').filter(e => (e.bim.top || 0) < 0)[0];
+  const wins = kind('opening').filter(e => e.bim.ot === 'window');
+  const out = [];
+  const wallT = walls.length ? (walls[0].bim.t || 200) : 200;
+  // ① 처마 상세 — 지붕이 벽 위에서 얼마나 나왔는가
+  if (roofs.length && walls.length) {
+    const rf = roofs[0].bim, wl = walls[0].bim;
+    // ★처마 내밀기는 '재서' 얻는다. 지붕과 바닥판은 같은 네 귀퉁이에서 처마만큼 밀려 있으므로,
+    //   지붕 꼭짓점마다 가장 가까운 바닥판 꼭짓점까지의 거리를 재 그 중앙값을 쓴다.
+    //   (경계상자 차이로 재면 벽 '선분 하나'의 상자를 빼게 되어 2707mm 같은 값이 나온다 — 실측으로 걸렸다)
+    let ovh = 0;
+    if (slabs.length && roofs[0].points) {
+      const sp0 = slabs[0].points || [];
+      const ds = roofs[0].points.map(rp => Math.min.apply(null,
+        sp0.map(q => Math.hypot(rp[0] - q[0], rp[1] - q[1])))).sort((x, y) => x - y);
+      // ★중앙값이 아니라 최솟값. 끝동은 바깥쪽으로도 내밀어(dth) 그 귀퉁이 거리가
+      //   hypot(처마, 측면) 로 부풀어 521mm 처럼 나온다 — 순수한 처마는 최솟값 쪽이다.
+      if (ds.length) ovh = Math.round(ds[0]);
+    }
+    if (!(ovh > 0 && ovh < 2000)) ovh = 300;      // 재지 못하면 실무 표준값으로
+    out.push({ name: '처마 상세', kind: 'detail',
+      draw: (D) => {
+        const eave = rf.eave || wl.h || 3000;
+        const H = 900, W = ovh + wallT + 400;
+        D.rect(0, eave - H, wallT, eave);                       // 벽 (두께 그대로)
+        D.hatch(0, eave - H, wallT, eave);
+        const rise = Math.min(400, (rf.rise || 600) * 0.35);
+        D.line(-ovh, eave, wallT + 200, eave + rise);           // 지붕면
+        D.line(-ovh, eave - 120, wallT + 200, eave + rise - 120); // 지붕 두께
+        D.line(-ovh, eave - 120, -ovh, eave);                   // 처마 끝
+        D.dim([-ovh, eave], [0, eave], eave + 500);
+        D.dim([0, eave - H], [wallT, eave - H], eave - H - 400);
+        D.note(wallT + 300, eave - 300, '처마높이 ' + Math.round(eave) + 'mm');
+        void W;
+      } });
+  }
+  // ② 기단 상세 — 바닥이 지면에서 얼마나 떠 있는가
+  if (slabs.length) {
+    const st = slabs[0].bim.t || 150, gz = site ? (site.bim.top || 0) : -260;
+    out.push({ name: '기단 상세', kind: 'detail',
+      draw: (D) => {
+        const W = 1400;
+        D.rect(0, -st, W, 0);                                   // 바닥판
+        D.hatch(0, -st, W, 0);
+        D.rect(0, 0, wallT, 900);                               // 벽
+        D.hatch(0, 0, wallT, 900);
+        D.line(-500, gz, W, gz);                                // 지면선
+        D.line(-500, gz - 200, W, gz - 200);
+        D.dim([W - 600, -st], [W - 600, 0], W + 300);
+        D.dim([W - 200, gz], [W - 200, 0], W + 800);
+        D.note(200, 400, 'FL ±0');
+      } });
+  }
+  // ③ 창 상세 — 창이 어느 높이에 어느 크기로 앉는가
+  if (wins.length && walls.length) {
+    const w0 = wins.reduce((a, b) => ((a.bim.sill || 0) <= (b.bim.sill || 0) ? a : b));
+    const sill = Math.round(w0.bim.sill || 0), hh = Math.round(w0.bim.h || 1500);
+    out.push({ name: '창 상세', kind: 'detail',
+      draw: (D) => {
+        const top = sill + hh, W = 1000;
+        D.rect(0, sill - 700, wallT, sill);                     // 창 아래 벽
+        D.hatch(0, sill - 700, wallT, sill);
+        D.rect(0, top, wallT, top + 700);                       // 창 위 벽(인방)
+        D.hatch(0, top, wallT, top + 700);
+        D.line(0, sill, wallT, sill); D.line(0, top, wallT, top);
+        D.line(wallT * 0.5, sill, wallT * 0.5, top);            // 유리
+        D.dim([wallT + 200, sill], [wallT + 200, top], wallT + 700);
+        D.dim([wallT + 200, sill - 700], [wallT + 200, sill], wallT + 1200);
+        D.note(wallT + 250, top + 300, '창 ' + owTypeKo(w0.bim.wt || 'fix'));
+        void W;
+      } });
+  }
+  return out;
+}
+// 상세도를 새 탭에 그린다 — 실제 치수(mm)로 그리므로 시트가 알아서 큰 축척을 고른다
+function cmdDetails(arg) {
+  const srcs = detailSources();
+  if (!srcs.length) { logLine('  상세를 뽑을 것이 없습니다 — 건물을 먼저 만들어 주세요.', 'info'); return; }
+  const a = String(arg || '').trim();
+  const home = curDoc;
+  newDocTab();
+  setFileName('상세도');
+  ensureLayer('상세', '#cfd3da'); ensureLayer('치수', '#5dff8f'); ensureLayer('문자', '#8fa3c8');
+  let ox = 0;
+  const made = [];
+  for (const s of srcs) {
+    const n0 = state.entities.length;
+    const D = {
+      line: (x1, y1, x2, y2) => addEntity({ type: 'LINE', layer: '상세',
+        x1: Math.round(ox + x1), y1: Math.round(y1), x2: Math.round(ox + x2), y2: Math.round(y2) }),
+      rect: (x1, y1, x2, y2) => addEntity({ type: 'LWPOLYLINE', layer: '상세', closed: true,
+        points: [[ox + x1, y1], [ox + x2, y1], [ox + x2, y2], [ox + x1, y2]].map(p => [Math.round(p[0]), Math.round(p[1])]) }),
+      hatch: (x1, y1, x2, y2) => addEntity({ type: 'HATCH', layer: '상세', pattern: 'ansi31',
+        spacing: 60, angle: 45, boundary: { kind: 'poly',
+          points: [[ox + x1, y1], [ox + x2, y1], [ox + x2, y2], [ox + x1, y2]].map(p => [Math.round(p[0]), Math.round(p[1])]) } }),
+      dim: (p1, p2, off) => {
+        const A = { x: ox + p1[0], y: p1[1] }, B = { x: ox + p2[0], y: p2[1] };
+        const vert = Math.abs(A.x - B.x) < Math.abs(A.y - B.y);
+        const pos = vert ? { x: ox + off, y: (A.y + B.y) / 2 } : { x: (A.x + B.x) / 2, y: off };
+        for (const e of computeDimension(A, B, pos)) addEntity(e);
+      },
+      note: (x, y, t) => addEntity({ type: 'TEXT', layer: '문자', height: 90,
+        x: Math.round(ox + x), y: Math.round(y), text: t, rotation: 0 }),
+    };
+    s.draw(D);
+    const bb = entsBBox(state.entities.slice(n0));
+    addEntity({ type: 'TEXT', layer: '문자', height: 130, rotation: 0,
+      x: Math.round(bb ? bb.x0 : ox), y: Math.round((bb ? bb.y0 : 0) - 350), text: s.name });
+    ox = (bb ? bb.x1 : ox) + 1500;
+    made.push(s.name);
+  }
+  draw(); updateStat(); renderDocTabs();
+  if (/닫|home|복귀/i.test(a)) switchDoc(home);
+  logLine('  상세도 ' + made.length + '장을 새 탭에 그렸습니다 — ' + made.join(' · ')
+    + '. 도면 세트에 A-501 로 들어갑니다.', 'ok');
+  return { details: made, doc: curDoc };
+}
 // ── 도면 묶기 (시트 · 세트) ──
 // ★평면·단면·입면·표가 따로 놀면 납품이 안 된다. 도면틀과 표제란을 두고 배치한다.
 //   시트는 '종이 mm' 로 그린다 — 모델(mm)을 1/축척 으로 줄여 얹는다. 그래야 축척이 뜻을 갖는다.
@@ -3075,6 +3204,7 @@ const SHEET_SERIES = [
   { kind: 'plan', base: 101, name: '평면도', per: 1 },   // 평면은 장당 하나 — 크고, 층마다 따로다
   { kind: 'elev', base: 201, name: '입면도' },
   { kind: 'sec',  base: 301, name: '단면도' },
+  { kind: 'detail', base: 501, name: '상세도' },
   { kind: 'ow',   base: 601, name: '창호일람표' },
 ];
 function sheetClone(e, k, tx, ty) {
@@ -3311,6 +3441,8 @@ function sheetSources(shOpt) {
         out.push({ name: k, ents: es, kind: /창호/.test(k) ? 'ow' : 'gen' });
     } else if (/단면|입면/.test(nm)) {
       out.push({ name: nm, ents, kind: /입면/.test(nm) ? 'elev' : 'sec' });
+    } else if (/상세/.test(nm)) {
+      out.push({ name: nm, ents, kind: 'detail' });
     }
   });
   // ★같은 이름의 단면이 여러 장이면 최신 것만 쓴다 — '단면자동'을 두 번 돌리면 탭이
@@ -12829,6 +12961,7 @@ const INSTANT_CMDS = {
   owsched: cmdOwSchedule, areatable: cmdAreaTable, autosection: cmdAutoSection, sheet: cmdSheet, sheetset: cmdSheetSet,
   autodim: cmdAutoDim,
   floorview: cmdFloorView,
+  detail: cmdDetails,
   raytrace: cmdRaytrace,
   rendered: cmdRendered,
   material: cmdMaterial,
@@ -13301,6 +13434,7 @@ const CMD_ALIASES = {
   sheetset: 'sheetset', 도면세트: 'sheetset', 세트: 'sheetset', 도면일습: 'sheetset', 여러장: 'sheetset',
   autodim: 'autodim', 치수자동: 'autodim', 자동치수: 'autodim', 치수기입: 'autodim',
   floorview: 'floorview', 층보기: 'floorview', 층별보기: 'floorview', 층필터: 'floorview', 층만: 'floorview',
+  detail: 'detail', 상세도: 'detail', 상세: 'detail', 디테일: 'detail',
   unsetlight: 'unsetlight', 광원해제: 'unsetlight',
   raytrace: 'raytrace', rt: 'raytrace', raytraced: 'raytrace', 레이트레이싱: 'raytrace', 렌더: 'raytrace',
   rendered: 'rendered', 렌더링: 'rendered', 렌더링뷰: 'rendered', 렌더뷰: 'rendered',
@@ -16903,6 +17037,7 @@ window.__CADTEST__ = {
   autoSecLines, cmdAutoSection, sheetBuild, cmdSheet, sheetSources, entsBBox, SHEET_SIZES,
   sheetPlan, sheetDraw, sheetLayout, sheetIndexDraw, sheetSetBuild, cmdSheetSet, SHEET_SERIES, buildPDFSet, pdfWrap,
   planFloorSplit, planFloorTag, cmdFloorView, onLv, floorInfo, renderFloorBar,
+  detailSources, cmdDetails,
   switchDoc, curDocIdx: () => curDoc, docCount: () => docs.length,
   autoDimPlan, cmdAutoDim, buildPDF, PAPER_SIZES,
   MAT_PRESETS, MAT_ALIAS, matOf, matKey, matHex, matBoxUV, matGeo, matBuild, matTextures, matDrawTex, cmdMaterial, rtGeoSig, bimSolidColor, secHatchFor, computePatternSegs, owWt, OPENING_TYPES, owSaveDef, owPlaced, layerAutoBim, applyLayerRoleTo, addEntity, renderLayers,

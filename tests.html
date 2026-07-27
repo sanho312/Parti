@@ -4748,6 +4748,44 @@ function tests(){
                 ok(!!KR.site, '★일렬 배치에도 대지가 깔린다 (예전엔 건물이 허공에 떠 있었다)');
                 ok(KR.bays.length > 0, '  주차도 함께');
                 C.state.entities.length = bK;
+                // ── ★상세도 (A-501) ──
+                // 1:100 도면에서 안 보이는 것을 1:10 으로 보여 주는 장이다.
+                // ★모르는 것은 그리지 않는다 — 방수층·단열재 두께는 모델에 없다.
+                //   상세도라고 그럴듯한 겹을 지어내면 그 도면대로 지을 수 없다.
+                const bD = C.state.entities.length;
+                const homeD = C.curDocIdx();
+                A.buildComplex({ count: 3, floors: 2, w: 9000, d: 11000, roof: 'gable',
+                  arrange: 'arc', attached: true, glass: false, lean: 0 });
+                const rD = C.cmdDetails('');
+                ok(rD && rD.details.length === 3, '★상세도 3장 — ' + (rD ? rD.details.join(' · ') : '없음'));
+                const esD = C.state.entities;
+                const numD = esD.filter(e0 => e0.type === 'TEXT' && /^\d+$/.test(e0.text))
+                  .map(e0 => +e0.text);
+                // ★치수는 전부 모델이 아는 값이어야 한다
+                ok(numD.indexOf(150) >= 0, '★슬래브 두께 150 을 그대로 적는다');
+                ok(numD.indexOf(A.STD.wallExt) >= 0, '★벽 두께 ' + A.STD.wallExt + ' 을 그대로 적는다');
+                ok(numD.indexOf(260) >= 0, '★지면차 260 (대지 윗면 -260) 을 그대로 적는다');
+                ok(numD.some(v => v >= 150 && v <= 900),
+                  '★처마 내밀기를 재서 적는다 (' + numD.filter(v => v >= 150 && v <= 900).join('/') + 'mm)');
+                // ★지어낸 겹이 없어야 한다
+                const txtD = esD.filter(e0 => e0.type === 'TEXT').map(e0 => e0.text).join(' ');
+                ok(!/방수|단열|합판|석고|모르타르|버림/.test(txtD),
+                  '★모델에 없는 겹(방수층·단열재…)은 그리지 않는다');
+                ok(/처마높이/.test(txtD) && /FL/.test(txtD), '  높이 기준을 밝힌다');
+                // 해치 = 잘린 면. 상세도는 잘린 것과 보이는 것이 구분돼야 한다
+                ok(esD.filter(e0 => e0.type === 'HATCH').length >= 4, '  잘린 면에 해치');
+                ok(esD.some(e0 => e0.layer === '치수'), '  치수선이 들어간다');
+                // ★도면 세트에 A-501 로 들어간다
+                C.switchDoc(homeD, true);
+                const setD = C.cmdSheetSet('A2');
+                const a5 = setD.sheets.filter(x => /^A-5/.test(x.no));
+                eqi(a5.length, 1, '★도면 세트에 상세도가 한 장 (A-501)');
+                eqi(a5[0].no, 'A-501', '  번호는 A-501 (평면 101 · 입면 201 · 단면 301 다음)');
+                ok(a5[0].denom <= 50, '★상세도는 큰 축척으로 앉는다 (1:' + a5[0].denom + ')');
+                C.switchDoc(homeD, true);
+                C.state.entities.length = bD;
+                // 건물이 없으면 만들지 않는다
+                eqi(C.detailSources().length, 0, '  건물이 없으면 상세도 대상이 없다');
                 // ── ★층마다 다른 평면 ──
                 // 1층과 윗층이 같은 건물은 실제로 드물다(1층 상가·필로티, 윗층 주거).
                 // ★구획기는 층을 모르고 '한 판'만 만든다 — 구성이 같은 연속 층을 묶어
