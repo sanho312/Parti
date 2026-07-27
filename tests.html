@@ -3331,7 +3331,46 @@ function tests(){
                   x9 += wd;
                 }
                 gT.fillStyle = 'rgba(126,186,88,0.85)'; gT.beginPath(); gT.ellipse(300, 340, 140, 36, 0, 0, 7); gT.fill();
-                return VZ.traceConcept(cvT.toDataURL('image/png')).then(ct9 => {
+                // ★기울기 '크기'까지 맞는가 — 창을 고정하면 기울어 나간 모서리가 잘려
+                //   절반으로 측정된다(24°→10°). 창을 따라 옮기고, 크기는 가림 없는
+                //   바깥 실루엣으로 잡는다. 여러 각도에서 오차를 재 회귀로 고정.
+                const mkLean = (sk) => {
+                  const eh = 120, pad = Math.abs(sk) * eh + 50;
+                  const cw = Math.round(700 + pad * 2);
+                  const cv0 = AD.createElement('canvas'); cv0.width = cw; cv0.height = 420;
+                  const g0 = cv0.getContext('2d');
+                  g0.fillStyle = '#f0ebe0'; g0.fillRect(0, 0, cw, 420);
+                  const base = 290, ws0 = [100, 120, 110, 105, 150];
+                  let x0v = pad;
+                  for (let i0 = 0; i0 < 5; i0++) {
+                    const wd0 = ws0[i0], dx0 = sk * eh, ap0 = base - eh - 70;
+                    g0.fillStyle = '#fcfaf5'; g0.beginPath();
+                    g0.moveTo(x0v, base); g0.lineTo(x0v + dx0, base - eh);
+                    g0.lineTo(x0v + dx0 + wd0 * 0.42, ap0);
+                    g0.lineTo(x0v + dx0 + wd0, base - eh); g0.lineTo(x0v + wd0, base);
+                    g0.closePath(); g0.fill();
+                    g0.strokeStyle = '#2f2f2d'; g0.lineWidth = 1.8; g0.stroke();
+                    g0.fillStyle = 'rgba(120,163,208,0.8)';
+                    g0.beginPath(); g0.moveTo(x0v + wd0 * 0.15, base - 12);
+                    g0.lineTo(x0v + dx0 + wd0 * 0.2, base - eh + 10);
+                    g0.lineTo(x0v + dx0 + wd0 * 0.7, base - eh + 14);
+                    g0.lineTo(x0v + wd0 * 0.65, base - 8); g0.closePath(); g0.fill();
+                    x0v += wd0;
+                  }
+                  g0.fillStyle = 'rgba(126,186,88,0.85)'; g0.beginPath();
+                  g0.ellipse(cw / 2, 360, 150, 36, 0, 0, 7); g0.fill();
+                  return cv0.toDataURL('image/png');
+                };
+                const SKS = [0, 0.2, 0.45, -0.35];
+                return SKS.reduce((p, sk) => p.then(acc => VZ.traceConcept(mkLean(sk)).then(cs0 => {
+                  const want = Math.atan(sk) * 180 / Math.PI, got = Math.atan(cs0.lean) * 180 / Math.PI;
+                  return acc.concat([[want, got, Math.abs(got - want)]]);
+                })), Promise.resolve([])).then(rows => {
+                  const worst = Math.max.apply(null, rows.map(r0 => r0[2]));
+                  ok(worst < 3, '★기울기 크기 정확도 — 최대 오차 ' + worst.toFixed(1) + '도 ('
+                    + rows.map(r0 => r0[0].toFixed(0) + '→' + r0[1].toFixed(0)).join(', ') + ')');
+                  return VZ.traceConcept(cvT.toDataURL('image/png'));
+                }).then(ct9 => {
                   ok(ct9.lean > 0.1, '★기울기 판독 — 기울어 그린 매스에서 기울기를 읽는다 ('
                     + (Math.atan(ct9.lean) * 180 / Math.PI).toFixed(0) + '도)');
                   ok(ct9.massList.every(m9 => m9.lean != null), '  동별 기울기도 함께');

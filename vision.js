@@ -564,39 +564,95 @@ async function traceConcept(src, opts) {
   // 두 경계의 기울기 평균 = 기울임(전단), 차이 = 위로 갈수록 좁아짐(테이퍼).
   // ※손그림 투시는 대개 수직선을 수직으로 유지하므로, 측정된 기울기는 투시 왜곡이 아니라
   //   설계 의도로 본다. 지붕 삼각형에 휘둘리지 않게 처마 높이 아래 구간만 쓴다.
+  const fitSlope = (us, vs) => {                    // 최소제곱 기울기 dv/du
+    const n2 = us.length; if (n2 < 4) return null;
+    let su = 0, sv = 0, suu = 0, suv = 0;
+    for (let k = 0; k < n2; k++) { su += us[k]; sv += vs[k]; suu += us[k] * us[k]; suv += us[k] * vs[k]; }
+    const den = n2 * suu - su * su;
+    return Math.abs(den) < 1e-6 ? null : (n2 * suv - su * sv) / den;
+  };
+  // 한 매스의 좌·우 경계 기울기 — 창을 기울기만큼 따라 옮기며 잰다(반복 수렴).
+  // ★창을 밑변 구간에 고정하면 기울어 나간 모서리가 창 밖에서 잘려 기울기가 절반으로
+  //   측정된다(24° 로 그린 그림이 10° 로 나왔다). 창을 함께 기울여야 끝까지 따라간다.
+  const measLean = (x0, x1, eh, guess) => {
+    if (eh < 6) return null;
+    const wd = Math.max(1, x1 - x0);
+    let g = guess || 0;
+    for (let it = 0; it < 3; it++) {
+      const uL = [], vL = [], uR = [], vR = [];
+      for (let t2 = 0.2; t2 <= 0.85; t2 += 0.05) {
+        const u = eh * t2, y = Math.round(baseY - u);
+        if (y < 0 || y >= h) continue;
+        const sh = g * u;                            // 이 높이에서 창을 이만큼 옮긴다
+        const a1 = Math.max(0, Math.round(x0 + sh - wd * 0.12));
+        const b1 = Math.min(w - 1, Math.round(x1 + sh + wd * 0.12));
+        let lx = -1, rx = -1;
+        for (let x = a1; x <= b1; x++) if (bldg[y * w + x]) { lx = x; break; }
+        for (let x = b1; x >= a1; x--) if (bldg[y * w + x]) { rx = x; break; }
+        if (lx < 0 || rx < 0 || rx - lx < wd * 0.15) continue;
+        if (lx <= a1 || rx >= b1) continue;          // 창 가장자리에 붙었으면 잘린 값 — 버린다
+        uL.push(u); vL.push(lx); uR.push(u); vR.push(rx);
+      }
+      const sl = fitSlope(uL, vL), sr = fitSlope(uR, vR);
+      if (sl == null || sr == null) return it ? g : null;
+      const ng = (sl + sr) / 2;
+      if (Math.abs(ng - g) < 0.01) { g = ng; break; }
+      g = ng;
+    }
+    return Math.max(-0.9, Math.min(0.9, g));
+  };
+  // ── 무리 전체의 기울기: 바깥 실루엣으로 잰다 ──
+  // 붙어 있는 매스는 이웃에 가려 자기 모서리를 못 보지만, 무리의 맨 왼쪽·맨 오른쪽
+  // 바깥선은 아무것도 가리지 않는다. 이 값이 크기(각도)의 기준이 된다.
+  let clusterLean = null;
+  {
+    let ehAll = 0;
+    for (let i = 0; i < massList.length; i++) {
+      const a1 = Math.max(0, Math.round(bounds[i])), b1 = Math.min(w - 1, Math.round(bounds[i + 1]));
+      const wd2 = Math.max(1, b1 - a1);
+      const e0 = prof[Math.min(w - 1, Math.round(bounds[i] + wd2 * 0.08))];
+      const e1 = prof[Math.max(0, Math.round(bounds[i + 1] - wd2 * 0.08))];
+      ehAll += Math.max(e0, e1);
+    }
+    ehAll /= Math.max(1, massList.length);
+    if (ehAll >= 6) {
+      const uL = [], vL = [], uR = [], vR = [];
+      const mg = Math.round(ehAll);                  // 45° 까지 따라갈 여유
+      for (let t2 = 0.2; t2 <= 0.85; t2 += 0.04) {
+        const u = ehAll * t2, y = Math.round(baseY - u);
+        if (y < 0 || y >= h) continue;
+        const a1 = Math.max(0, xa - mg), b1 = Math.min(w - 1, xb + mg);
+        let lx = -1, rx = -1;
+        for (let x = a1; x <= b1; x++) if (bldg[y * w + x]) { lx = x; break; }
+        for (let x = b1; x >= a1; x--) if (bldg[y * w + x]) { rx = x; break; }
+        if (lx < 0 || rx < 0) continue;
+        uL.push(u); vL.push(lx); uR.push(u); vR.push(rx);
+      }
+      const sl = fitSlope(uL, vL), sr = fitSlope(uR, vR);
+      if (sl != null && sr != null) clusterLean = Math.max(-0.9, Math.min(0.9, (sl + sr) / 2));
+    }
+  }
+  // 동별 기울기 — 창을 따라 옮기며 재고, 없으면 무리 값으로 채운다
   let leanAvg = 0, leanN = 0;
   for (let i = 0; i < massList.length; i++) {
     const x0 = Math.max(0, Math.round(bounds[i])), x1 = Math.min(w - 1, Math.round(bounds[i + 1]));
     const wd = Math.max(1, x1 - x0);
-    let eh = 0;
-    { const e0 = prof[Math.min(w - 1, Math.round(bounds[i] + wd * 0.08))];
-      const e1 = prof[Math.max(0, Math.round(bounds[i + 1] - wd * 0.08))];
-      eh = Math.max(e0, e1); }
-    if (eh < 6) { massList[i].lean = 0; continue; }
-    const uL = [], vL = [], uR = [], vR = [];
-    for (let t2 = 0.2; t2 <= 0.85; t2 += 0.05) {
-      const u = eh * t2, y = Math.round(baseY - u);
-      if (y < 0 || y >= h) continue;
-      let lx = -1, rx = -1;
-      for (let x = x0; x <= x1; x++) if (bldg[y * w + x]) { lx = x; break; }
-      for (let x = x1; x >= x0; x--) if (bldg[y * w + x]) { rx = x; break; }
-      if (lx < 0 || rx < 0 || rx - lx < wd * 0.15) continue;
-      uL.push(u); vL.push(lx); uR.push(u); vR.push(rx);
-    }
-    const fit = (us, vs) => {                       // 최소제곱 기울기 dv/du
-      const n2 = us.length; if (n2 < 4) return null;
-      let su = 0, sv = 0, suu = 0, suv = 0;
-      for (let k = 0; k < n2; k++) { su += us[k]; sv += vs[k]; suu += us[k] * us[k]; suv += us[k] * vs[k]; }
-      const den = n2 * suu - su * su;
-      return Math.abs(den) < 1e-6 ? null : (n2 * suv - su * sv) / den;
-    };
-    const sl = fit(uL, vL), sr = fit(uR, vR);
-    if (sl == null || sr == null) { massList[i].lean = 0; continue; }
-    const ln = Math.max(-0.9, Math.min(0.9, (sl + sr) / 2));
+    const e0 = prof[Math.min(w - 1, Math.round(bounds[i] + wd * 0.08))];
+    const e1 = prof[Math.max(0, Math.round(bounds[i + 1] - wd * 0.08))];
+    const eh = Math.max(e0, e1);
+    const m = measLean(x0, x1, eh, clusterLean || 0);
+    const ln = (m == null) ? (clusterLean || 0) : m;
     massList[i].lean = +ln.toFixed(3);
     leanAvg += ln; leanN++;
   }
   leanAvg = leanN ? leanAvg / leanN : 0;
+  // ★크기는 바깥 실루엣(가림 없음)을 믿는다 — 안쪽 동은 이웃에 가려 항상 작게 나온다.
+  if (clusterLean != null && Math.abs(clusterLean) > Math.abs(leanAvg)) {
+    const k = Math.abs(leanAvg) > 1e-3 ? clusterLean / leanAvg : 1;
+    if (isFinite(k) && k > 0) for (const mm of massList)
+      mm.lean = +Math.max(-0.9, Math.min(0.9, mm.lean * k)).toFixed(3);
+    leanAvg = clusterLean;
+  }
 
   // ── 동별 깊이(depth) ──
   // 투시에서 '깊은 동'은 옆으로 물러나는 지붕면·측벽이 넓게 보인다. 그 넓이를 재려면
