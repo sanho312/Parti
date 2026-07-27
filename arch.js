@@ -572,18 +572,49 @@ function buildComplex(spec) {
         const restA = Math.max(areaM2 * 0.25, areaM2 - fixSum);
         const wSum = flex.reduce((a2, r2) => a2 + (r2.w || 1), 0) || 1;
         const items = P.rooms.map(r2 => ({ name: r2.n, area: r2.fix ? r2.fix : restA * (r2.w || 1) / wSum }));
-        // ── ★복도 ──
-        // 방끼리 직접 연결하면 안방을 지나야 다른 방이 나온다. 뒤쪽에 복도 띠를 두고 방들이
-        // 거기로 열리게 한다. 앞(마당 쪽)은 주 실이 차지해 조망을 갖고, 순환은 뒤로 뺀다.
-        // 깊이가 얕으면 복도가 방을 다 잡아먹으므로 넣지 않는다.
+        // ── ★복도를 아는 배치 (중복도) ──
+        // 재귀 이분할기는 복도를 모른다. 뒤쪽에 복도 띠만 두었더니 뒷줄 방만 복도에 닿고
+        // 나머지는 이웃을 거쳤다(실측: 내부문 21개 중 6개만 복도에 면함).
+        // → 복도를 앞뒤로 관통시키고(중복도) 방을 양쪽 밴드에 '깊이로만' 나눈다.
+        //   그러면 밴드의 모든 방이 복도변에 자기 면을 갖는다 — 동선이 원리적으로 보장된다.
+        //   폭이 좁아 밴드가 성립하지 않으면(복도폭+5m 미만) 예전처럼 이분할기로 돌아간다.
         const CORR = STD.corridor;
-        const useCorr = o.corridor !== false && Ds[i] >= CORR + 5000 && items.length >= 3;
-        const roomD = useCorr ? Ds[i] - CORR : Ds[i];
-        const corrY = roomD;                                 // 복도 앞선 (= 방들의 뒷선)
-        const cells = slice({ x: 0, y: 0, w: arcW, h: roomD }, items);
-        const corrCell = useCorr
-          ? { x: 0, y: corrY, w: arcW, h: CORR, room: { name: '복도' } } : null;
-        if (corrCell) cells.push(corrCell);
+        const useCorr = o.corridor !== false && arcW >= CORR + 5000 && items.length >= 3;
+        const xc0 = (arcW - CORR) / 2, xc1 = xc0 + CORR;     // 복도 좌·우 선
+        let cells, corrCell = null;
+        if (useCorr) {
+          corrCell = { x: xc0, y: 0, w: CORR, h: Ds[i], room: { name: '복도' } };
+          // 큰 실부터 번갈아 담아 두 밴드의 면적을 맞춘다 (한쪽만 깊어지지 않게)
+          const sorted = items.slice().sort((a2, b2) => b2.area - a2.area);
+          const LB = [], RB = [];
+          let la = 0, ra = 0;
+          for (const it of sorted) { if (la <= ra) { LB.push(it); la += it.area; } else { RB.push(it); ra += it.area; } }
+          // ★최소 실 깊이를 보장한다 — 면적 비례로만 나누면 욕실이 90cm 깊이가 된다(실측).
+          //   먼저 모두에게 최소값을 주고 남은 깊이만 면적 비례로 나눈다.
+          //   그래도 다 못 들어가면 작은 실부터 뺀다 — 들어가지도 않는 실을 그리지 않는다.
+          const MINRD = 1800;
+          const band = (bx, bw, list) => {
+            let L2 = list.slice();
+            while (L2.length > 1 && L2.length * MINRD > Ds[i]) {
+              L2.sort((a2, b2) => a2.area - b2.area); L2.shift();
+            }
+            const tot = L2.reduce((a2, v) => a2 + v.area, 0) || 1;
+            const rem = Ds[i] - L2.length * MINRD;
+            const hs = rem >= 0 ? L2.map(it => MINRD + rem * it.area / tot)
+              : L2.map(() => Ds[i] / L2.length);
+            let y = 0; const out2 = [];
+            L2.forEach((it, k) => {
+              const hh = (k === L2.length - 1) ? (Ds[i] - y) : hs[k];
+              out2.push({ x: bx, y, w: bw, h: hh, room: { name: it.name } });
+              y += hh;
+            });
+            return out2;
+          };
+          cells = band(0, xc0, LB).concat(band(xc1, arcW - xc1, RB));
+          cells.push(corrCell);
+        } else {
+          cells = slice({ x: 0, y: 0, w: arcW, h: Ds[i] }, items);
+        }
         // (호길이 x, 깊이 y) → 세계 좌표. 각은 aL 에서 줄어드는 방향이다.
         const sgnA = aL >= aR ? -1 : 1;
         const PXY = (x, y) => {
@@ -622,8 +653,10 @@ function buildComplex(spec) {
               if (curMat) iw.mat = curMat;
               counts.wall++;
             }
+            // 복도에 면한 변 — 복도의 좌·우 선 위에 놓인 세로 변
             madeWalls.push({ cell: c, A: A2, B: B2, len: len2,
-              corr: useCorr && Math.abs(ay - corrY) < EPS2 && Math.abs(by - corrY) < EPS2 });
+              corr: useCorr && Math.abs(ax - bx) < EPS2
+                && (Math.abs(ax - xc0) < EPS2 || Math.abs(ax - xc1) < EPS2) });
           }
           // ── 실을 '면적을 가진 객체'로 남긴다 ──
           // 이름표만 찍으면 면적표를 뽑을 수 없다. 실 경계를 폴리라인으로 남기고 면적을 함께
@@ -675,10 +708,10 @@ function buildComplex(spec) {
         // 경로 선(시작=아랫단, 끝=윗단)에 bim.kind='stair' 를 달면 평면 심볼과 3D 를 cad.js 가
         // 같은 기하로 만들어 준다.
         if (useCorr && o.floors >= 2) {
-          const RISER = 180, run = Math.max(2400, Math.min(arcW * 0.55, (o.floorH / RISER) * 280));
-          const sy = corrY + CORR / 2;
+          const RISER = 180, run = Math.max(2400, Math.min(Ds[i] * 0.55, (o.floorH / RISER) * 280));
+          const sy = xc0 + CORR / 2;                          // 복도 한가운데 (앞뒤로 오른다)
           for (let f = 0; f + 1 < o.floors; f++) {
-            const S1 = PXY(arcW * 0.06, sy), S2 = PXY(arcW * 0.06 + run, sy);
+            const S1 = PXY(sy, Ds[i] * 0.06), S2 = PXY(sy, Ds[i] * 0.06 + run);
             const st = br.addEntity({ type: 'LINE', layer: '벽',
               x1: Math.round(S1[0]), y1: Math.round(S1[1]),
               x2: Math.round(S2[0]), y2: Math.round(S2[1]) });

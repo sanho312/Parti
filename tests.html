@@ -4137,15 +4137,28 @@ function tests(){
                   if (C1.corr.some(cc => inP(cc.points, mx0 + nx0 * 500, my0 + ny0 * 500)
                     || inP(cc.points, mx0 - nx0 * 500, my0 - ny0 * 500))) onC++;
                 }
-                ok(onC >= 3, '★복도에 면한 문이 있다 (' + onC + '/' + C1.idoor.length + ')');
-                // ※한계: 모든 방이 복도에 면하지는 않는다. 재귀 이분할이 복도를 모르기 때문에
-                //   뒷줄 방만 복도에 닿고 나머지는 이웃을 거친다. 연결은 되지만 동선은 아직 거칠다.
+                // ★모든 방이 복도로 열려야 한다 — 뒤쪽 복도 띠만 뒀을 땐 21개 중 6개뿐이었다.
+                //   복도를 앞뒤로 관통시키고(중복도) 방을 양쪽 밴드에 깊이로만 나누면
+                //   밴드의 모든 방이 복도변에 자기 면을 갖는다.
+                eqi(onC, C1.idoor.length,
+                  '★내부 문이 전부 복도로 열린다 (' + onC + '/' + C1.idoor.length + ')');
+                // ★면적 비례로만 나누면 욕실이 90cm 깊이가 된다 — 최소 실 깊이를 보장한다
+                const rmAll = C.state.entities.slice(bR)
+                  .filter(e0 => e0.bim && e0.bim.kind === 'room' && e0.bim.floor === 1
+                    && e0.bim.name !== '복도');
+                const minDim = Math.min.apply(null, rmAll.map(e0 => {
+                  const xs0 = e0.points.map(p0 => p0[0]), ys0 = e0.points.map(p0 => p0[1]);
+                  return Math.min(Math.max.apply(null, xs0) - Math.min.apply(null, xs0),
+                    Math.max.apply(null, ys0) - Math.min.apply(null, ys0)); }));
+                ok(minDim >= 1700, '★가장 얇은 실도 ' + Math.round(minDim) + 'mm — 방이라 할 수 있는 두께');
+                ok(Math.min.apply(null, rmAll.map(e0 => e0.bim.areaM2)) >= 4,
+                  '  가장 작은 실도 4㎡ 이상');
                 const C3 = runC({ floors: 3 });
                 eqi(C3.stair.length, 6, '★2층 이상이면 계단 — 동마다 층 전환 수만큼 (3층×3동)');
                 ok(C3.stair.every(e0 => e0.bim.h > 0 && e0.bim.riser > 0 && e0.bim.w > 0),
                   '  계단에 폭·높이·단높이가 들어 있다 (cad.js 가 평면 심볼과 3D 를 만든다)');
-                const CS = runC({ d: 6000 });
-                eqi(CS.corr.length, 0, '★얕은 동에는 복도를 넣지 않는다 (복도가 방을 다 잡아먹는다)');
+                const CS = runC({ w: 3000 });
+                eqi(CS.corr.length, 0, '★좁은 동에는 복도를 넣지 않는다 (밴드가 성립하지 않는다)');
                 C.state.entities.length = bR;
               }).then(() => {
                 // ★라우팅 근거 지표 — 전역 임계값 추측이 실물에서 두 번 뒤집힌 뒤 도입한 증거들.
