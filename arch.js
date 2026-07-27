@@ -274,7 +274,7 @@ function buildMassing(spec) {
 function buildComplex(spec) {
   const br = B(); if (!br) return null;
   const o = Object.assign({ count: 5, floors: 1, w: 8000, d: 12000, floorH: STD.ceil + 600,
-    arrange: 'arc', roof: 'gable', glass: true, courtyardR: 0, massList: null, attached: true,
+    arrange: 'arc', roof: 'gable', glass: true, courtyardR: 0, massList: null, attached: true, lean: 0,
     ox: 0, oy: 0 }, spec || {});
   const n = Math.max(1, Math.min(12, Math.round(o.count)));
   const H = o.floors * o.floorH;
@@ -378,6 +378,12 @@ function buildComplex(spec) {
       const chord = Math.hypot(FR[0] - FL[0], FR[1] - FL[1]);
       const rise = riseOf(i, chord);          // 용마루는 방사 방향 → 스팬은 앞면 폭
       const Hi = Hs[i];                       // 이 동의 처마 높이 (동마다 다르다)
+      // ★스케치에서 읽은 기울기를 그대로 세운다 — 지붕 볼륨의 윗면을 접선 방향으로 민다.
+      //   (실루엣의 좌·우 경계 기울기를 vision 이 재서 lean 으로 넘겨준다)
+      const lnI = (ml && ml[i] && ml[i].lean != null) ? ml[i].lean : o.lean;
+      const tvec = [-(Math.sin((aL + aR) / 2)), Math.cos((aL + aR) / 2)];   // 접선(폭 방향)
+      const shr = Math.abs(lnI) > 0.05
+        ? [tvec[0] * lnI * (Hi + rise), tvec[1] * lnI * (Hi + rise)] : null;
       // 벽 — 앞/뒤는 각 동마다, 측벽은 이웃과 공유하므로 한 번만 만든다(중복 벽 금지).
       // 이웃과 맞닿는 측벽은 방화벽 → 두 동 중 높은 처마 위로 500 솟는다.
       const shared = gap === 0 && i < n - 1;
@@ -396,12 +402,12 @@ function buildComplex(spec) {
         const cF = Math.hypot(RP[1][0] - RP[0][0], RP[1][1] - RP[0][1]);
         const cR = Math.hypot(RP[2][0] - RP[1][0], RP[2][1] - RP[1][1]);
         poly(RP, '지붕', { kind: 'roof', rtype: o.roof, eave: Hi, rise, ridgeF: RIDGE_F,
-          rdir: cF >= cR ? 'short' : undefined });   // 용마루는 항상 방사(앞뒤) 방향
+          rdir: cF >= cR ? 'short' : undefined, shear: shr });   // 용마루는 항상 방사(앞뒤) 방향
         counts.roof++;
       }
       // 박공면 — 마당 쪽은 유리(통유리 박공), 뒤쪽은 벽. 지붕과 같은 프로필의 얇은 띠.
       if (o.roof === 'gable') {
-        const prof = { kind: 'roof', rtype: 'gable', eave: Hi, rise, ridgeF: RIDGE_F, rdir: 'short' };
+        const prof = { kind: 'roof', rtype: 'gable', eave: Hi, rise, ridgeF: RIDGE_F, rdir: 'short', shear: shr };
         poly([PT(aL, r0), PT(aR, r0), PT(aR, r0 + 240), PT(aL, r0 + 240)], o.glass ? '유리' : '벽', prof);
         poly([PT(aL, r1 - 240), PT(aR, r1 - 240), PT(aR, r1), PT(aL, r1)], '벽', prof);
       }

@@ -558,6 +558,45 @@ async function traceConcept(src, opts) {
   }
   eaveRatio /= Math.max(1, massList.length);
   const floors = Math.max(1, Math.min(3, Math.round(eaveRatio / 0.42)));
+
+  // ── 기울기(lean) — 매스가 얼마나 기울어 서 있는가 ──
+  // 실루엣의 좌·우 경계선을 높이별로 훑어 '올라갈수록 옆으로 밀리는 양'을 최소제곱으로 잰다.
+  // 두 경계의 기울기 평균 = 기울임(전단), 차이 = 위로 갈수록 좁아짐(테이퍼).
+  // ※손그림 투시는 대개 수직선을 수직으로 유지하므로, 측정된 기울기는 투시 왜곡이 아니라
+  //   설계 의도로 본다. 지붕 삼각형에 휘둘리지 않게 처마 높이 아래 구간만 쓴다.
+  let leanAvg = 0, leanN = 0;
+  for (let i = 0; i < massList.length; i++) {
+    const x0 = Math.max(0, Math.round(bounds[i])), x1 = Math.min(w - 1, Math.round(bounds[i + 1]));
+    const wd = Math.max(1, x1 - x0);
+    let eh = 0;
+    { const e0 = prof[Math.min(w - 1, Math.round(bounds[i] + wd * 0.08))];
+      const e1 = prof[Math.max(0, Math.round(bounds[i + 1] - wd * 0.08))];
+      eh = Math.max(e0, e1); }
+    if (eh < 6) { massList[i].lean = 0; continue; }
+    const uL = [], vL = [], uR = [], vR = [];
+    for (let t2 = 0.2; t2 <= 0.85; t2 += 0.05) {
+      const u = eh * t2, y = Math.round(baseY - u);
+      if (y < 0 || y >= h) continue;
+      let lx = -1, rx = -1;
+      for (let x = x0; x <= x1; x++) if (bldg[y * w + x]) { lx = x; break; }
+      for (let x = x1; x >= x0; x--) if (bldg[y * w + x]) { rx = x; break; }
+      if (lx < 0 || rx < 0 || rx - lx < wd * 0.15) continue;
+      uL.push(u); vL.push(lx); uR.push(u); vR.push(rx);
+    }
+    const fit = (us, vs) => {                       // 최소제곱 기울기 dv/du
+      const n2 = us.length; if (n2 < 4) return null;
+      let su = 0, sv = 0, suu = 0, suv = 0;
+      for (let k = 0; k < n2; k++) { su += us[k]; sv += vs[k]; suu += us[k] * us[k]; suv += us[k] * vs[k]; }
+      const den = n2 * suu - su * su;
+      return Math.abs(den) < 1e-6 ? null : (n2 * suv - su * sv) / den;
+    };
+    const sl = fit(uL, vL), sr = fit(uR, vR);
+    if (sl == null || sr == null) { massList[i].lean = 0; continue; }
+    const ln = Math.max(-0.9, Math.min(0.9, (sl + sr) / 2));
+    massList[i].lean = +ln.toFixed(3);
+    leanAvg += ln; leanN++;
+  }
+  leanAvg = leanN ? leanAvg / leanN : 0;
   // 붙어 있는가 — 골이 충분히 높으면 한 덩어리로 이어진 동들이다
   const attachedN = valleys.filter(v => v.lo > 0 && v.v / v.lo >= 0.35).length;
   const attached = valleys.length ? attachedN >= valleys.length / 2 : false;
@@ -578,7 +617,7 @@ async function traceConcept(src, opts) {
   const enclosed = hasCourt && bAll > 0 && below / bAll > 0.15;   // 마당 아래에도 건물이 상당량
   const courtFront = hasCourt && !enclosed;
   return {
-    masses, massList, attached, floors,
+    masses, massList, attached, floors, lean: +leanAvg.toFixed(3),
     // 고원 비율이 크면 평지붕. 뾰족한 봉우리라야 박공이다.
     roof: (plateau < 0.42 && maxH > 0 && promAvg / maxH > 0.08) ? 'gable' : 'flat',
     // 앞마당이면 '부채꼴로 늘어서고 마당은 그 앞' — 마당을 빙 두르는 링이 아니다.

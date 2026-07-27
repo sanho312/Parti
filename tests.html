@@ -3125,6 +3125,25 @@ function tests(){
         ok(sW && sW.zt && Math.max.apply(null, sW.zt) - Math.min.apply(null, sW.zt) === 5000,
           '★임의 다각형 + 정점별 상단 높이 — 원하는 경사면을 직접 지정');
         C.state.entities.length = bW;
+        // ★기울기(lean) — 스케치에서 읽은 값을 지붕 볼륨의 전단으로 세운다
+        const bT = C.state.entities.length;
+        A0.buildComplex({ count: 5, floors: 1, w: 8000, d: 12000, roof: 'gable', arrange: 'arc', attached: true, lean: 0.3 });
+        const eT = C.state.entities.slice(bT);
+        const rT = C.bimSolids().filter(s0 => s0.rf && eT.some(x0 => x0.id === s0.eid));
+        const shT = rT.filter(s0 => s0.ptop);
+        ok(shT.length > 0, '★기울기 적용 — 지붕 볼륨이 전단된다 (' + shT.length + '/' + rT.length + ')');
+        let mvT = 0;
+        for (const s0 of shT) for (let i0 = 0; i0 < s0.poly.length; i0++)
+          mvT = Math.max(mvT, Math.hypot(s0.ptop[i0][0] - s0.poly[i0][0], s0.ptop[i0][1] - s0.poly[i0][1]));
+        ok(mvT > 500, '  윗면이 실제로 밀렸다 (' + Math.round(mvT) + 'mm)');
+        C.state.entities.length = bT;
+        // lean 0 이면 예전 그대로 — 회귀 방지
+        const bT0 = C.state.entities.length;
+        A0.buildComplex({ count: 5, floors: 1, w: 8000, d: 12000, roof: 'gable', arrange: 'arc', attached: true, lean: 0 });
+        const eT0 = C.state.entities.slice(bT0);
+        eqi(C.bimSolids().filter(s0 => s0.rf && s0.ptop && eT0.some(x0 => x0.id === s0.eid)).length, 0,
+          '  기울기 0 이면 전단 없음 (기존 동작 유지)');
+        C.state.entities.length = bT0;
       }
       { // API 없이 — 건축 지식 엔진(arch) · 이미지 벡터화(vision) · 로컬 코워커
         const A = AW.PARTI_ARCH, VZ = AW.PARTI_VISION;
@@ -3219,6 +3238,31 @@ function tests(){
                 ok(cc2.glass, '  파란 면 → 유리');
                 ok(cc2.massList.length === cc2.masses, '  동별 폭·높이 비율을 읽는다');
                 ok(cc2.attached, '  붙어 있는 덩어리로 인식');
+                ok(Math.abs(cc2.lean) < 0.12, '★기울기 판독 — 곧게 선 스케치는 lean≈0 (' + cc2.lean + ')');
+                // 좌우 경계가 위로 갈수록 밀린 스케치 → 기울기를 읽어낸다
+                const cvT = AD.createElement('canvas'); cvT.width = 780; cvT.height = 400;
+                const gT = cvT.getContext('2d');
+                gT.fillStyle = '#f0ebe0'; gT.fillRect(0, 0, 780, 400);
+                for (let i9 = 0, x9 = 45; i9 < 5; i9++) {
+                  const wd = [100, 120, 110, 105, 150][i9], dx = 0.3 * 110;
+                  gT.fillStyle = '#fcfaf5'; gT.beginPath();
+                  gT.moveTo(x9, 270); gT.lineTo(x9 + dx, 160);
+                  gT.lineTo(x9 + dx + wd * 0.42, 90);
+                  gT.lineTo(x9 + dx + wd, 160); gT.lineTo(x9 + wd, 270);
+                  gT.closePath(); gT.fill();
+                  gT.strokeStyle = '#2f2f2d'; gT.lineWidth = 1.8; gT.stroke();
+                  gT.fillStyle = 'rgba(120,163,208,0.8)';
+                  gT.beginPath(); gT.moveTo(x9 + wd * 0.15, 258); gT.lineTo(x9 + dx + wd * 0.2, 170);
+                  gT.lineTo(x9 + dx + wd * 0.7, 174); gT.lineTo(x9 + wd * 0.65, 262); gT.closePath(); gT.fill();
+                  x9 += wd;
+                }
+                gT.fillStyle = 'rgba(126,186,88,0.85)'; gT.beginPath(); gT.ellipse(300, 340, 140, 36, 0, 0, 7); gT.fill();
+                return VZ.traceConcept(cvT.toDataURL('image/png')).then(ct9 => {
+                  ok(ct9.lean > 0.1, '★기울기 판독 — 기울어 그린 매스에서 기울기를 읽는다 ('
+                    + (Math.atan(ct9.lean) * 180 / Math.PI).toFixed(0) + '도)');
+                  ok(ct9.massList.every(m9 => m9.lean != null), '  동별 기울기도 함께');
+                });
+              }).then(() => {
                 // ★평지붕 군을 박공으로 오판하지 않는가 — 봉우리 근처가 고원이면 평지붕
                 const cvF = AD.createElement('canvas'); cvF.width = 760; cvF.height = 360;
                 const gF = cvF.getContext('2d');

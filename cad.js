@@ -10930,6 +10930,12 @@ function cmdRoofTag() {
 // 지붕 → 경사 상단(zt) 솔리드 생성 (풋프린트의 bbox 사각 기준)
 function roofSolids(e) {
   const b = e.bim;
+  // 기울임(shear) — 지붕 볼륨의 윗면을 수평으로 밀어 매스가 기울어 서게 한다.
+  // 스케치에서 잰 기울기를 그대로 받는 통로. 없으면 예전대로 수직 프리즘.
+  const shr = (b.shear && (b.shear[0] || b.shear[1])) ? b.shear : null;
+  const withShear = (arr) => shr
+    ? arr.map(s => ({ ...s, ptop: s.poly.map(p => [p[0] + shr[0], p[1] + shr[1]]) }))
+    : arr;
   const xs = e.points.map(p => p[0]), ys = e.points.map(p => p[1]);
   const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
   const col = '#b8695a';
@@ -10950,47 +10956,47 @@ function roofSolids(e) {
       const len = (a2, b2) => Math.hypot(b2[0] - a2[0], b2[1] - a2[1]);
       const at = (a2, b2, f) => [a2[0] + (b2[0] - a2[0]) * f, a2[1] + (b2[1] - a2[1]) * f];
       if (b.rtype === 'shed') {                       // 외쪽: 긴 변을 따라 한 방향으로 기울인다
-        return [{ poly: P, z0: lo, z1: hi, zt: [lo, lo, hi, hi], color: col }];
+        return withShear([{ poly: P, z0: lo, z1: hi, zt: [lo, lo, hi, hi], color: col }]);
       }
       let alongFirst = len(P[0], P[1]) >= len(P[1], P[2]);
       if (b.rdir === 'short') alongFirst = !alongFirst;
       if (alongFirst) {                               // 용마루 ∥ P0→P1, 앞변에서 rF 지점
         const m0 = at(P[0], P[3], rF), m1 = at(P[1], P[2], rF);
-        return [
+        return withShear([
           { poly: [P[0], P[1], m1, m0], z0: lo, z1: hi, zt: [lo, lo, hi, hi], color: col },
           { poly: [m0, m1, P[2], P[3]], z0: lo, z1: hi, zt: [hi, hi, lo, lo], color: col },
-        ];
+        ]);
       }
       const m0 = at(P[0], P[1], rF), m1 = at(P[3], P[2], rF);
-      return [
+      return withShear([
         { poly: [P[0], m0, m1, P[3]], z0: lo, z1: hi, zt: [lo, hi, hi, lo], color: col },
         { poly: [m0, P[1], P[2], m1], z0: lo, z1: hi, zt: [hi, lo, lo, hi], color: col },
-      ];
+      ]);
     }
   }
   if (b.rtype === 'flat')
-    return [{ poly: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], z0: b.eave, z1: b.eave + b.rise, color: col }];
+    return withShear([{ poly: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], z0: b.eave, z1: b.eave + b.rise, color: col }]);
   if (b.rtype === 'shed') {
     const P = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
     const hi = b.eave + b.rise, lo = b.eave;
     const ztOf = { n: [lo, lo, hi, hi], s: [hi, hi, lo, lo], e: [lo, hi, hi, lo], w: [hi, lo, lo, hi] }[b.dir] || [lo, lo, hi, hi];
-    return [{ poly: P, z0: b.eave, z1: hi, zt: ztOf, color: col }];
+    return withShear([{ poly: P, z0: b.eave, z1: hi, zt: ztOf, color: col }]);
   }
   // 박공: 용마루 = 긴 변 방향(또는 지정) 중앙선, 두 개의 경사 솔리드
   const alongX = b.dir === 'x' || (b.dir !== 'y' && (x1 - x0) >= (y1 - y0));
   const hi = b.eave + b.rise, lo = b.eave;
   if (alongX) {
     const ym = (y0 + y1) / 2;
-    return [
+    return withShear([
       { poly: [[x0, y0], [x1, y0], [x1, ym], [x0, ym]], z0: lo, z1: hi, zt: [lo, lo, hi, hi], color: col },
       { poly: [[x0, ym], [x1, ym], [x1, y1], [x0, y1]], z0: lo, z1: hi, zt: [hi, hi, lo, lo], color: col },
-    ];
+    ]);
   }
   const xm = (x0 + x1) / 2;
-  return [
+  return withShear([
     { poly: [[x0, y0], [xm, y0], [xm, y1], [x0, y1]], z0: lo, z1: hi, zt: [lo, hi, hi, lo], color: col },
     { poly: [[xm, y0], [x1, y0], [x1, y1], [xm, y1]], z0: lo, z1: hi, zt: [hi, lo, lo, hi], color: col },
-  ];
+  ]);
 }
 // 경사 상단 평면 z(x,y) — zt 솔리드용 (첫 세 꼭짓점으로 평면 결정)
 function solidTopZ(s, x, y) {

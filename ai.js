@@ -1105,7 +1105,7 @@
           glass: exp.glass != null ? exp.glass : c.glass, floorH: fh,
           // 동별 폭·높이 비율과 인접 여부까지 전달 — 균일 배치는 스케치와 전혀 다른 그림이 된다
           massList: (!exp.count || exp.count === c.masses) ? c.massList : null,
-          attached: c.attached,
+          attached: c.attached, lean: c.lean || 0,
         };
         const r = window.PARTI_ARCH.buildComplex(spec);
         if (!r) continue;
@@ -1115,6 +1115,7 @@
         lines.push(`· 스케치 판독 → **${r.n}동 · ${spec.floors}층 · ${roofKo} · ${arrKo}**`
           + (spec.glass ? ' · 마당 쪽 전면 유리' : '')
           + `  (봉우리 ${c.masses}개${c.attached ? ' · 서로 붙은 덩어리' : ''}${c.meta.courtyard ? ' · 마당 초록 검출' : ''}`
+          + (Math.abs(c.lean || 0) > 0.05 ? ` · 기울기 ${(Math.atan(c.lean) * 180 / Math.PI).toFixed(0)}도` : '')
           + `, 동 폭 ${r.widths.map(v => (v / 1000).toFixed(0)).join('/')}m)`);
       }
       let builtFromPlan = null;
