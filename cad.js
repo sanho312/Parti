@@ -3217,6 +3217,8 @@ function bimSolids() {
     }
     // 자유곡선(비정형) 벽: bim.smooth 플래그 — 정점 법선(마이터 바깥 방향)으로 연속 구로 셰이딩
     const smoothW = !!(w.bim && w.bim.smooth) && w.type !== 'CIRCLE' && w.type !== 'ARC' && n > 2;
+    // 기울어진 벽: bim.shear = [dx, dy] — 벽 꼭대기에서 이만큼 민다(전단). 없으면 수직.
+    const wSh = (w.bim && w.bim.shear && (w.bim.shear[0] || w.bim.shear[1])) ? w.bim.shear : null;
     const vNrm = (idx) => {
       const dx = mitO[idx][0] - V[idx][0], dy = mitO[idx][1] - V[idx][1];
       const L2 = Math.hypot(dx, dy) || 1; return [dx / L2, dy / L2];
@@ -3268,6 +3270,15 @@ function bimSolids() {
           sol.z0 = Math.min(...sol.zb); // 스칼라 z0/z1은 항상 유효하게 유지 (fit·검볼·단면 등 나머지 코드용)
           sol.z1 = Math.max(...sol.zt);
         }
+        // ── 기울어진 벽(shear) ──
+        // 벽 전체를 h 만큼 올라갔을 때 wSh 만큼 미는 전단. 바닥 다각형은 z0 높이에 맞춰
+        // 미리 밀고, 윗면(ptop)은 z1 높이에 맞춰 민다 → 개구부 위·아래 조각도 같은 기울기
+        // 면 위에 정확히 놓여, 창·문이 기울어진 벽면에 그대로 박힌다.
+        if (wSh) {
+          const f0 = (z0 - base) / (h || 1), f1 = (z1 - base) / (h || 1);
+          sol.poly = sol.poly.map(p => [p[0] + wSh[0] * f0, p[1] + wSh[1] * f0]);
+          sol.ptop = sol.poly.map(p => [p[0] + wSh[0] * (f1 - f0), p[1] + wSh[1] * (f1 - f0)]);
+        }
         solids.push(sol);
       };
       let cur = 0;
@@ -3277,7 +3288,7 @@ function bimSolids() {
         if (sill > 0) band(c.s0, c.s1, base, base + sill, wallCol);            // 창 아래
         if (base + h > base + sill + oh) band(c.s0, c.s1, base + sill + oh, base + h, wallCol); // 인방(상부)
         if (c.o.bim.ot === 'window') band(c.s0 + 10, c.s1 - 10, base + sill, base + sill + oh, '#7ec8ff', true, c.o.id); // 유리
-        if (!wz) pushOpening3D(solids, c, { x1, y1, ux, uy, t, base });   // 창호 3D — 문짝·창틀 (유형별)
+        if (!wz) pushOpening3D(solids, c, { x1, y1, ux, uy, t, base, h, sh: wSh });   // 창호 3D — 문짝·창틀 (유형별)
         cur = c.s1;
       }
       band(cur, L, base, base + h, wallCol);
@@ -3299,11 +3310,19 @@ function pushOpening3D(solids, c, g) {
   const at = (s, d) => [g.x1 + g.ux * s - g.uy * d, g.y1 + g.uy * s + g.ux * d];
   const fs = o.bim.flip ? -1 : 1;
   const LEAF = '#a9825a', FRAME = '#8a8f98';
+  // 벽이 기울어져 있으면(g.sh) 창틀·문짝도 그 기울기 면 위에 놓아야 벽을 뚫고 나오지 않는다.
+  const shF = (z) => g.sh ? (z - g.base) / (g.h || 1) : 0;
   const plank = (p1, p2, zz0, zz1, col, th) => { // 두 점을 잇는 두께 th 판
     const dx = p2[0] - p1[0], dy = p2[1] - p1[1], L2 = Math.hypot(dx, dy); if (L2 < 1) return;
     const nx = -dy / L2 * (th || 40) / 2, ny = dx / L2 * (th || 40) / 2;
-    solids.push({ poly: [[p1[0] + nx, p1[1] + ny], [p2[0] + nx, p2[1] + ny], [p2[0] - nx, p2[1] - ny], [p1[0] - nx, p1[1] - ny]],
-      z0: zz0, z1: zz1, color: col, eid: o.id });
+    const f0 = shF(zz0), f1 = shF(zz1);
+    const sx0 = g.sh ? g.sh[0] * f0 : 0, sy0 = g.sh ? g.sh[1] * f0 : 0;
+    const poly = [[p1[0] + nx + sx0, p1[1] + ny + sy0], [p2[0] + nx + sx0, p2[1] + ny + sy0],
+      [p2[0] - nx + sx0, p2[1] - ny + sy0], [p1[0] - nx + sx0, p1[1] - ny + sy0]];
+    const so = { poly, z0: zz0, z1: zz1, color: col, eid: o.id };
+    if (g.sh) { const dxs = g.sh[0] * (f1 - f0), dys = g.sh[1] * (f1 - f0);
+      so.ptop = poly.map(p => [p[0] + dxs, p[1] + dys]); }
+    solids.push(so);
   };
   // 경첩 끝의 세그먼트 s 위치 → c.s0/s1 어느 쪽인지 (개구선과 세그먼트 방향이 반대일 수 있음)
   const sO1 = (o.x1 - g.x1) * g.ux + (o.y1 - g.y1) * g.uy;

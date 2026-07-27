@@ -317,10 +317,12 @@ function buildComplex(spec) {
   const gap = o.attached ? 0 : Math.round(o.w * 0.45);
   const L = Ws.reduce((a, v) => a + v, 0) + gap * (n - 1);   // 늘어선 전체 길이
 
-  const wall = (p, q, t2, h2) => {
+  const wall = (p, q, t2, h2, sh2) => {
     const e = br.addEntity({ type: 'LINE', layer: '벽',
       x1: Math.round(p[0]), y1: Math.round(p[1]), x2: Math.round(q[0]), y2: Math.round(q[1]) });
-    e.bim = { kind: 'wall', h: h2 || H, t: t2 || STD.wallExt, base: 0 }; counts.wall++;
+    e.bim = { kind: 'wall', h: h2 || H, t: t2 || STD.wallExt, base: 0 };
+    if (sh2) e.bim.shear = sh2;          // 기울어진 벽 — 개구부도 이 면 위에 함께 기운다
+    counts.wall++;
     return e;
   };
   const poly = (pts, layer, bim) => {
@@ -382,21 +384,24 @@ function buildComplex(spec) {
       //   (실루엣의 좌·우 경계 기울기를 vision 이 재서 lean 으로 넘겨준다)
       const lnI = (ml && ml[i] && ml[i].lean != null) ? ml[i].lean : o.lean;
       const tvec = [-(Math.sin((aL + aR) / 2)), Math.cos((aL + aR) / 2)];   // 접선(폭 방향)
-      const shr = Math.abs(lnI) > 0.05
-        ? [tvec[0] * lnI * (Hi + rise), tvec[1] * lnI * (Hi + rise)] : null;
+      const shr = Math.abs(lnI) > 0.05 ? [tvec[0] * lnI * rise, tvec[1] * lnI * rise] : null;
       // 벽 — 앞/뒤는 각 동마다, 측벽은 이웃과 공유하므로 한 번만 만든다(중복 벽 금지).
       // 이웃과 맞닿는 측벽은 방화벽 → 두 동 중 높은 처마 위로 500 솟는다.
       const shared = gap === 0 && i < n - 1;
-      wall(FL, FR, STD.wallExt, Hi); wall(BR, BL, STD.wallExt, Hi);
-      if (i === 0 || gap > 0) wall(BL, FL, PARTY, Hi);
-      wall(FR, BR, PARTY, shared ? Math.max(Hi, Hs[i + 1]) + FIREW : Hi);
+      const wSh = Math.abs(lnI) > 0.05 ? [tvec[0] * lnI * Hi, tvec[1] * lnI * Hi] : null;
+      wall(FL, FR, STD.wallExt, Hi, wSh); wall(BR, BL, STD.wallExt, Hi, wSh);
+      if (i === 0 || gap > 0) wall(BL, FL, PARTY, Hi, wSh);
+      wall(FR, BR, PARTY, shared ? Math.max(Hi, Hs[i + 1]) + FIREW : Hi, wSh);
       poly([FL, FR, BR, BL], '바닥', { kind: 'slab', t: STD.slabT, top: 0 }); counts.slab++;
       // 지붕 — 처마는 앞뒤로만. 측면은 이웃과 맞닿으므로 내밀면 지붕끼리 겹친다.
       if (o.roof && o.roof !== 'none') {
         const sgn = aL >= aR ? 1 : -1;               // 바깥쪽으로 내밀도록 부호를 맞춘다
         const oL = aL + sgn * ((i === 0 || gap > 0) ? dth : 0);
         const oR = aR - sgn * ((i === n - 1 || gap > 0) ? dth : 0);
-        const RP = [PT(oL, r0 - RAKE), PT(oR, r0 - RAKE), PT(oR, r1 + RAKE), PT(oL, r1 + RAKE)];
+        // ★지붕은 '기울어진 벽의 꼭대기'에서 시작한다 — 벽 전단량(wSh)만큼 옮긴 자리에 얹는다.
+        //   안 옮기면 벽은 기울고 지붕만 제자리에 남아 서로 어긋난다.
+        const OS = (p) => wSh ? [p[0] + wSh[0], p[1] + wSh[1]] : p;
+        const RP = [OS(PT(oL, r0 - RAKE)), OS(PT(oR, r0 - RAKE)), OS(PT(oR, r1 + RAKE)), OS(PT(oL, r1 + RAKE))];
         // ★rdir 판정은 roofSolids 가 실제로 재는 값(RP 변 길이)으로 해야 한다.
         //   벽 현으로 재면 처마만큼 어긋나 폭≈깊이 조합에서 용마루가 90° 돌아간다.
         const cF = Math.hypot(RP[1][0] - RP[0][0], RP[1][1] - RP[0][1]);
@@ -408,8 +413,9 @@ function buildComplex(spec) {
       // 박공면 — 마당 쪽은 유리(통유리 박공), 뒤쪽은 벽. 지붕과 같은 프로필의 얇은 띠.
       if (o.roof === 'gable') {
         const prof = { kind: 'roof', rtype: 'gable', eave: Hi, rise, ridgeF: RIDGE_F, rdir: 'short', shear: shr };
-        poly([PT(aL, r0), PT(aR, r0), PT(aR, r0 + 240), PT(aL, r0 + 240)], o.glass ? '유리' : '벽', prof);
-        poly([PT(aL, r1 - 240), PT(aR, r1 - 240), PT(aR, r1), PT(aL, r1)], '벽', prof);
+        const OS2 = (p) => wSh ? [p[0] + wSh[0], p[1] + wSh[1]] : p;
+        poly([OS2(PT(aL, r0)), OS2(PT(aR, r0)), OS2(PT(aR, r0 + 240)), OS2(PT(aL, r0 + 240))], o.glass ? '유리' : '벽', prof);
+        poly([OS2(PT(aL, r1 - 240)), OS2(PT(aR, r1 - 240)), OS2(PT(aR, r1)), OS2(PT(aL, r1))], '벽', prof);
       }
       if (o.glass) curtain(FL, FR, i === mid, Hi);
       // 처마돌림(fascia) — 처마 끝을 마감하는 띠. 얇은 벽으로 표현하면 3D 에서 지붕 가장자리가
@@ -418,9 +424,10 @@ function buildComplex(spec) {
       const fL = aL + sgn2 * ((i === 0 || gap > 0) ? dth : 0);
       const fR = aR - sgn2 * ((i === n - 1 || gap > 0) ? dth : 0);
       for (const rr of [r0 - RAKE, r1 + RAKE]) {
+        const fa1 = wSh ? [PT(fL, rr)[0] + wSh[0], PT(fL, rr)[1] + wSh[1]] : PT(fL, rr);
+        const fa2 = wSh ? [PT(fR, rr)[0] + wSh[0], PT(fR, rr)[1] + wSh[1]] : PT(fR, rr);
         const fa = br.addEntity({ type: 'LINE', layer: '지붕',
-          x1: Math.round(PT(fL, rr)[0]), y1: Math.round(PT(fL, rr)[1]),
-          x2: Math.round(PT(fR, rr)[0]), y2: Math.round(PT(fR, rr)[1]) });
+          x1: Math.round(fa1[0]), y1: Math.round(fa1[1]), x2: Math.round(fa2[0]), y2: Math.round(fa2[1]) });
         fa.bim = { kind: 'wall', h: 260, t: 120, base: Hi - 60 };
       }
       const cM = PT((aL + aR) / 2, rm);

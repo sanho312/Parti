@@ -480,6 +480,7 @@
   // ---------- 이미지 → 도면 도구들 ----------
   let lastImg = null; // 사용자가 채팅에 첨부한 최신 이미지 {dataUrl, w, h(px)} — set_underlay 가 쓴다
   let lastRaw = null; // 마지막 사용자 원문 {t, imgs} — API 키 무효(401) 시 로컬 폴백에 쓴다
+  let suggestNext = '';   // 다음에 입력창에 미리 띄울 요청 (엔터만 눌러도 실행)
   let lastConcept = null; // 마지막 다동 배치 spec — "6동 2층으로 다시" 같은 후속 수정에 쓴다
   function toolSetUnderlay(inp) {
     if (!lastImg) return { error: '첨부된 이미지가 없습니다. 사용자에게 도면 이미지를 채팅에 첨부해 달라고 요청하세요(📎 버튼 또는 붙여넣기).' };
@@ -1021,6 +1022,7 @@
         if (r) {
           lastConcept = spec;
           execTool('set_view', { mode: '3d' });
+          suggestNext = '평지붕으로 다시';
           const roofKo = { gable: '박공지붕', flat: '평지붕', shed: '외쪽지붕' }[spec.roof] || spec.roof;
           return `다시 세웠습니다 — **${r.n}동 · ${spec.floors}층 · ${roofKo} · `
             + `${spec.arrange === 'circle' ? '원형 마당' : '일렬'} 배치**, 각 동 ${(spec.w / 1000).toFixed(0)}×${(spec.d / 1000).toFixed(0)}m.\n`
@@ -1139,6 +1141,8 @@
         }
       }
       if ((massN || cpxN) && !planN) execTool('set_view', { mode: '3d' });
+      suggestNext = cpxN ? '6동 2층 한 동 10×14m 로 다시'
+        : planN ? '건물화해줘' : massN ? '깊이 12m 층고 3300 으로 다시' : '';
       let tail = '';
       if (planN && builtFromPlan) {
         const b2 = builtFromPlan;
@@ -1169,6 +1173,7 @@
         });
         if (r) {
           execTool('set_view', { mode: '3d' });
+          suggestNext = r.ko + ' 높이 9m 로 만들어줘';   // 그대로 엔터하면 실행되는 완성 문장
           return `**${r.ko}** 를 세웠습니다 — ${(r.w / 1000).toFixed(1)}×${(r.d / 1000).toFixed(1)}×${(r.h / 1000).toFixed(1)}m`
             + (r.count > 1 ? ` (조각 ${r.count})` : '') + '.\n'
             + '만들 수 있는 형상: ' + Object.keys(window.PARTI_ARCH.SHAPES).map(k => window.PARTI_ARCH.SHAPES[k].ko).join(' · ')
@@ -1186,6 +1191,7 @@
       if (!r) return '배치를 만들지 못했습니다.';
       lastConcept = spec;
       execTool('set_view', { mode: '3d' });
+      suggestNext = '일렬 배치로 바꿔줘';
       const roofKo = { gable: '박공지붕', flat: '평지붕', shed: '외쪽지붕' }[spec.roof];
       return `${r.n}동을 ${spec.arrange === 'row' ? '일렬로' : '원형 마당(반지름 ' + (r.R / 1000).toFixed(1) + 'm) 둘레에'} 세웠습니다 — `
         + `각 동 ${(spec.w / 1000).toFixed(0)}×${(spec.d / 1000).toFixed(0)}m · ${spec.floors}층(${(r.H / 1000).toFixed(1)}m) · ${roofKo}`
@@ -1201,6 +1207,7 @@
       const h = numOf(t, /(?:층고|천장|높이)\s*(\d{3,5})/) || undefined;
       const r = window.PARTI_ARCH.buildPlan({ areaM2, program: prog || 'oneroom', h });
       if (!r) return '평면을 만들지 못했습니다.';
+      suggestNext = '3D 보여줘';
       const rooms = r.cells.map(c => `${c.name} ${(c.w * c.h / 1e6).toFixed(1)}㎡`).join(' · ');
       return `${r.program} 평면을 만들었습니다 — 전체 ${r.areaM2.toFixed(1)}㎡(${(r.areaM2 / 3.3058).toFixed(1)}평), ${r.W}×${r.D}mm\n`
         + `${rooms}\n벽 ${r.counts.wall} · 문 ${r.counts.door} · 창 ${r.counts.window} 생성. "3D 보여줘" 라고 하시면 입체로 확인할 수 있어요.`;
@@ -1253,9 +1260,18 @@
   }
   async function runLocal(text, imgs) {
     busy = true; setBusy(true);
+    suggestNext = '';
     try { addMsg('ai', await localReply(text, imgs)); }
     catch (e) { addMsg('err', '로컬 처리 중 오류: ' + (e && e.message ? e.message : e)); }
-    finally { busy = false; setBusy(false); }
+    finally {
+      busy = false; setBusy(false);
+      // 다음에 할 만한 요청을 입력창에 미리 띄운다 — 엔터만 눌러도 바로 실행되고,
+      // 그냥 타이핑하면(전체 선택 상태라) 지우지 않고 덮어쓸 수 있다. (2026-07-27 사용자)
+      if (suggestNext && inEl) {
+        inEl.value = suggestNext;
+        try { inEl.focus(); inEl.setSelectionRange(0, suggestNext.length); } catch (e2) {}
+      }
+    }
   }
 
   function submit() {
