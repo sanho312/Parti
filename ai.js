@@ -1002,6 +1002,16 @@
     if (/일렬|한 ?줄|나란|선형/.test(t)) o.arrange = 'row';
     else if (/원형|중정|마당 ?둘레|둥글게/.test(t)) o.arrange = 'circle';
     if (/유리 ?없|창 ?없/.test(t)) o.glass = false;
+    // 동별 깊이 — "깊이 8,12,12,14,20m" 처럼 쉼표로 나열하면 그대로 쓴다.
+    // (단일 투시에서 깊이는 자동으로 못 읽는다 — 판독기가 재려 했다가 잡음만 재서 철회했다)
+    const dm = t.match(/깊이\s*([\d.,\s\/]+)\s*m/);
+    if (dm) {
+      const list = dm[1].split(/[,\/\s]+/).map(v => parseFloat(v)).filter(v => v > 0);
+      if (list.length > 1) o.depths = list.map(v => Math.round(v * 1000));
+      // ★단일 깊이를 새로 말하면 이전 '나열'을 지워야 한다 — 안 그러면 후속 병합 때
+      //   옛 목록이 살아남아 새 지시가 먹히지 않는다(실측).
+      else if (list.length === 1) { o.d = Math.round(list[0] * 1000); o.depths = null; }
+    }
     return o;
   }
 
@@ -1014,7 +1024,8 @@
     //   ('3층 단면 만들어줘' 처럼 층수만 스친 문장이 배치를 갈아엎지 않도록 이 두 경우로 한정)
     if ((!imgs || !imgs.length) && window.PARTI_ARCH) {
       const exp = parseComplexSpec(t);
-      const has = exp.count || exp.floors || exp.w || exp.d || exp.roof || exp.arrange || exp.glass != null;
+      const has = exp.count || exp.floors || exp.w || exp.d || exp.roof || exp.arrange
+        || exp.glass != null || (exp.depths && exp.depths.length);
       if (lastConcept && (exp.count || (has && /다시|바꿔|변경|수정|말고/.test(t)))) {
         const spec = Object.assign({}, lastConcept, exp);
         const r = window.PARTI_ARCH.buildComplex(spec);
@@ -1179,7 +1190,7 @@
     // ①-b 다동 배치 — "박공 5동 1층 원형 배치" (투시 스케치 후속 대화 or 직접 요청)
     if (window.PARTI_ARCH && /(\d+)\s*동/.test(t) && /배치|세워|만들|박공|지어/.test(t)) {
       const e2 = parseComplexSpec(t);
-      const spec = { count: e2.count || 5, floors: e2.floors || 1, w: e2.w || 8000, d: e2.d || 12000,
+      const spec = { count: e2.count || 5, floors: e2.floors || 1, w: e2.w || 8000, d: e2.d || 12000, depths: e2.depths || null,
         roof: e2.roof || 'gable', arrange: e2.arrange || 'circle',
         glass: e2.glass != null ? e2.glass : true, floorH: numOf(t, /층고\s*(\d{3,5})/) || 3000 };
       const r = window.PARTI_ARCH.buildComplex(spec);
@@ -1306,7 +1317,7 @@
   else init();
 
   // 테스트 훅
-  window.__WEBCAD_AI_TEST__ = { execTool, send, attachImage, localReply,
+  window.__WEBCAD_AI_TEST__ = { execTool, send, attachImage, localReply, parseComplexSpec,
     get history() { return history; }, get cfg() { return cfg; },
     get lastImg() { return lastImg; }, setLastImg: (v) => { lastImg = v; },
     get pendingImgs() { return pendingImgs; },

@@ -274,7 +274,7 @@ function buildMassing(spec) {
 function buildComplex(spec) {
   const br = B(); if (!br) return null;
   const o = Object.assign({ count: 5, floors: 1, w: 8000, d: 12000, floorH: STD.ceil + 600,
-    arrange: 'arc', roof: 'gable', glass: true, courtyardR: 0, massList: null, attached: true, lean: 0,
+    arrange: 'arc', roof: 'gable', glass: true, courtyardR: 0, massList: null, attached: true, lean: 0, depths: null,
     ox: 0, oy: 0 }, spec || {});
   const n = Math.max(1, Math.min(12, Math.round(o.count)));
   const H = o.floors * o.floorH;
@@ -314,6 +314,12 @@ function buildComplex(spec) {
   // 용마루 높이 — 비대칭 박공은 두 면의 물매가 다르다. 급한 쪽(짧은 run = min(rF,1-rF))을
   // 기준으로 잡아야 두 면 모두 규범 범위에 들어온다. (긴 쪽만 보면 급한 쪽이 상한을 넘는다)
   const riseOf = (i, span) => Math.round(Math.max(600, span * Math.min(RIDGE_F, 1 - RIDGE_F) * pitches[i]));
+  // 동별 깊이 — 판독한 배수(depthK)가 있으면 그대로, 없으면 균일
+  const Ds = [];
+  for (let i = 0; i < n; i++) {
+    if (o.depths && o.depths.length) Ds.push(Math.max(4000, Math.round(o.depths[Math.min(i, o.depths.length - 1)])));
+    else Ds.push(Math.max(4000, Math.round(o.d * ((ml && ml[i] && ml[i].depthK) ? Math.min(1.8, Math.max(0.6, ml[i].depthK)) : 1))));
+  }
   const gap = o.attached ? 0 : Math.round(o.w * 0.45);
   const L = Ws.reduce((a, v) => a + v, 0) + gap * (n - 1);   // 늘어선 전체 길이
 
@@ -376,7 +382,10 @@ function buildComplex(spec) {
     const mid = n >> 1;
     for (let i = 0; i < n; i++) {
       const aL = bays[i][0], aR = bays[i][1];
-      const FL = PT(aL, r0), FR = PT(aR, r0), BR = PT(aR, r1), BL = PT(aL, r1);
+      // ★동별 깊이 — 뒤 반경이 동마다 다르다. 측벽(방사선)은 이웃과 '더 얕은 쪽까지' 공유되고,
+      //   더 깊은 동은 그만큼 뒤로 더 나간다(계단식 배면). 앞면은 모두 r0 로 정렬.
+      const r1i = r0 + Ds[i];
+      const FL = PT(aL, r0), FR = PT(aR, r0), BR = PT(aR, r1i), BL = PT(aL, r1i);
       const chord = Math.hypot(FR[0] - FL[0], FR[1] - FL[1]);
       const rise = riseOf(i, chord);          // 용마루는 방사 방향 → 스팬은 앞면 폭
       const Hi = Hs[i];                       // 이 동의 처마 높이 (동마다 다르다)
@@ -401,7 +410,7 @@ function buildComplex(spec) {
         // ★지붕은 '기울어진 벽의 꼭대기'에서 시작한다 — 벽 전단량(wSh)만큼 옮긴 자리에 얹는다.
         //   안 옮기면 벽은 기울고 지붕만 제자리에 남아 서로 어긋난다.
         const OS = (p) => wSh ? [p[0] + wSh[0], p[1] + wSh[1]] : p;
-        const RP = [OS(PT(oL, r0 - RAKE)), OS(PT(oR, r0 - RAKE)), OS(PT(oR, r1 + RAKE)), OS(PT(oL, r1 + RAKE))];
+        const RP = [OS(PT(oL, r0 - RAKE)), OS(PT(oR, r0 - RAKE)), OS(PT(oR, r1i + RAKE)), OS(PT(oL, r1i + RAKE))];
         // ★rdir 판정은 roofSolids 가 실제로 재는 값(RP 변 길이)으로 해야 한다.
         //   벽 현으로 재면 처마만큼 어긋나 폭≈깊이 조합에서 용마루가 90° 돌아간다.
         const cF = Math.hypot(RP[1][0] - RP[0][0], RP[1][1] - RP[0][1]);
@@ -415,7 +424,7 @@ function buildComplex(spec) {
         const prof = { kind: 'roof', rtype: 'gable', eave: Hi, rise, ridgeF: RIDGE_F, rdir: 'short', shear: shr };
         const OS2 = (p) => wSh ? [p[0] + wSh[0], p[1] + wSh[1]] : p;
         poly([OS2(PT(aL, r0)), OS2(PT(aR, r0)), OS2(PT(aR, r0 + 240)), OS2(PT(aL, r0 + 240))], o.glass ? '유리' : '벽', prof);
-        poly([OS2(PT(aL, r1 - 240)), OS2(PT(aR, r1 - 240)), OS2(PT(aR, r1)), OS2(PT(aL, r1))], '벽', prof);
+        poly([OS2(PT(aL, r1i - 240)), OS2(PT(aR, r1i - 240)), OS2(PT(aR, r1i)), OS2(PT(aL, r1i))], '벽', prof);
       }
       if (o.glass) curtain(FL, FR, i === mid, Hi);
       // 처마돌림(fascia) — 처마 끝을 마감하는 띠. 얇은 벽으로 표현하면 3D 에서 지붕 가장자리가
@@ -423,14 +432,14 @@ function buildComplex(spec) {
       const sgn2 = aL >= aR ? 1 : -1;
       const fL = aL + sgn2 * ((i === 0 || gap > 0) ? dth : 0);
       const fR = aR - sgn2 * ((i === n - 1 || gap > 0) ? dth : 0);
-      for (const rr of [r0 - RAKE, r1 + RAKE]) {
+      for (const rr of [r0 - RAKE, r1i + RAKE]) {
         const fa1 = wSh ? [PT(fL, rr)[0] + wSh[0], PT(fL, rr)[1] + wSh[1]] : PT(fL, rr);
         const fa2 = wSh ? [PT(fR, rr)[0] + wSh[0], PT(fR, rr)[1] + wSh[1]] : PT(fR, rr);
         const fa = br.addEntity({ type: 'LINE', layer: '지붕',
           x1: Math.round(fa1[0]), y1: Math.round(fa1[1]), x2: Math.round(fa2[0]), y2: Math.round(fa2[1]) });
         fa.bim = { kind: 'wall', h: 260, t: 120, base: Hi - 60 };
       }
-      const cM = PT((aL + aR) / 2, rm);
+      const cM = PT((aL + aR) / 2, (r0 + r1i) / 2);
       br.addEntity({ type: 'TEXT', layer: '문자', x: Math.round(cM[0]), y: Math.round(cM[1]), h: 400, text: (i + 1) + '동' });
     }
     // ★내부 홈통(box gutter) — 데드밸리 방지
@@ -441,16 +450,20 @@ function buildComplex(spec) {
       const gwA = 250 / rm;                                  // 홈통 폭 500 → 반각
       for (let k = 1; k < n; k++) {
         const ak = bays[k][0];                               // 이웃과 공유하는 경계각
-        poly([PT(ak - gwA, r0 - RAKE), PT(ak + gwA, r0 - RAKE), PT(ak + gwA, r1), PT(ak - gwA, r1)],
-          '홈통', { kind: 'roof', rtype: 'shed', eave: Math.min(Hs[k - 1], Hs[k]) - 300, rise: Math.round((o.d + RAKE) / 300) });
+        const rGut = r0 + Math.min(Ds[k - 1], Ds[k]);   // 두 동이 함께 있는 구간까지만
+        poly([PT(ak - gwA, r0 - RAKE), PT(ak + gwA, r0 - RAKE), PT(ak + gwA, rGut), PT(ak - gwA, rGut)],
+          '홈통', { kind: 'roof', rtype: 'shed', eave: Math.min(Hs[k - 1], Hs[k]) - 300, rise: Math.round((rGut - r0 + RAKE) / 300) });
       }
     }
     // 기단 — 건물군 외곽을 300 내밀어 한 장으로 (건물이 땅에 앉은 느낌)
     if (o.attached) {
       const pts = [PT(bays[0][0], r0 - 300)];
       for (let i = 0; i < n; i++) pts.push(PT(bays[i][1], r0 - 300));
-      for (let i = n - 1; i >= 0; i--) pts.push(PT(bays[i][1], r1 + 300));
-      pts.push(PT(bays[0][0], r1 + 300));
+      // 배면은 동마다 깊이가 달라 계단식이다 — 각 동의 좌·우 각도에서 그 동의 뒤 반경을 쓴다
+      for (let i = n - 1; i >= 0; i--) {
+        pts.push(PT(bays[i][1], r0 + Ds[i] + 300));
+        pts.push(PT(bays[i][0], r0 + Ds[i] + 300));
+      }
       poly(pts, '바닥', { kind: 'slab', t: 400, top: 150 }); counts.slab++;
     }
     // 전면 잔디 띠 — 부채를 따라 연속으로
@@ -464,7 +477,7 @@ function buildComplex(spec) {
   } else {
     // 회전 없는 배치 — 일렬 / 마당을 두른 링 (동끼리 떨어져 있어 겹침 없음)
     const place = (i, C, t, u) => {
-      const W2 = Ws[i] / 2, D2 = o.d / 2;
+      const W2 = Ws[i] / 2, D2 = Ds[i] / 2;   // 동별 깊이 — 링/일렬 배치에서도 반영
       const P = [
         [C[0] - t[0] * W2 - u[0] * D2, C[1] - t[1] * W2 - u[1] * D2],
         [C[0] + t[0] * W2 - u[0] * D2, C[1] + t[1] * W2 - u[1] * D2],
@@ -481,12 +494,12 @@ function buildComplex(spec) {
           [C[0] + t[0] * W2o + u[0] * D2o, C[1] + t[1] * W2o + u[1] * D2o],
           [C[0] - t[0] * W2o + u[0] * D2o, C[1] - t[1] * W2o + u[1] * D2o],
         ];
-        poly(RP, '지붕', { kind: 'roof', rtype: o.roof, eave: H, rise: riseOf(i, Math.min(Ws[i], o.d)), ridgeF: RIDGE_F,
-          rdir: Ws[i] >= o.d ? 'short' : undefined });
+        poly(RP, '지붕', { kind: 'roof', rtype: o.roof, eave: H, rise: riseOf(i, Math.min(Ws[i], Ds[i])), ridgeF: RIDGE_F,
+          rdir: Ws[i] >= Ds[i] ? 'short' : undefined });
         counts.roof++;
       }
       if (o.roof === 'gable') {
-        const prof = { kind: 'roof', rtype: 'gable', eave: H, rise: riseOf(i, Math.min(Ws[i], o.d)), ridgeF: RIDGE_F, rdir: 'short' };
+        const prof = { kind: 'roof', rtype: 'gable', eave: H, rise: riseOf(i, Math.min(Ws[i], Ds[i])), ridgeF: RIDGE_F, rdir: 'short' };
         const band = (sgn, layer) => {
           const f0 = sgn * D2, f1 = sgn * (D2 - 240);
           poly([
@@ -509,9 +522,9 @@ function buildComplex(spec) {
         s += Ws[i] + (gap || Math.round(o.w * 0.5));
       }
     } else {
-      const foot = Math.max(o.w, o.d);
+      const foot = Math.max(o.w, Math.max.apply(null, Ds));
       R = o.courtyardR || Math.max(6000, Math.round((n * (foot + 3000)) / (2 * Math.PI)));
-      const ring = R + o.d / 2 + 2500;
+      const ring = R + Math.max.apply(null, Ds) / 2 + 2500;
       for (let i = 0; i < n; i++) {
         const a = -Math.PI / 2 + (i * 2 * Math.PI) / n;
         const u = [Math.cos(a), Math.sin(a)];

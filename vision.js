@@ -597,6 +597,33 @@ async function traceConcept(src, opts) {
     leanAvg += ln; leanN++;
   }
   leanAvg = leanN ? leanAvg / leanN : 0;
+
+  // ── 동별 깊이(depth) ──
+  // 투시에서 '깊은 동'은 옆으로 물러나는 지붕면·측벽이 넓게 보인다. 그 넓이를 재려면
+  // 매스가 차지한 '면적'과 '앞면 폭'을 비교하면 된다: 같은 폭이라도 깊을수록 화면에서
+  // 더 많은 픽셀을 차지한다. area/(width×height) 가 깊이의 대리 지표가 된다.
+  // ※투시 각도·시점을 모르므로 절대 깊이는 알 수 없다 — 동 사이 '상대 비율'만 쓴다.
+  let dSum = 0, dN = 0;
+  for (let i = 0; i < massList.length; i++) {
+    const x0 = Math.max(0, Math.round(bounds[i])), x1 = Math.min(w - 1, Math.round(bounds[i + 1]));
+    const wd = Math.max(1, x1 - x0);
+    let area = 0, hMaxI = 0;
+    for (let x = x0; x <= x1; x++) {
+      if (prof[x] > hMaxI) hMaxI = prof[x];
+      for (let y = Math.max(0, Math.round(baseY - prof[x])); y <= Math.min(h - 1, baseY); y++)
+        if (bldg[y * w + x]) area++;
+    }
+    // 채움률 = 실제 잉크·색 면적 / 실루엣 상자. 깊은 동은 측면이 더 보여 채움률이 높다.
+    const fill = area / Math.max(1, wd * hMaxI);
+    massList[i].fill = +fill.toFixed(3);
+    dSum += fill; dN++;
+  }
+  void dSum; void dN;
+  // ★깊이는 여기서 추정하지 않는다 — 채움률은 깊이를 재지 못한다(실측).
+  //   측면이 넓은 동은 그 측면이 '별개 봉우리'로 잡혀 동 수가 늘고, 채움률은 오히려 떨어졌다
+  //   (오른쪽을 깊게 그린 시험: 5동→6동, 깊이 배수 1.7 기대 → 0.6 측정).
+  //   단일 투시에서 깊이를 알려면 면 분할(앞면/측면 음영 구분)이나 소실점 추정이 필요하다.
+  //   fill 은 진단값으로만 남기고, 깊이는 사용자가 문장으로 지정하게 한다("깊이 8,12,20m").
   // 붙어 있는가 — 골이 충분히 높으면 한 덩어리로 이어진 동들이다
   const attachedN = valleys.filter(v => v.lo > 0 && v.v / v.lo >= 0.35).length;
   const attached = valleys.length ? attachedN >= valleys.length / 2 : false;
