@@ -31,6 +31,7 @@ const state = {
   levels: [{ name: '1F', elev: 0 }], // 층 목록 (BIM 다층)
   curLv: 0,                          // 현재 작업 층
   ghostLv: true,                     // 다른 층을 흐리게 표시(참조용)
+  planFloor: null,                   // '층별로 보기' — null=전체, 1..N=그 층, -1=지붕
   grid: { show: true, size: 10 },
   ortho: false,          // 직교 모드(F8): 기준점 대비 수평/수직 고정
   selection: new Set(),
@@ -453,7 +454,14 @@ function addEntity(e) {
   return e;
 }
 // 현재 층 요소인가 (lv 없는 옛 도형 = 1층)
-function onLv(e) { return (e.lv || 0) === (state.curLv || 0); }
+// ★층 필터를 여기 얹는다 — 그리기·선택·스냅·전체선택이 전부 이 함수 하나를 본다.
+//   따로 만들면 안 보이는 층의 벽이 선택되고 스냅되는 상태가 된다.
+function onLv(e) {
+  if ((e.lv || 0) !== (state.curLv || 0)) return false;
+  if (state.planFloor == null) return true;
+  const q = floorTagOf(e);
+  return q === 0 || q === state.planFloor;
+}
 function lvElev() { return (state.levels[state.curLv] || { elev: 0 }).elev; }
 
 // ============================================================
@@ -3074,11 +3082,9 @@ function entsBBox(ents) {
   }
   return x1 > x0 ? { x0, y0, x1, y1, w: x1 - x0, h: y1 - y0 } : null;
 }
-// ── 층별 평면도 ──
-// ★평면 한 장에 모든 층이 겹쳐 있었다. 3층이면 벽·개구부·실이 세 겹으로 포개져 있고
-//   (실측: 실 42개 = 14개 × 3층, 개구부 66개 = 22개 × 3층) 도면에서는 어느 것이 몇 층인지
-//   알 수가 없다. 실제 도면집은 층마다 한 장이다.
-function planFloorSplit(ents) {
+// 층 태그 — 엔티티마다 지붕(-1) · 공통(0) · 층(1..maxF). 층별 평면도와 '층별로 보기'가
+// 같은 기준을 쓰게 하나로 둔다(두 벌로 두면 도면과 화면이 서로 다른 층을 보여 준다).
+function planFloorTag(ents) {
   // 층고 — 실 객체가 '층'과 '높이'를 함께 갖고 있으므로 거기서 바로 잰다(추정하지 않는다).
   const rs = ents.filter(e => e.bim && e.bim.kind === 'room' && e.points);
   const cal = rs.filter(r => r.bim.floor > 1 && r.bim.top > 0)
@@ -3089,9 +3095,8 @@ function planFloorSplit(ents) {
       .map(e => e.bim.base))].sort((a, b) => a - b);
     fh = bs.length ? bs[0] : 0;
   }
-  if (!fh) return [];                          // 층을 가를 근거가 없으면 가르지 않는다
   const maxF = Math.max(1, ...rs.map(r => r.bim.floor || 1));
-  // 지붕(-1) · 공통(0) · 층(1..maxF). ★공통은 대지·조경·치수·동 이름처럼 층에 안 매인 것들이다.
+  // ★공통(0)은 대지·조경·치수·동 이름처럼 층에 안 매인 것들이다 — 모든 층 도면에 남는다.
   const floorOf = (e) => {
     const b = e.bim;
     if (!b) return 0;
@@ -3099,10 +3104,20 @@ function planFloorSplit(ents) {
     if (b.floor != null) return b.floor;
     const z = b.base != null ? b.base : (b.sill != null ? b.sill
       : (b.kind === 'slab' ? b.top : null));
-    if (z == null) return 0;
+    if (z == null || !fh) return 0;
     const f = Math.floor(z / fh + 0.05) + 1;
     return f > maxF ? -1 : Math.max(1, f);      // 층수를 넘는 높이(박공벽·파라펫)는 지붕 쪽
   };
+  return { fh, maxF, tag: ents.map(floorOf) };
+}
+// ── 층별 평면도 ──
+// ★평면 한 장에 모든 층이 겹쳐 있었다. 3층이면 벽·개구부·실이 세 겹으로 포개져 있고
+//   (실측: 실 42개 = 14개 × 3층, 개구부 36개 = 12개 × 3층) 도면에서는 어느 것이 몇 층인지
+//   알 수가 없다. 실제 도면집은 층마다 한 장이다.
+function planFloorSplit(ents) {
+  const T = planFloorTag(ents);
+  if (!T.fh) return [];                        // 층을 가를 근거가 없으면 가르지 않는다
+  const rs = ents.filter(e => e.bim && e.bim.kind === 'room' && e.points);
   // 2층 이상은 모델에 실 이름표가 없다 — 겹쳐 보이지 않게 1층 것만 그리기 때문이다.
   // 층별 평면도에서는 그 층 실 객체에서 그 층 번호로 만들어 붙인다(모델은 건드리지 않는다).
   const labelOf = (r) => {
@@ -3116,18 +3131,58 @@ function planFloorSplit(ents) {
         height: TH * 0.8, text: (r.bim.areaM2 || 0).toFixed(1) + '㎡', rotation: 0 },
     ];
   };
-  const tag = ents.map(floorOf);
-  const out = [];
-  for (let f = 1; f <= maxF; f++) {
+  const tag = T.tag, out = [];
+  for (let f = 1; f <= T.maxF; f++) {
     const es = ents.filter((e, i) => tag[i] === f || tag[i] === 0);
     if (!es.length) continue;
     const lab = f === 1 ? [] : rs.filter(r => r.bim.floor === f).flatMap(labelOf);
     out.push({ name: f + '층 평면도', ents: es.concat(lab), kind: 'plan', floor: f });
   }
   if (tag.some(t => t === -1))
-    out.push({ name: '지붕 평면도', kind: 'plan', floor: 0,
+    out.push({ name: '지붕 평면도', kind: 'plan', floor: -1,
       ents: ents.filter((e, i) => tag[i] === -1 || tag[i] === 0) });
   return out.length > 1 ? out : [];             // 한 층뿐이면 가를 것이 없다
+}
+// ── 층별로 보기 (화면) ──
+// ★도면집을 층으로 갈랐으니 작업 화면도 같은 기준으로 갈라야 한다. e.lv(작도 층)로는 안 된다 —
+//   그건 '그린 시점'의 층이라 생성기가 만든 건물은 전 층이 통째로 0층이다.
+// 태그는 도면 개수·id 가 바뀔 때만 다시 계산한다(onLv 는 그리기·선택·스냅에서 매번 불린다).
+// ★문자열 서명을 만들지 않는다 — onLv 는 매 프레임 도형 수만큼 불린다(수천 번).
+//   숫자 세 개 비교로 끝낸다.
+let fvMap = null, fvN = -1, fvId = -1, fvF;
+function floorTagOf(e) {
+  if (fvN !== state.entities.length || fvId !== state.nextId || fvF !== state.planFloor) {
+    const t = planFloorTag(state.entities);
+    fvMap = new Map();
+    state.entities.forEach((x, i) => fvMap.set(x.id, t.tag[i]));
+    fvN = state.entities.length; fvId = state.nextId; fvF = state.planFloor;
+  }
+  const q = fvMap.get(e.id);
+  return q === undefined ? 0 : q;
+}
+function cmdFloorView(arg) {
+  const a = String(arg || '').trim();
+  const T = planFloorTag(state.entities);
+  if (!a || /전체|모두|all|해제|off/i.test(a)) {
+    state.planFloor = null; fvN = -1; draw(); updateStat();
+    logLine('  전체 층을 봅니다.', 'ok');
+    return { floor: null };
+  }
+  if (!T.fh) { logLine('  층을 가를 근거가 없습니다 — 건물을 먼저 만들어 주세요.', 'info'); return; }
+  const f = /지붕|roof/i.test(a) ? -1 : ((a.match(/(-?\d+)/) || [])[1] != null ? +(a.match(/(-?\d+)/))[1] : null);
+  if (f == null || f === 0 || (f > 0 && f > T.maxF)) {
+    logLine('  1 ~ ' + T.maxF + '층 또는 "지붕" 중에서 골라 주세요 (예: "층보기 2"). '
+      + '전체로 되돌리려면 "층보기 전체"', 'warn');
+    return;
+  }
+  state.planFloor = f; fvN = -1;
+  state.selection.clear();                      // 안 보이는 것을 골라 둔 채로 두지 않는다
+  draw(); renderProps(); updateStat();
+  const n = T.tag.filter(q => q === f || q === 0).length;
+  logLine('  ' + (f === -1 ? '지붕' : f + '층') + ' 평면만 봅니다 — ' + n + '개 / 전체 '
+    + state.entities.length + '개. 다른 층은 '
+    + (state.ghostLv ? '흐리게 비칩니다' : '숨깁니다') + '. 되돌리려면 "층보기 전체"', 'ok');
+  return { floor: f, shown: n };
 }
 // 시트에 올릴 뷰 모으기 — 현재 도면(평면·표) + 이미 만들어 둔 단면/입면 탭
 // ★표는 표마다 따로 뽑는다(drawTable 이 달아 둔 tbl 이름표로). 면적표와 창호일람표는
@@ -12682,6 +12737,7 @@ const INSTANT_CMDS = {
   owsave: cmdOwSave, owlist: cmdOwList, owdel: () => cmdOwDel(prompt('삭제할 창호 기호 이름 (@ 없이):') || ''),   // 커스텀 창호 기호
   owsched: cmdOwSchedule, areatable: cmdAreaTable, autosection: cmdAutoSection, sheet: cmdSheet, sheetset: cmdSheetSet,
   autodim: cmdAutoDim,
+  floorview: cmdFloorView,
   raytrace: cmdRaytrace,
   rendered: cmdRendered,
   material: cmdMaterial,
@@ -13153,6 +13209,7 @@ const CMD_ALIASES = {
   sheet: 'sheet', 도면묶기: 'sheet', 시트: 'sheet', 도면판: 'sheet', 한장: 'sheet',
   sheetset: 'sheetset', 도면세트: 'sheetset', 세트: 'sheetset', 도면일습: 'sheetset', 여러장: 'sheetset',
   autodim: 'autodim', 치수자동: 'autodim', 자동치수: 'autodim', 치수기입: 'autodim',
+  floorview: 'floorview', 층보기: 'floorview', 층별보기: 'floorview', 층필터: 'floorview', 층만: 'floorview',
   unsetlight: 'unsetlight', 광원해제: 'unsetlight',
   raytrace: 'raytrace', rt: 'raytrace', raytraced: 'raytrace', 레이트레이싱: 'raytrace', 렌더: 'raytrace',
   rendered: 'rendered', 렌더링: 'rendered', 렌더링뷰: 'rendered', 렌더뷰: 'rendered',
@@ -16418,6 +16475,7 @@ function captureDoc() {
     entities: liveEnts(), layers: state.layers, currentLayer: state.currentLayer,
     nextId: state.nextId, blocks: state.blocks, view: { ...state.view }, views: state.views,
     levels: state.levels, curLv: state.curLv, ghostLv: state.ghostLv,
+    planFloor: state.planFloor,
     // ★광원·센서·재질 라이브러리·태양도 문서의 일부다. 여기 없으면 문서 탭을 전환하거나
     //   새로고침 복원할 때 조명·재질·날씨가 통째로 사라진다 — 실사용 스윕에서 잡았다.
     lights: state.lights, nextLightId: state.nextLightId,
@@ -16457,6 +16515,7 @@ function applyDoc(d) {
   state.levels = (d.levels && d.levels.length) ? d.levels : [{ name: '1F', elev: 0 }];
   state.curLv = Math.min(d.curLv || 0, state.levels.length - 1);
   state.ghostLv = d.ghostLv !== false;
+  state.planFloor = d.planFloor != null ? d.planFloor : null;
   renderLevels();
   viewPrevStack.length = 0;
   if (d.view) state.view = { ...d.view };
@@ -16751,7 +16810,7 @@ window.__CADTEST__ = {
   areaData, areaRows, areaCSV, cmdAreaTable, drawTable, polyAreaM2,
   autoSecLines, cmdAutoSection, sheetBuild, cmdSheet, sheetSources, entsBBox, SHEET_SIZES,
   sheetPlan, sheetDraw, sheetLayout, sheetIndexDraw, sheetSetBuild, cmdSheetSet, SHEET_SERIES, buildPDFSet, pdfWrap,
-  planFloorSplit,
+  planFloorSplit, planFloorTag, cmdFloorView, onLv,
   switchDoc, curDocIdx: () => curDoc, docCount: () => docs.length,
   autoDimPlan, cmdAutoDim, buildPDF, PAPER_SIZES,
   MAT_PRESETS, MAT_ALIAS, matOf, matKey, matHex, matBoxUV, matGeo, matBuild, matTextures, matDrawTex, cmdMaterial, rtGeoSig, bimSolidColor, secHatchFor, computePatternSegs, owWt, OPENING_TYPES, owSaveDef, owPlaced, layerAutoBim, applyLayerRoleTo, addEntity, renderLayers,

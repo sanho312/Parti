@@ -4341,6 +4341,48 @@ function tests(){
                 eqi(pf.map(p => p.no + ' ' + p.name).join(' | '),
                   'A-101 1층 평면도 | A-102 2층 평면도 | A-103 3층 평면도 | A-104 지붕 평면도',
                   '★평면은 장당 하나 — 번호와 이름이 층을 그대로 따른다');
+                // ── ★층별로 보기 (화면) ──
+                // 도면집을 층으로 갈랐으니 작업 화면도 같은 기준으로 갈라야 한다.
+                // ★e.lv(작도 층)로는 안 된다 — 그건 '그린 시점'의 층이라 생성물은 전부 0층이다.
+                const bV = C.state.entities.length;
+                A.buildComplex({ count: 2, floors: 3, w: 9000, d: 11000, roof: 'gable',
+                  arrange: 'arc', attached: true, glass: false, lean: 0 });
+                const freshV = () => C.state.entities.slice(bV);
+                const totV = freshV().length;
+                const visV = () => freshV().filter(e0 => C.onLv(e0));
+                eqi(visV().length, totV, '  거르기 전에는 전부 보인다');
+                const r2 = C.cmdFloorView('2');
+                ok(r2 && r2.floor === 2, '★"층보기 2" — 2층만 본다');
+                ok(visV().length < totV, '★가리는 게 있다 (' + visV().length + ' / ' + totV + ')');
+                const shV = visV();
+                const rmV = shV.filter(e0 => e0.bim && e0.bim.kind === 'room');
+                ok(rmV.length > 0 && rmV.every(x => x.bim.floor === 2),
+                  '★보이는 실은 전부 2층 (' + rmV.length + '개)');
+                eqi(shV.filter(e0 => e0.bim && e0.bim.kind === 'roof').length, 0, '  지붕은 안 보인다');
+                const wbV = [...new Set(shV.filter(e0 => e0.bim && e0.bim.kind === 'wall')
+                  .map(e0 => e0.bim.base))];
+                eqi(wbV.length === 1 && wbV[0], 3000, '★보이는 벽은 전부 2층 벽 (base 3000)');
+                ok(shV.some(e0 => e0.layer === '문자'), '  동 이름 같은 공통 요소는 남는다');
+                // ★안 보이는 것이 선택·스냅되면 안 된다 — onLv 하나만 고쳤으므로 전부 따라온다
+                eqi(C.state.selection.size, 0, '★층을 바꾸면 선택을 푼다');
+                const hidV = freshV().find(e0 => e0.bim && e0.bim.kind === 'room' && e0.bim.floor === 3);
+                ok(hidV && !C.onLv(hidV), '★3층 실은 2층 보기에서 잡히지 않는다 (선택·스냅도 막힌다)');
+                // 지붕 · 전체
+                C.cmdFloorView('지붕');
+                ok(visV().some(e0 => e0.bim && e0.bim.kind === 'roof')
+                  && !visV().some(e0 => e0.bim && e0.bim.kind === 'room'),
+                  '★"층보기 지붕" — 지붕만 (실은 없다)');
+                C.cmdFloorView('전체');
+                eqi(visV().length, totV, '★"층보기 전체" — 되돌아온다');
+                // 범위 밖은 거절 (조용히 빈 화면이 되게 두지 않는다)
+                C.cmdFloorView('9');
+                eqi(C.state.planFloor, null, '★없는 층을 부르면 거절한다 (빈 화면이 되지 않는다)');
+                // ★내보내기는 거르지 않는다 — 화면 필터가 도면을 지우면 안 된다
+                C.cmdFloorView('2');
+                ok(C.exportEntities().filter(e0 => e0.bim && e0.bim.kind === 'roof').length > 0,
+                  '★층을 걸러 봐도 DXF·PDF 에는 전부 나간다');
+                C.cmdFloorView('전체');
+                C.state.entities.length = bV;
                 C.state.entities.length = bF;
               }).then(() => {
                 // ── ★도면 여러 장으로 (세트) ──
