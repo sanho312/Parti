@@ -4172,7 +4172,9 @@ function tests(){
                   '★부분 치수 합이 전체 폭과 맞는다 (' + Math.round(sum3) + ' vs '
                     + Math.round(wBay) + ')');
                 // 치수는 모델 바깥에 — 도면을 덮으면 못 읽는다
-                const mb = C.entsBBox(C.state.entities.slice(bD2, nPre));
+                // ★대지 슬래브는 건물보다 넓게 깔린다 — 여기 기준은 '건물'이어야 한다
+                const mb = C.entsBBox(C.state.entities.slice(bD2, nPre)
+                  .filter(e0 => e0.layer !== '대지'));
                 const db = C.entsBBox(dimE);
                 ok(db.x0 < mb.x0 || db.x1 > mb.x1 || db.y0 < mb.y0 || db.y1 > mb.y1,
                   '★치수선이 모델 바깥으로 빠진다 (도면을 덮지 않는다)');
@@ -4328,6 +4330,36 @@ function tests(){
                   '  계단에 폭·높이·단높이가 들어 있다 (cad.js 가 평면 심볼과 3D 를 만든다)');
                 const CS = runC({ w: 3000 });
                 eqi(CS.corr.length, 0, '★좁은 동에는 복도를 넣지 않는다 (밴드가 성립하지 않는다)');
+                // ── ★3D 마감 — 계단 난간 · 대지 ──
+                C.state.entities.length = bR;
+                A.buildComplex({ count: 3, floors: 2, w: 9000, d: 11000, roof: 'gable',
+                  arrange: 'arc', attached: true, glass: false, lean: 0 });
+                const esF = C.state.entities.slice(bR), solF = C.bimSolids();
+                const railE = esF.filter(e0 => e0.bim && e0.bim.kind === 'railing');
+                eqi(railE.length, 3, '★계단 난간 — 계단마다 하나 (난간 없는 계단은 위법이다)');
+                const railIds = new Set(railE.map(e0 => e0.id));
+                const railS = solF.filter(s0 => railIds.has(s0.eid));
+                ok(railS.length >= 6, '  난간이 3D 솔리드로 선다 (' + railS.length + '개)');
+                ok(Math.max.apply(null, railS.map(s0 => s0.z1 != null ? s0.z1 : s0.z0)) > 2000,
+                  '  경로에 높이가 있어 난간이 계단 경사를 따라간다');
+                const siteE = esF.filter(e0 => e0.layer === '대지');
+                eqi(siteE.length, 1, '★대지 슬래브 — 건물이 허공에 떠 있지 않게');
+                const siteS = solF.filter(s0 => s0.eid === siteE[0].id);
+                const others = solF.filter(s0 => s0.eid !== siteE[0].id);
+                const sTop = Math.max.apply(null, siteS.map(s0 => s0.z1 != null ? s0.z1 : s0.z0));
+                const bLow = Math.min.apply(null, others.map(s0 => s0.z0));
+                ok(sTop <= bLow, '★지면이 건물 바닥판을 뚫지 않는다 (지면 ' + sTop
+                  + ' ≤ 최하단 ' + bLow + ')');
+                const spts = siteE[0].points;
+                let mx0 = 1e18, mx1 = -1e18;
+                esF.forEach(e0 => { if (e0.layer === '대지') return;
+                  const xs0 = e0.type === 'LINE' ? [e0.x1, e0.x2]
+                    : e0.points ? e0.points.map(p0 => p0[0]) : [e0.x || 0];
+                  xs0.forEach(v0 => { mx0 = Math.min(mx0, v0); mx1 = Math.max(mx1, v0); }); });
+                ok(Math.min.apply(null, spts.map(p0 => p0[0])) < mx0
+                  && Math.max.apply(null, spts.map(p0 => p0[0])) > mx1,
+                  '  대지가 건물보다 넓다 (여백을 두고 깔린다)');
+                C.state.entities.length = bR;
                 // ── ★실마다 창 ──
                 // 창을 외피에만 균일하게 뚫으면 어떤 방은 창이 없고 어떤 방은 여러 개다.
                 // 실이 객체가 된 뒤로는 '이 실의 외벽 구간에 개구부가 있는가'를 물을 수 있다.

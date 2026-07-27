@@ -275,7 +275,7 @@ function buildComplex(spec) {
   const br = B(); if (!br) return null;
   const o = Object.assign({ count: 5, floors: 1, w: 8000, d: 12000, floorH: STD.ceil + 600,
     arrange: 'arc', roof: 'gable', glass: true, courtyardR: 0, massList: null, attached: true, lean: 0, depths: null,
-    mat: null, rooms: true, program: null,
+    mat: null, rooms: true, program: null, site: true,
     ox: 0, oy: 0 }, spec || {});
   const n = Math.max(1, Math.min(12, Math.round(o.count)));
   const H = o.floors * o.floorH;
@@ -467,6 +467,7 @@ function buildComplex(spec) {
   };
 
   const roomSeq = new Map();                       // 층별 실번호 카운터 (101, 102, …)
+  const siteAcc = [];                             // 대지 슬래브 범위를 모을 자리
   let R = 0, courtC = [o.ox, o.oy], entryFront = null;
 
   if (o.arrange === 'arc') {
@@ -514,6 +515,7 @@ function buildComplex(spec) {
       if (i === 0 || gap > 0) wall(BL, FL, PARTY, Hi, wSh);
       wall(FR, BR, PARTY, shared ? Math.max(Hi, Hs[i + 1]) + FIREW : Hi, wSh);
       poly([FL, FR, BR, BL], '바닥', { kind: 'slab', t: STD.slabT, top: 0 }); counts.slab++;
+      siteAcc.push(FL, FR, BR, BL);
       // 지붕 — 처마는 앞뒤로만. 측면은 이웃과 맞닿으므로 내밀면 지붕끼리 겹친다.
       if (o.roof && o.roof !== 'none') {
         const sgn = aL >= aR ? 1 : -1;               // 바깥쪽으로 내밀도록 부호를 맞춘다
@@ -815,6 +817,15 @@ function buildComplex(spec) {
             st.bim = { kind: 'stair', w: Math.min(1200, CORR - 100), h: o.floorH,
               riser: RISER, base: f * o.floorH };
             counts.stair = (counts.stair || 0) + 1;
+            // ★계단 난간 — 난간 없는 계단은 3D 에서 '판만 떠 있는' 꼴이고 실제로도 위법이다.
+            //   (건축물의 피난·방화구조 규칙: 높이 1m 넘는 계단에는 난간)
+            //   경로에 높이가 있어야 난간이 경사를 따라가므로 z1/z2 를 준다.
+            const rl = br.addEntity({ type: 'LINE', layer: '벽',
+              x1: st.x1, y1: st.y1, x2: st.x2, y2: st.y2 });
+            rl.z1 = f * o.floorH; rl.z2 = (f + 1) * o.floorH;
+            rl.bim = { kind: 'railing', h: 1000, t: 50, postT: 60, spacing: 1100,
+              base: f * o.floorH };
+            counts.rail = (counts.rail || 0) + 1;
           }
         }
       }
@@ -965,6 +976,29 @@ function buildComplex(spec) {
         x1: Math.round(cx + Math.cos(a2) * Rr * 0.26), y1: Math.round(cy + Math.sin(a2) * Rr * 0.26),
         x2: Math.round(cx + Math.cos(a2) * Rr * 0.97), y2: Math.round(cy + Math.sin(a2) * Rr * 0.97) });
     }
+  }
+  // ── ★대지 슬래브 ──
+  // 건물이 허공에 떠 있으면 3D·렌더가 모형 사진처럼 보인다. 건물과 마당을 아우르는
+  // 대지 판을 깔아 지면을 만든다. 두께 있는 판이라 옆에서 봐도 지면이 끊기지 않는다.
+  // ※기단(150) 아래로 내려 깔아 바닥판과 z-fighting 이 나지 않게 한다.
+  if (o.site !== false && siteAcc.length) {
+    let sx0 = 1e18, sy0 = 1e18, sx1 = -1e18, sy1 = -1e18;
+    const acc = siteAcc.concat(courtC ? [[courtC[0] - R, courtC[1] - R], [courtC[0] + R, courtC[1] + R]] : []);
+    for (const p of acc) {
+      sx0 = Math.min(sx0, p[0]); sx1 = Math.max(sx1, p[0]);
+      sy0 = Math.min(sy0, p[1]); sy1 = Math.max(sy1, p[1]);
+    }
+    const PAD = Math.max(6000, (sx1 - sx0) * 0.12);
+    br.ensureLayer('대지', '#b9b2a6');
+    const sp = br.addEntity({ type: 'LWPOLYLINE', layer: '대지', closed: true, points: [
+      [Math.round(sx0 - PAD), Math.round(sy0 - PAD)], [Math.round(sx1 + PAD), Math.round(sy0 - PAD)],
+      [Math.round(sx1 + PAD), Math.round(sy1 + PAD)], [Math.round(sx0 - PAD), Math.round(sy1 + PAD)]] });
+    // ★지면은 건물 최하단(기단 밑)보다 아래여야 한다 — 위로 올라오면 바닥판을 뚫는다.
+    //   실측: top -200 이 바닥 하단 -250 보다 위라 판이 관통했다. 기단이 드러나도록 -260.
+    // 두께는 기단(400)과 다르게 — 회귀가 '기단 한 장'을 두께로 세고 있어 겹치면 안 된다
+    sp.bim = { kind: 'slab', t: 500, top: -260 };
+    sp.mat = 'concrete';
+    counts.site = 1;
   }
   br.refresh();
   return { n, floors: o.floors, H, R: Math.round(R), L, widths: Ws, counts, arrange: o.arrange };
