@@ -4104,6 +4104,49 @@ function tests(){
                 const R0 = runR({ rooms: false });
                 eqi(R0.inWall.length, 0, '  rooms:false 면 예전처럼 빈 외피 (선택 가능)');
                 C.state.entities.length = bR;
+                // ── ★복도·계단 ──
+                // 방끼리 직접 연결하면 안방을 지나야 다른 방이 나온다. 뒤쪽에 복도 띠를 두고
+                // 방들이 거기로 열리게 한다(앞은 주 실이 차지해 마당 조망을 갖는다).
+                const runC = (opt) => {
+                  C.state.entities.length = bR;
+                  A.buildComplex(Object.assign({ count: 3, floors: 1, w: 9000, d: 11000,
+                    roof: 'gable', arrange: 'arc', attached: true, glass: false, lean: 0 }, opt));
+                  const es = C.state.entities.slice(bR);
+                  return {
+                    corr: es.filter(e0 => e0.bim && e0.bim.kind === 'room' && e0.bim.name === '복도'),
+                    stair: es.filter(e0 => e0.bim && e0.bim.kind === 'stair'),
+                    idoor: es.filter(e0 => e0.bim && e0.bim.ot === 'door' && e0.bim.t === 100),
+                  };
+                };
+                const C1 = runC({});
+                eqi(C1.corr.length, 3, '★복도 — 동마다 하나');
+                ok(C1.corr.every(e0 => e0.bim.areaM2 > 5), '  복도도 면적을 가진 실이다');
+                eqi(C1.stair.length, 0, '  1층이면 계단 없음');
+                // 방들이 복도로 열리는가 — 문 한쪽이 복도 안이면 복도에 면한 것
+                const inP = (p, x, y) => { let c0 = false;
+                  for (let i0 = 0, j0 = p.length - 1; i0 < p.length; j0 = i0++)
+                    if (((p[i0][1] > y) !== (p[j0][1] > y)) &&
+                        (x < (p[j0][0] - p[i0][0]) * (y - p[i0][1]) / (p[j0][1] - p[i0][1]) + p[i0][0]))
+                      c0 = !c0;
+                  return c0; };
+                let onC = 0;
+                for (const d0 of C1.idoor) {
+                  const mx0 = (d0.x1 + d0.x2) / 2, my0 = (d0.y1 + d0.y2) / 2;
+                  const dd0 = Math.hypot(d0.x2 - d0.x1, d0.y2 - d0.y1) || 1;
+                  const nx0 = -(d0.y2 - d0.y1) / dd0, ny0 = (d0.x2 - d0.x1) / dd0;
+                  if (C1.corr.some(cc => inP(cc.points, mx0 + nx0 * 500, my0 + ny0 * 500)
+                    || inP(cc.points, mx0 - nx0 * 500, my0 - ny0 * 500))) onC++;
+                }
+                ok(onC >= 3, '★복도에 면한 문이 있다 (' + onC + '/' + C1.idoor.length + ')');
+                // ※한계: 모든 방이 복도에 면하지는 않는다. 재귀 이분할이 복도를 모르기 때문에
+                //   뒷줄 방만 복도에 닿고 나머지는 이웃을 거친다. 연결은 되지만 동선은 아직 거칠다.
+                const C3 = runC({ floors: 3 });
+                eqi(C3.stair.length, 6, '★2층 이상이면 계단 — 동마다 층 전환 수만큼 (3층×3동)');
+                ok(C3.stair.every(e0 => e0.bim.h > 0 && e0.bim.riser > 0 && e0.bim.w > 0),
+                  '  계단에 폭·높이·단높이가 들어 있다 (cad.js 가 평면 심볼과 3D 를 만든다)');
+                const CS = runC({ d: 6000 });
+                eqi(CS.corr.length, 0, '★얕은 동에는 복도를 넣지 않는다 (복도가 방을 다 잡아먹는다)');
+                C.state.entities.length = bR;
               }).then(() => {
                 // ★라우팅 근거 지표 — 전역 임계값 추측이 실물에서 두 번 뒤집힌 뒤 도입한 증거들.
                 //   도면은 무채색·축정렬·이중선, 손그림은 사선 지배 → 이 표가 오판을 막는다.
