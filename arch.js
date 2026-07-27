@@ -611,6 +611,8 @@ function buildComplex(spec) {
   const RAKE = Math.max(120, Math.min(900, Math.round(o.eaveOvh || 300)));   // 박공측(앞뒤) 내밀기
   const EAVE = 500;          // 처마측(양 끝동 바깥) 내밀기
   const OVH = RAKE;
+  // 주차 — 주차장법 시행규칙 기준 치수(mm). ★도면에 들어가는 숫자라 한 곳에 모아 둔다.
+  const PARK = { w: 2500, d: 5000, aisle: 6000 };   // 일반형 구획 2.5x5.0m · 직각주차 차로 6.0m
   const PARTY = 200;         // 세대분리벽(측벽) 두께
   const FIREW = 500;         // 방화벽이 지붕면 위로 솟는 높이
 
@@ -973,6 +975,9 @@ function buildComplex(spec) {
       ];
       for (let k = 0; k < 4; k++) wall(P[k], P[(k + 1) % 4]);
       poly(P, '바닥', { kind: 'slab', t: STD.slabT, top: 0 }); counts.slab++;
+      // ★대지 범위에 넣는다 — 예전엔 부채꼴에서만 넣어서, 일렬·링 배치는 지면이 아예
+      //   안 깔렸다(건물이 허공에 떠 있었다). 주차·조경도 이 범위 위에 놓인다.
+      siteAcc.push(P[0], P[1], P[2], P[3]);
       if (o.roof && o.roof !== 'none') {
         const W2o = W2 + OVH, D2o = D2 + OVH;
         const RP = [
@@ -1094,9 +1099,13 @@ function buildComplex(spec) {
       sy0 = Math.min(sy0, p[1]); sy1 = Math.max(sy1, p[1]);
     }
     const PAD = Math.max(6000, (sx1 - sx0) * 0.12);
+    // ★주차를 넣으려면 남쪽에 자리가 있어야 한다 — 구획 5m + 차로 6m + 앞뒤 여백.
+    //   대지를 그만큼 남쪽으로만 넓힌다(사방으로 넓히면 건물이 대지 한가운데 떠 보인다).
+    const PADbot = o.parking === false ? PAD
+      : Math.max(PAD, PARK.d + PARK.aisle + 3000);
     br.ensureLayer('대지', '#b9b2a6');
     const sp = br.addEntity({ type: 'LWPOLYLINE', layer: '대지', closed: true, points: [
-      [Math.round(sx0 - PAD), Math.round(sy0 - PAD)], [Math.round(sx1 + PAD), Math.round(sy0 - PAD)],
+      [Math.round(sx0 - PAD), Math.round(sy0 - PADbot)], [Math.round(sx1 + PAD), Math.round(sy0 - PADbot)],
       [Math.round(sx1 + PAD), Math.round(sy1 + PAD)], [Math.round(sx0 - PAD), Math.round(sy1 + PAD)]] });
     // ★지면은 건물 최하단(기단 밑)보다 아래여야 한다 — 위로 올라오면 바닥판을 뚫는다.
     //   실측: top -200 이 바닥 하단 -250 보다 위라 판이 관통했다. 기단이 드러나도록 -260.
@@ -1104,6 +1113,43 @@ function buildComplex(spec) {
     sp.bim = { kind: 'slab', t: 500, top: -260 };
     sp.mat = 'concrete';
     counts.site = 1;
+  // ── ★주차구획 · 진입 동선 ──
+  // 배치도에 건물과 잔디만 있으면 그건 조감도지 배치도가 아니다. 차가 어디로 들어와서
+  // 어디에 서는지가 배치도의 절반이다.
+  // ★대수 산정(법정 주차대수)은 여기서 하지 않는다 — 지역 조례마다 달라서, 모르는 값을
+  //   그럴듯하게 채우면 도면이 거짓이 된다. 여기서는 '대지에 들어가는 만큼' 그린다.
+  if (o.parking !== false && siteAcc.length) {
+    const X0 = sx0 - PAD, X1 = sx1 + PAD, Y0 = sy0 - PADbot;
+    const M = 1500;                                   // 대지 경계에서 띄우는 여백
+    br.ensureLayer('주차', '#e0dacc'); br.ensureLayer('도로', '#8d9099');
+    const road = (x0, y0, x1, y1) => {
+      const e = br.addEntity({ type: 'LWPOLYLINE', layer: '도로', closed: true, points: [
+        [Math.round(x0), Math.round(y0)], [Math.round(x1), Math.round(y0)],
+        [Math.round(x1), Math.round(y1)], [Math.round(x0), Math.round(y1)]] });
+      // ★포장은 마감 바닥(0)보다 낮고 지면(-260)보다 높다. 두께도 바닥판(150)·대지(500)와
+      //   다르게 둔다 — 회귀가 '지상 바닥판'을 t===150 && top===0 으로 세고 있다.
+      e.bim = { kind: 'slab', t: 100, top: -60 };
+      e.mat = 'concrete';
+      return e;
+    };
+    const yBay0 = Y0 + M, yBay1 = yBay0 + PARK.d;     // 주차구획 띠
+    const yAis1 = yBay1 + PARK.aisle;                 // 차로 띠
+    const xEnt0 = X0 + M, xEnt1 = xEnt0 + PARK.aisle; // 진입로 (대지 밖 도로에서 들어온다)
+    road(xEnt0, Y0, xEnt1, yAis1);                    // 진입로 — 대지 남측 경계를 물고 들어온다
+    road(xEnt0, yBay1, X1 - M, yAis1);                // 차로 — 구획 앞을 지난다
+    // 주차구획 — 차로에 직각으로 댄다. 구획선은 '칠'이라 3D 솔리드로 세우지 않는다(bim 없음).
+    const xb0 = xEnt1 + 1000;
+    const nBay = Math.max(0, Math.floor((X1 - M - xb0) / PARK.w));
+    for (let i2 = 0; i2 < nBay; i2++) {
+      const bx = xb0 + i2 * PARK.w;
+      br.addEntity({ type: 'LWPOLYLINE', layer: '주차', closed: true, points: [
+        [Math.round(bx), Math.round(yBay0)], [Math.round(bx + PARK.w), Math.round(yBay0)],
+        [Math.round(bx + PARK.w), Math.round(yBay1)], [Math.round(bx), Math.round(yBay1)]] });
+      br.addEntity({ type: 'TEXT', layer: '주차', height: 400,
+        x: Math.round(bx + PARK.w / 2 - 200), y: Math.round(yBay0 + 400), text: String(i2 + 1) });
+    }
+    counts.park = nBay;
+  }
   }
   br.refresh();
   return { n, floors: o.floors, H, R: Math.round(R), L, widths: Ws, counts, arrange: o.arrange };

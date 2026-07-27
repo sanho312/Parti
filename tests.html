@@ -4695,6 +4695,59 @@ function tests(){
                 ok(RG.rooms > 0 && RG.corr > 0 && RG.stair > 0,
                   '★링(마당 두르기) 배치도 마찬가지 (실 ' + RG.rooms + ' · 복도 ' + RG.corr + ')');
                 C.state.entities.length = bA;
+                // ── ★주차구획 · 진입 동선 ──
+                // 배치도에 건물과 잔디만 있으면 그건 조감도지 배치도가 아니다.
+                // 차가 어디로 들어와서 어디에 서는지가 배치도의 절반이다.
+                const bK = C.state.entities.length;
+                const runK = (opt) => {
+                  C.state.entities.length = bK;
+                  A.buildComplex(Object.assign({ count: 3, floors: 2, w: 9000, d: 11000,
+                    roof: 'gable', arrange: 'arc', attached: true, glass: false, lean: 0 }, opt));
+                  const es = C.state.entities.slice(bK);
+                  const pa = (pts) => { let a2 = 0;
+                    for (let i0 = 0, j0 = pts.length - 1; i0 < pts.length; j0 = i0++)
+                      a2 += pts[j0][0] * pts[i0][1] - pts[i0][0] * pts[j0][1];
+                    return Math.abs(a2) / 2 / 1e6; };
+                  return { es,
+                    bays: es.filter(e0 => e0.layer === '주차' && e0.type === 'LWPOLYLINE'),
+                    roads: es.filter(e0 => e0.layer === '도로'),
+                    site: es.filter(e0 => e0.layer === '대지')[0],
+                    foot: es.filter(e0 => e0.bim && e0.bim.kind === 'slab' && e0.bim.t === 150
+                      && (e0.bim.top || 0) === 0).reduce((a2, e0) => a2 + pa(e0.points), 0) };
+                };
+                const KP = runK({});
+                ok(KP.bays.length >= 8, '★주차구획 ' + KP.bays.length + '면 (대지에 들어가는 만큼)');
+                const p0 = KP.bays[0].points;
+                eqi(Math.round(Math.abs(p0[1][0] - p0[0][0])), 2500, '★구획 너비 2.5m (주차장법 시행규칙 일반형)');
+                eqi(Math.round(Math.abs(p0[2][1] - p0[1][1])), 5000, '★구획 길이 5.0m');
+                eqi(KP.roads.length, 2, '★차로 + 진입로');
+                // 차로 폭 6.0m — 직각주차는 이보다 좁으면 차가 못 돈다
+                const aisle = KP.roads.map(e0 => C.entsBBox([e0]))
+                  .sort((a2, b2) => b2.w - a2.w)[0];
+                eqi(Math.round(aisle.h), 6000, '★차로 폭 6.0m (직각주차 기준)');
+                // ★포장이 '지상 바닥판'으로 세어지면 건축면적이 통째로 틀어진다
+                const K0 = runK({ parking: false });
+                eqi(KP.foot.toFixed(2), K0.foot.toFixed(2),
+                  '★주차 포장은 건축면적에 안 들어간다 (' + KP.foot.toFixed(1) + '㎡ 그대로)');
+                eqi(K0.bays.length, 0, '  "주차 없이" 면 그리지 않는다');
+                // 대지 — 주차 자리만큼 남쪽으로 넓어진다
+                const sbP = C.entsBBox([KP.site]), sb0 = C.entsBBox([K0.site]);
+                ok(sbP.h > sb0.h + 5000, '★주차를 넣으면 대지가 남쪽으로 넓어진다 ('
+                  + Math.round(sb0.h / 1000) + 'm → ' + Math.round(sbP.h / 1000) + 'm)');
+                eqi(Math.round(sbP.w), Math.round(sb0.w), '  동서 폭은 그대로 (사방으로 넓히지 않는다)');
+                // ★진입로는 대지 경계를 물어야 한다 — 도로에서 들어오지 못하면 주차장이 아니다
+                const ent = KP.roads.map(e0 => C.entsBBox([e0])).sort((a2, b2) => a2.y0 - b2.y0)[0];
+                ok(Math.abs(ent.y0 - sbP.y0) < 1, '★진입로가 대지 남측 경계에 닿는다 (도로에서 들어온다)');
+                // ★주차가 건물을 침범하면 안 된다
+                const bldg = C.entsBBox(KP.es.filter(e0 => e0.bim && e0.bim.kind === 'wall'));
+                const kb = C.entsBBox(KP.bays);
+                ok(kb.y1 < bldg.y0, '★주차구획이 건물 앞에 놓인다 (건물을 파고들지 않는다)');
+                ok(kb.x0 > sbP.x0 && kb.x1 < sbP.x1, '  구획이 대지 안에 들어간다');
+                // 일렬 배치도 지면이 깔린다 — 예전엔 부채꼴에서만 깔렸다
+                const KR = runK({ arrange: 'row', attached: false });
+                ok(!!KR.site, '★일렬 배치에도 대지가 깔린다 (예전엔 건물이 허공에 떠 있었다)');
+                ok(KR.bays.length > 0, '  주차도 함께');
+                C.state.entities.length = bK;
                 // ── ★층마다 다른 평면 ──
                 // 1층과 윗층이 같은 건물은 실제로 드물다(1층 상가·필로티, 윗층 주거).
                 // ★구획기는 층을 모르고 '한 판'만 만든다 — 구성이 같은 연속 층을 묶어
