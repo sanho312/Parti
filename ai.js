@@ -1146,6 +1146,15 @@
           if ((cf || 0) >= 0.4 && k) tally[k] = (tally[k] || 0) + 1;
         });
         const kindTxt = Object.keys(tally).map(k => (KO[k] || k) + ' ' + tally[k]).join('·');
+        // 판독한 재료 — 채색한 면만 나온다(안 칠한 면은 종이색과 구분할 수 없어 기본값으로 둔다)
+        const MKO = { brick: '벽돌', wood: '목재', concrete: '콘크리트', metal: '금속',
+          glass: '유리', grass: '잔디' };
+        const mTally = {};
+        (spec.massList || []).forEach(m => {
+          if (m && m.mat && (m.matConf || 0) >= 0.3) mTally[m.mat] = (mTally[m.mat] || 0) + 1;
+        });
+        const matTxt = Object.keys(mTally)
+          .map(k => (MKO[k] || k) + ' ' + mTally[k] + '동').join('·');
         const r = window.PARTI_ARCH.buildComplex(spec);
         if (!r) continue;
         cpxN++; lastConcept = spec;
@@ -1158,6 +1167,7 @@
           + (c.depthRatio ? ` · 측면 음영으로 잰 깊이 ${(spec.d / 1000).toFixed(1)}m` : '')
           + (winN ? ` · 그림에서 창 ${winN}개 자리 그대로` : '')
           + (kindTxt ? ` · 종류 ${kindTxt}` : '')
+          + (matTxt ? ` · 재료 ${matTxt}` : '')
           + `, 동 폭 ${r.widths.map(v => (v / 1000).toFixed(0)).join('/')}m)`);
       }
       let builtFromPlan = null;

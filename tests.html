@@ -3873,6 +3873,53 @@ function tests(){
                   C.state.entities.length = bD;
                 });
               }).then(() => {
+                // ── ★재료·색 판독 ──
+                // Parti 는 이미 재질 프리셋 15종을 갖고 있고 e.mat 을 달면 3D 색이 따라간다.
+                // 판독은 '앞면의 대표색 → 프리셋 계열' 문제다.
+                // ★핵심 게이트 — '안 칠한 종이'와 '흰 벽'은 그림에서 같은 색이다.
+                //   구분할 수 없으므로 종이색과 가까운 면은 재료를 내지 않는다.
+                const mkM = (cols) => {
+                  const cv = AD.createElement('canvas'); cv.width = 760; cv.height = 460;
+                  const g = cv.getContext('2d');
+                  g.fillStyle = '#f4efe6'; g.fillRect(0, 0, 760, 460);
+                  const bY = 360, x0 = 70, mw = 200, eh = 170, rz = 55;
+                  cols.forEach((c9, i9) => {
+                    const a9 = x0 + i9 * mw, b9 = a9 + mw;
+                    const path = () => { g.beginPath(); g.moveTo(a9, bY); g.lineTo(a9, bY - eh);
+                      g.lineTo((a9 + b9) / 2, bY - eh - rz); g.lineTo(b9, bY - eh);
+                      g.lineTo(b9, bY); g.closePath(); };
+                    if (c9) { g.fillStyle = c9; path(); g.fill(); }
+                    g.strokeStyle = '#2b2b29'; g.lineWidth = 2; path(); g.stroke();
+                    g.fillStyle = '#fdfbf6';
+                    g.fillRect(a9 + 40, bY - 110, 45, 40); g.fillRect(a9 + 115, bY - 110, 45, 40);
+                    g.strokeRect(a9 + 40, bY - 110, 45, 40); g.strokeRect(a9 + 115, bY - 110, 45, 40);
+                  });
+                  return cv.toDataURL('image/png');
+                };
+                return VZ.traceConcept(mkM(['#a8503a', '#9d9c99', '#b8813f']), { maxSide: 760 })
+                  .then(rm => {
+                    const got = (rm.massList || []).map(m9 => m9.mat);
+                    eqi(got.join(','), 'brick,concrete,wood',
+                      '★재료 판독 — 벽돌·콘크리트·목재를 색으로 가린다');
+                    ok((rm.massList || []).every(m9 => (m9.matConf || 0) >= 0.3),
+                      '  확신도도 함께 (' + (rm.massList || []).map(m9 => m9.matConf).join('/') + ')');
+                    // 생성까지 — 벽 색이 재료를 따라가는가
+                    const bM = C.state.entities.length;
+                    A.buildComplex({ count: rm.masses, floors: 1, w: 8000, d: 10000,
+                      roof: rm.roof, arrange: 'arc', attached: true, glass: false, lean: 0,
+                      massList: rm.massList });
+                    const hx = C.state.entities.slice(bM)
+                      .filter(e9 => e9.bim && e9.bim.kind === 'wall').map(e9 => C.matHex(e9));
+                    ok(hx.indexOf(C.MAT_PRESETS.brick.color) >= 0
+                      && hx.indexOf(C.MAT_PRESETS.wood.color) >= 0,
+                      '★생성된 벽 색이 판독한 재료를 따라간다 (3D 에서 바로 보인다)');
+                    C.state.entities.length = bM;
+                    return VZ.traceConcept(mkM([null, null, null]), { maxSide: 760 });
+                  }).then(rb => {
+                    ok((rb.massList || []).every(m9 => !m9.mat),
+                      '★안 칠한 그림에는 재료를 내지 않는다 — 흰 벽과 종이는 구분할 수 없다');
+                  });
+              }).then(() => {
                 // ★라우팅 근거 지표 — 전역 임계값 추측이 실물에서 두 번 뒤집힌 뒤 도입한 증거들.
                 //   도면은 무채색·축정렬·이중선, 손그림은 사선 지배 → 이 표가 오판을 막는다.
                 return VZ.traceImage(cv2.toDataURL('image/png'), { widthMM: 8000 }).then(rp => {

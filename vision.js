@@ -1071,6 +1071,83 @@ async function traceConcept(src, opts) {
     // 픽셀 좌표 그대로 돌려준다 — 정규화(기울기 되돌리기 포함)는 호출부 한 곳에서 한다.
     return merged;
   };
+  // ── ★면의 재료 판독 ──
+  // Parti 는 이미 재질 프리셋 15종(벽돌·목재·콘크리트·회벽·금속·유리…)을 갖고 있고,
+  // 엔티티에 e.mat 을 달면 3D 색이 즉시 그 재질을 따라간다. 판독은 '앞면의 대표색'을
+  // 프리셋 계열로 되돌리는 문제가 된다.
+  // ★핵심 게이트 — '칠하지 않은 종이'와 '흰 벽'은 그림에서 같은 색이다. 구분할 수 없으므로
+  //   종이색과 가까운 면은 재료를 내지 않는다(회벽은 원리적으로 판독 불가 — 기본값으로 둔다).
+  //   창 종류 때와 같은 원칙이다: 안 그린 것을 읽은 것처럼 내보내면 거짓말이 된다.
+  const rgb2hsl = (r2, g2, b2) => {
+    r2 /= 255; g2 /= 255; b2 /= 255;
+    const mx = Math.max(r2, g2, b2), mn = Math.min(r2, g2, b2), L2 = (mx + mn) / 2;
+    let S2 = 0, H2 = 0;
+    if (mx !== mn) {
+      const dd = mx - mn;
+      S2 = L2 > 0.5 ? dd / (2 - mx - mn) : dd / (mx + mn);
+      H2 = mx === r2 ? ((g2 - b2) / dd + (g2 < b2 ? 6 : 0)) : mx === g2 ? ((b2 - r2) / dd + 2) : ((r2 - g2) / dd + 4);
+      H2 *= 60;
+    }
+    return [H2, S2 * 100, L2 * 100];
+  };
+  // 종이색 — 건물 밖(실루엣 위쪽 하늘 자리)의 대표색. 채색 여부의 기준자다.
+  const paperHSL = (() => {
+    const hs = [], ss = [], ls = [];
+    for (let x = xa; x <= xb; x += 2) {
+      const topY = Math.max(0, Math.round(baseY - prof[x]) - 6);
+      for (let y = Math.max(by0, topY - 30); y < topY; y += 2) {
+        const p2 = y * w + x;
+        if (bldg[p2] || greenA[p2]) continue;
+        const i2 = p2 * 4;
+        const v = rgb2hsl(d[i2], d[i2 + 1], d[i2 + 2]);
+        hs.push(v[0]); ss.push(v[1]); ls.push(v[2]);
+      }
+    }
+    const med = (a) => { if (!a.length) return null; a.sort((p2, q2) => p2 - q2); return a[a.length >> 1]; };
+    return hs.length >= 40 ? [med(hs), med(ss), med(ls)] : null;
+  })();
+  // 색상 계열 → 재질 프리셋. ★순서가 중요하다 — 금속은 '차가운 회색'이라 무채색 분기가
+  //   먼저 걸리면 회벽이 된다(실측). 겹치는 프리셋(콘크리트↔석재, 금속↔스테인리스,
+  //   회벽↔페인트↔대리석)은 대표 하나로 합친다 — 색만으로는 원리적으로 못 가른다.
+  const matOfHSL = (H2, S2, L2) => {
+    if (H2 >= 175 && H2 <= 255) {
+      if (S2 >= 25 && L2 >= 60) return 'glass';
+      if (S2 >= 4) return 'metal';
+    }
+    if (S2 < 12) return L2 >= 74 ? null : 'concrete';    // 밝은 무채색 = 종이와 구분 불가
+    if (H2 < 22 && S2 >= 25) return 'brick';
+    if (H2 >= 22 && H2 <= 50) return S2 >= 32 ? 'wood' : (L2 >= 70 ? null : 'concrete');
+    if (H2 > 60 && H2 < 170 && S2 >= 20) return 'grass';
+    return null;
+  };
+  const faceMat = (x0, x1, eh) => {
+    if (!paperHSL) return null;
+    const y0 = Math.max(0, Math.round(baseY - eh)), y1 = Math.min(h - 1, Math.round(baseY));
+    const hs = [], ss = [], ls = [];
+    for (let x = Math.max(0, x0); x <= Math.min(w - 1, x1); x++) {
+      const top = Math.max(y0, Math.round(baseY - prof[x]));
+      for (let y = top; y <= y1; y++) {
+        const p2 = y * w + x;
+        const i2 = p2 * 4;
+        const v = rgb2hsl(d[i2], d[i2 + 1], d[i2 + 2]);
+        if (v[2] < 22 || v[2] > 96) continue;            // 잉크·창(흰 구멍) 제외
+        hs.push(v[0]); ss.push(v[1]); ls.push(v[2]);
+      }
+    }
+    if (hs.length < 300) return null;
+    const med = (a) => { a.sort((p2, q2) => p2 - q2); return a[a.length >> 1]; };
+    const H2 = med(hs), S2 = med(ss), L2 = med(ls);
+    // 종이와 얼마나 다른가 — 가까우면 '안 칠했다'로 본다
+    const dh = Math.min(Math.abs(H2 - paperHSL[0]), 360 - Math.abs(H2 - paperHSL[0])) / 180;
+    const dist = Math.hypot(dh * 100 * (Math.min(S2, paperHSL[1]) / 40), S2 - paperHSL[1], L2 - paperHSL[2]);
+    if (dist < 14) return null;                          // 종이와 사실상 같은 색
+    const k = matOfHSL(H2, S2, L2);
+    if (!k) return null;
+    // 확신도 — 종이에서 멀수록, 채도가 뚜렷할수록 믿는다
+    const conf = Math.max(0.3, Math.min(0.9, dist / 60 + Math.min(S2, 50) / 120));
+    return { mat: k, conf: +conf.toFixed(2), hsl: [Math.round(H2), Math.round(S2), Math.round(L2)] };
+  };
+
   // ── ★칸 배열·개폐 표시 → 창 종류 ──
   // 값은 cad.js 의 OPENING_TYPES.window 카탈로그를 그대로 쓴다
   // (fix 붙박이 · wswing 여닫이 · wslide 미서기 · hung 오르내리 · shutter · mesh).
@@ -1138,6 +1215,9 @@ async function traceConcept(src, opts) {
     const vOk = vly.filter(v2 => v2 > hLoc * 0.35);
     const eh = vOk.length ? Math.min.apply(null, vOk) : Math.max(e0, e1);
     if (eh < 10) continue;
+    // 재료는 기본 공간(색)에서 읽는다 — 색은 해상도를 타지 않는다.
+    const fm = faceMat(Math.round(x0 / WK), Math.round(x1 / WK), eh / WK);
+    if (fm) { massList[i].mat = fm.mat; massList[i].matConf = fm.conf; massList[i].matHSL = fm.hsl; }
     const ws = winsOf(x0, x1, eh);
     if (!ws) continue;
     // ── 밑변 좌표계로 옮겨 정규화 ──

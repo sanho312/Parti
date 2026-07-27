@@ -275,6 +275,7 @@ function buildComplex(spec) {
   const br = B(); if (!br) return null;
   const o = Object.assign({ count: 5, floors: 1, w: 8000, d: 12000, floorH: STD.ceil + 600,
     arrange: 'arc', roof: 'gable', glass: true, courtyardR: 0, massList: null, attached: true, lean: 0, depths: null,
+    mat: null,
     ox: 0, oy: 0 }, spec || {});
   const n = Math.max(1, Math.min(12, Math.round(o.count)));
   const H = o.floors * o.floorH;
@@ -323,11 +324,15 @@ function buildComplex(spec) {
   const gap = o.attached ? 0 : Math.round(o.w * 0.45);
   const L = Ws.reduce((a, v) => a + v, 0) + gap * (n - 1);   // 늘어선 전체 길이
 
+  // 판독한 재료를 담아 둘 자리 — 동마다 다를 수 있으므로 벽을 만들 때 실어 준다.
+  // ★재질은 e.mat 에 붙는다(bim.mat 아님). 붙는 즉시 3D 색이 그 재질을 따라간다.
+  let curMat = null;
   const wall = (p, q, t2, h2, sh2) => {
     const e = br.addEntity({ type: 'LINE', layer: '벽',
       x1: Math.round(p[0]), y1: Math.round(p[1]), x2: Math.round(q[0]), y2: Math.round(q[1]) });
     e.bim = { kind: 'wall', h: h2 || H, t: t2 || STD.wallExt, base: 0 };
     if (sh2) e.bim.shear = sh2;          // 기울어진 벽 — 개구부도 이 면 위에 함께 기운다
+    if (curMat) e.mat = curMat;
     counts.wall++;
     return e;
   };
@@ -496,6 +501,7 @@ function buildComplex(spec) {
       const Hi = Hs[i];                       // 이 동의 처마 높이 (동마다 다르다)
       // ★스케치에서 읽은 기울기를 그대로 세운다 — 지붕 볼륨의 윗면을 접선 방향으로 민다.
       //   (실루엣의 좌·우 경계 기울기를 vision 이 재서 lean 으로 넘겨준다)
+      curMat = (ml && ml[i] && ml[i].mat) || o.mat || null;   // 이 동의 재료
       const lnI = (ml && ml[i] && ml[i].lean != null) ? ml[i].lean : o.lean;
       const tvec = [-(Math.sin((aL + aR) / 2)), Math.cos((aL + aR) / 2)];   // 접선(폭 방향)
       const shr = Math.abs(lnI) > 0.05 ? [tvec[0] * lnI * rise, tvec[1] * lnI * rise] : null;
