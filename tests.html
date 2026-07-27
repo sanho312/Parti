@@ -4341,6 +4341,44 @@ function tests(){
                 eqi(pf.map(p => p.no + ' ' + p.name).join(' | '),
                   'A-101 1층 평면도 | A-102 2층 평면도 | A-103 3층 평면도 | A-104 지붕 평면도',
                   '★평면은 장당 하나 — 번호와 이름이 층을 그대로 따른다');
+                // ── ★기준층 묶기 ──
+                // 똑같은 평면을 층수만큼 그리는 도면집은 없다. 12층이면 평면이 13장 나온다.
+                // ★다른 층은 반드시 따로 남아야 한다 — 최상층은 올라갈 계단이 없고
+                //   1층은 지면·현관이 있어서 실제로 다르다. 그래서 3층까지는 묶이지 않는다.
+                const bT = C.state.entities.length;
+                A.buildComplex({ count: 2, floors: 5, w: 9000, d: 11000, roof: 'gable',
+                  arrange: 'arc', attached: true, glass: false, lean: 0 });
+                const f5 = C.state.entities.slice(bT);
+                const mg = C.planFloorSplit(f5);
+                eqi(mg.map(v => v.name).join(' | '),
+                  '1층 평면도 | 2~4층 기준층 평면도 | 5층 평면도 | 지붕 평면도',
+                  '★5층 건물 → 평면 6장이 4장으로 (2~4층은 같다)');
+                eqi(C.planFloorSplit(f5, { typical: false }).length, 6,
+                  '  "기준층없이" 면 층마다 한 장 그대로');
+                // ★묶은 장에 도형이 세 벌 얹히면 안 된다 — 같은 선이 겹쳐 두꺼워진다
+                const only2 = C.planFloorSplit(f5, { typical: false })
+                  .find(v => v.name === '2층 평면도');
+                eqi(mg[1].ents.length, only2.ents.length,
+                  '★묶어도 도형은 한 벌뿐 (' + mg[1].ents.length + '개 — 세 벌이면 ' + (only2.ents.length * 3) + ')');
+                const rm2 = mg[1].ents.filter(e0 => e0.bim && e0.bim.kind === 'room');
+                ok(rm2.length > 0 && rm2.every(x => x.bim.floor === 2),
+                  '  실도 맨 아래 층 것 한 벌');
+                const lb2 = mg[1].ents.filter(e0 => e0.layer === '문자' && /^\d{3} /.test(e0.text || ''));
+                ok(lb2.length > 0 && lb2.every(t2 => t2.text.charAt(0) === '2'),
+                  '★기준층 이름표는 맨 아래 층 번호로 (2xx — 기준층 표기 관례)');
+                C.state.entities.length = bT;
+                // 3층은 묶이지 않는다 — 2층엔 올라갈 계단이 있고 3층엔 없다(진짜 다르다)
+                A.buildComplex({ count: 2, floors: 3, w: 9000, d: 11000, roof: 'gable',
+                  arrange: 'arc', attached: true, glass: false, lean: 0 });
+                const m3 = C.planFloorSplit(C.state.entities.slice(bT));
+                ok(!m3.some(v => /기준층/.test(v.name)),
+                  '★3층은 묶지 않는다 (2층엔 올라갈 계단, 3층엔 없다 — 진짜 다른 평면이다)');
+                C.state.entities.length = bT;
+                // 번호 — 묶인 장도 평면 계열 번호를 그대로 이어 간다
+                const pt = C.sheetPlan(mg.map(v => ({ name: v.name, kind: 'plan', ents: [] })), {});
+                eqi(pt.map(p => p.no + ' ' + p.name).join(' | '),
+                  'A-101 1층 평면도 | A-102 2~4층 기준층 평면도 | A-103 5층 평면도 | A-104 지붕 평면도',
+                  '★번호는 그대로 이어진다 (A-101 … A-104)');
                 // ── ★층별로 보기 (화면) ──
                 // 도면집을 층으로 갈랐으니 작업 화면도 같은 기준으로 갈라야 한다.
                 // ★e.lv(작도 층)로는 안 된다 — 그건 '그린 시점'의 층이라 생성물은 전부 0층이다.

@@ -3115,7 +3115,8 @@ function planFloorTag(ents) {
 // ★평면 한 장에 모든 층이 겹쳐 있었다. 3층이면 벽·개구부·실이 세 겹으로 포개져 있고
 //   (실측: 실 42개 = 14개 × 3층, 개구부 36개 = 12개 × 3층) 도면에서는 어느 것이 몇 층인지
 //   알 수가 없다. 실제 도면집은 층마다 한 장이다.
-function planFloorSplit(ents) {
+function planFloorSplit(ents, opt) {
+  const o = Object.assign({ typical: true }, opt || {});
   const T = planFloorTag(ents);
   if (!T.fh) return [];                        // 층을 가를 근거가 없으면 가르지 않는다
   const rs = ents.filter(e => e.bim && e.bim.kind === 'room' && e.points);
@@ -3133,11 +3134,40 @@ function planFloorSplit(ents) {
     ];
   };
   const tag = T.tag, out = [];
+  // ── 기준층 묶기 ──
+  // ★똑같은 평면을 층수만큼 그리는 도면집은 없다. 내용이 같은 연속 층은 '2~4층 기준층
+  //   평면도' 한 장으로 묶는다. 다른 층은 반드시 따로 남는다 — 최상층은 올라갈 계단이
+  //   없고 1층은 지면·현관이 있어서 실제로 다르다.
+  // 서명은 층에 따라 달라지는 값(높이·실번호)을 빼고 '기하와 종류'로만 만든다.
+  const sigOf = (e) => {
+    const b = e.bim || {};
+    const g = e.type === 'LINE' ? [e.x1, e.y1, e.x2, e.y2]
+      : e.points ? [].concat.apply([], e.points)
+      : (e.type === 'CIRCLE' || e.type === 'ARC') ? [e.cx, e.cy, e.r]
+      : e.type === 'TEXT' ? [e.x, e.y] : [];
+    return (b.kind || '-') + '|' + e.layer + '|' + (b.ot || '') + (b.wt || '') + '|'
+      + (b.name || '') + '|' + g.map(v => Math.round(v)).join(',');
+  };
+  const sig = [];
+  for (let f = 1; f <= T.maxF; f++)
+    sig[f] = ents.filter((e, i) => tag[i] === f && !(e.bim && e.bim.kind === 'label'))
+      .map(sigOf).sort().join(';');
+  const groups = [];
   for (let f = 1; f <= T.maxF; f++) {
-    const es = ents.filter((e, i) => tag[i] === f || tag[i] === 0);
+    const g = groups[groups.length - 1];
+    if (o.typical && g && sig[f] && sig[f] === sig[g.from]) g.to = f;
+    else groups.push({ from: f, to: f });
+  }
+  for (const g of groups) {
+    // ★묶은 장에도 도형은 '맨 아래 층 것' 한 벌만 얹는다. 층수만큼 겹쳐 그리면
+    //   같은 선이 여러 번 그려져 두꺼워지고 요소 수만 늘어난다.
+    const es = ents.filter((e, i) => tag[i] === g.from || tag[i] === 0);
     if (!es.length) continue;
-    const lab = f === 1 ? [] : rs.filter(r => r.bim.floor === f).flatMap(labelOf);
-    out.push({ name: f + '층 평면도', ents: es.concat(lab), kind: 'plan', floor: f });
+    // 이름표는 맨 아래 층 번호로 단다(기준층 표기 관례)
+    const lab = g.from === 1 ? [] : rs.filter(r => r.bim.floor === g.from).flatMap(labelOf);
+    out.push({ ents: es.concat(lab), kind: 'plan', floor: g.from,
+      name: g.from === g.to ? g.from + '층 평면도'
+        : g.from + '~' + g.to + '층 기준층 평면도' });
   }
   if (tag.some(t => t === -1))
     out.push({ name: '지붕 평면도', kind: 'plan', floor: -1,
@@ -3219,7 +3249,7 @@ function cmdFloorView(arg) {
 // 시트에 올릴 뷰 모으기 — 현재 도면(평면·표) + 이미 만들어 둔 단면/입면 탭
 // ★표는 표마다 따로 뽑는다(drawTable 이 달아 둔 tbl 이름표로). 면적표와 창호일람표는
 //   도면 체계에서 자리가 다르다 — 하나로 뭉치면 세트를 나눌 수가 없다.
-function sheetSources() {
+function sheetSources(shOpt) {
   docs[curDoc] = captureDoc();
   const out = [];
   // ★이미 만든 시트는 원본이 아니다. 세트를 두 번 돌리면 'A-301 단면도' 시트가
@@ -3240,7 +3270,7 @@ function sheetSources() {
     if (i === base) {
       const plan = ents.filter(e => e.layer !== '일람표');
       if (plan.length) {
-        const fv = planFloorSplit(plan);       // 여러 층이면 층마다 한 장
+        const fv = planFloorSplit(plan, shOpt);   // 여러 층이면 층마다 한 장(같은 층은 묶어서)
         if (fv.length) out.push(...fv); else out.push({ name: '평면도', ents: plan, kind: 'plan' });
       }
       const tbl = ents.filter(e => e.layer === '일람표');
@@ -3418,7 +3448,7 @@ function sheetIndexDraw(list, opt) {
 }
 function sheetBuild(opt) {
   const o = Object.assign({ size: 'A1' }, opt || {});
-  const srcs = sheetSources();
+  const srcs = sheetSources(o);
   if (!srcs.length) return null;
   newDocTab();
   setFileName('도면-' + o.size);
@@ -3426,8 +3456,9 @@ function sheetBuild(opt) {
 }
 // 세트 — 종류마다 장을 따로 내고 번호를 붙인다. 장마다 새 탭이고, 첫 장은 도면목록이다.
 function sheetSetBuild(opt) {
-  const o = Object.assign({ size: 'A2', title: null, scale: 0, perSheet: 2, index: true }, opt || {});
-  const srcs = sheetSources();
+  const o = Object.assign({ size: 'A2', title: null, scale: 0, perSheet: 2, index: true,
+    typical: true }, opt || {});
+  const srcs = sheetSources(o);
   if (!srcs.length) return null;
   const pages = sheetPlan(srcs, o);
   // ★축척을 먼저 계산해 둔다 — 목록표(첫 장)에 각 장의 축척을 적어야 하는데,
@@ -3479,7 +3510,8 @@ function cmdSheetSet(arg) {
   const per = (a.match(/(\d)\s*(?:뷰|장당|per)/) || [])[1];
   const home = curDoc;
   const r = sheetSetBuild({ size: size ? size.toUpperCase() : 'A2', scale: sc ? +sc : 0,
-    perSheet: per ? +per : 2, index: !/목록\s*없|noindex/i.test(a) });
+    perSheet: per ? +per : 2, index: !/목록\s*없|noindex/i.test(a),
+    typical: !/층별로|기준층\s*없|notypical/i.test(a) });
   if (!r) { switchDoc(home); logLine('  묶을 도면이 없습니다 — 평면이나 단면을 먼저 만들어 주세요.', 'info'); return; }
   for (const s of r.sheets)
     logLine('  ' + s.no + '  ' + s.name + '   축척 1:' + s.denom + ' · 뷰 ' + s.views, 'info');
