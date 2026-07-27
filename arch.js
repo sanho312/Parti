@@ -381,6 +381,74 @@ function buildComplex(spec) {
     }
   };
 
+  // ── ★스케치에서 읽은 창 위치 그대로 뚫기 ──
+  // 균일 격자는 '창이 있다'는 것만 표현할 뿐, 그림의 리듬(가운데만 크게, 위층만 띠창 등)을
+  // 버린다. 판독기가 창 사각형을 잡아냈으면 그 자리·그 크기로 뚫는다.
+  // 겹치는 개구부는 벽을 두 번 자르므로 뒤에 오는 쪽을 버린다.
+  const sketchWins = (FL, FR, wins, Hc, isEntry) => {
+    const chord = Math.hypot(FR[0] - FL[0], FR[1] - FL[1]);
+    const M = PARTY / 2 + 250;                       // 측벽 침범 방지 여유
+    if (chord - M * 2 < 800) return false;
+    const ux = (FR[0] - FL[0]) / chord, uy = (FR[1] - FL[1]) / chord;
+    const Ht = Hc || H;
+    // ── 출입문 ──
+    // ★'가장 낮은 창'을 문으로 승격하면 안 된다. 허리 높이 창(v 0.3)이 문이 되면서 문턱이
+    //   바닥까지 내려와 2.1m 를 차지하고, 그 자리의 진짜 창들이 겹침으로 버려졌다(7개 중 2개 소실).
+    //   문은 '밑변에 닿아 있는 개구부'만이다 — 아래끝이 처마높이의 20% 안쪽에 있어야 한다.
+    let dIdx = -1, best = 1e9;
+    if (isEntry) {
+      wins.forEach((q, k) => {
+        // 처마높이의 8% (약 30cm) 안쪽까지 내려온 것만 문. 0.20 으로 뒀더니 허리창(밑끝 0.185)이
+        // 문이 되어 2.1m 를 차지하고, 그 위 큰 창을 겹침으로 삼켰다(3개 중 2개 소실).
+        if (q.v - q.hFrac / 2 > 0.08) return;
+        const sc = Math.abs(q.u - 0.5);
+        if (sc < best) { best = sc; dIdx = k; }
+      });
+    }
+    const placed = [];
+    let made = 0;
+    wins.forEach((q, k) => {
+      const cw = Math.max(700, Math.min(chord - M * 2, q.wFrac * chord));
+      const s = Math.max(M + cw / 2, Math.min(chord - M - cw / 2, q.u * chord));
+      const isDoor = k === dIdx;
+      const wh = isDoor ? 2100 : Math.max(600, Math.min(Ht * 0.8, q.hFrac * Ht));
+      const sill = isDoor ? 0
+        : Math.max(150, Math.min(Math.max(150, Ht - wh - 150), Math.round(q.v * Ht - wh / 2)));
+      // 같은 높이대에서 가로로 겹치면 버린다 (벽을 두 번 자르면 개구부가 깨진다)
+      if (placed.some(p => Math.abs(p.s - s) < (p.cw + cw) / 2 + 120 &&
+                           sill < p.sill + p.wh + 120 && p.sill < sill + wh + 120)) return;
+      placed.push({ s, cw, sill, wh });
+      const P1 = [FL[0] + ux * (s - cw / 2), FL[1] + uy * (s - cw / 2)];
+      const P2 = [FL[0] + ux * (s + cw / 2), FL[1] + uy * (s + cw / 2)];
+      const e = br.addEntity({ type: 'LINE', layer: '개구부',
+        x1: Math.round(P1[0]), y1: Math.round(P1[1]), x2: Math.round(P2[0]), y2: Math.round(P2[1]) });
+      if (isDoor) { e.bim = { kind: 'opening', ot: 'door', wt: 'single', h: 2100, sill: 0, t: STD.wallExt }; counts.door++; }
+      else { e.bim = { kind: 'opening', ot: 'window', wt: 'fix', h: Math.round(wh), sill, t: STD.wallExt }; counts.window++; }
+      made++;
+    });
+    // 바닥에 닿은 개구부가 하나도 없으면 현관이 없는 건물이 된다 — 빈 자리에 문을 하나 넣는다.
+    if (isEntry && dIdx < 0) {
+      const DW = Math.min(1200, chord - M * 2);
+      // 배치된 개구부들 사이에서 가장 넓은 빈 구간의 한가운데
+      const occ = placed.filter(p => p.sill < 2100).map(p => [p.s - p.cw / 2, p.s + p.cw / 2])
+        .sort((a, b) => a[0] - b[0]);
+      let cur = M, bs = M + DW / 2, bg = -1;
+      for (const [q0, q1] of occ.concat([[chord - M, chord - M]])) {
+        if (q0 - cur > bg) { bg = q0 - cur; bs = (cur + q0) / 2; }
+        cur = Math.max(cur, q1);
+      }
+      if (bg >= DW) {
+        const P1 = [FL[0] + ux * (bs - DW / 2), FL[1] + uy * (bs - DW / 2)];
+        const P2 = [FL[0] + ux * (bs + DW / 2), FL[1] + uy * (bs + DW / 2)];
+        const e = br.addEntity({ type: 'LINE', layer: '개구부',
+          x1: Math.round(P1[0]), y1: Math.round(P1[1]), x2: Math.round(P2[0]), y2: Math.round(P2[1]) });
+        e.bim = { kind: 'opening', ot: 'door', wt: 'single', h: 2100, sill: 0, t: STD.wallExt };
+        counts.door++; made++;
+      }
+    }
+    return made > 0;
+  };
+
   let R = 0, courtC = [o.ox, o.oy], entryFront = null;
 
   if (o.arrange === 'arc') {
@@ -451,7 +519,11 @@ function buildComplex(spec) {
         poly([OS2(PT(aL, r0)), OS2(PT(aR, r0)), OS2(PT(aR, r0 + 240)), OS2(PT(aL, r0 + 240))], o.glass ? '유리' : '벽', prof);
         poly([OS2(PT(aL, r1i - 240)), OS2(PT(aR, r1i - 240)), OS2(PT(aR, r1i)), OS2(PT(aL, r1i))], '벽', prof);
       }
-      if (o.glass) { curtain(FL, FR, i === mid, Hi); if (i === mid) entryFront = [FL, FR]; }
+      // 그림에서 읽은 창이 있으면 그 자리에, 없으면 기존 커튼월 규칙.
+      const wlist = (ml && ml[i] && ml[i].wins) || null;
+      const drew = (wlist && wlist.length) ? sketchWins(FL, FR, wlist, Hi, i === mid) : false;
+      if (!drew && o.glass) curtain(FL, FR, i === mid, Hi);
+      if (i === mid && (drew || o.glass)) entryFront = [FL, FR];
       // 처마돌림(fascia) — 처마 끝을 마감하는 띠. 얇은 벽으로 표현하면 3D 에서 지붕 가장자리가
       // '두께 있는 면'으로 보여 종잇장 같지 않다. 앞/뒤 처마선에만.
       const sgn2 = aL >= aR ? 1 : -1;

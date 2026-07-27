@@ -528,7 +528,20 @@ async function traceConcept(src, opts) {
   // ── 유리면 군집으로 동 수 보정 ──
   // ★투시에서 겹친 동은 지붕 봉우리가 실루엣에 묻혀 하나 덜 세어진다(실사용: 5동→4동).
   //   유리 전면은 동마다 뚜렷한 파란 군집을 만드니, 군집이 더 많으면 그쪽을 믿는다.
-  const blueBands = bandsOf(colBlue, 0.22).filter(b2 => b2[1] - b2[0] >= w * 0.025);
+  // ★'전면 유리'만 동의 근거가 된다. 파랗게 칠한 '창'까지 동으로 세면 창 2개짜리 3동이
+  //   5동이 된다(창 위치 판독을 붙이고 실측).
+  //   ★가르는 기준은 폭이 아니라 '높이'다 — 폭으로 걸렀더니 붙어 있는 평지붕 상자 4동이
+  //     한 덩어리(peaks 1개)로 잡혀 문턱이 실루엣 전체 폭 기준이 되고, 멀쩡한 유리면 4개가
+  //     통째로 탈락했다(4동 → 1동). 전면 유리는 층 높이를 거의 다 덮고, 창은 일부만 덮는다.
+  const blueBands = bandsOf(colBlue, 0.22).filter(b2 => {
+    if (b2[1] - b2[0] < w * 0.025) return false;
+    let y0b = h, y1b = -1, hLocB = 0;
+    for (let x = Math.max(0, b2[0]); x <= Math.min(w - 1, b2[1]); x++) {
+      if (prof[x] > hLocB) hLocB = prof[x];
+      for (let y = 0; y < h; y++) if (blueA[y * w + x]) { if (y < y0b) y0b = y; if (y > y1b) y1b = y; }
+    }
+    return y1b > y0b && hLocB > 0 && (y1b - y0b) >= hLocB * 0.45;
+  });
   if (blueBands.length > peaks.length && blueBands.length <= 12) {
     bounds = [blueBands[0][0]];
     for (let i = 1; i < blueBands.length; i++) bounds.push(Math.round((blueBands[i - 1][1] + blueBands[i][0]) / 2));
@@ -738,6 +751,192 @@ async function traceConcept(src, opts) {
     dSum += fill; dN++;
   }
   void dSum; void dN;
+
+  // ── ★창 위치 판독 ──
+  // 지금까지 창은 '균일 격자'로 만들었다(비유리 스케치는 아예 0개였다). 그림에 창이
+  // 그려져 있으면 그 자리에 뚫는 게 맞다. 투시 스케치에서 창이 화면에 남기는 자국은 둘이다.
+  //   ① 닫힌 사각형으로 그린 창 → 앞면 흰 바탕 안에 '갇힌 흰 구멍'이 생긴다
+  //   ② 색(파랑)으로 칠한 창   → 파란 덩어리가 생긴다
+  // 둘 다 연결 성분으로 잡고, 앞면 대비 크기·비례로 거른다.
+  // ※전면 통유리는 파란 덩어리가 앞면만큼 커져 자동 탈락한다 → 기존 커튼월 규칙 유지.
+  // ── 밑변 구간 재기 ──
+  // ★바닥선 '위' 행을 훑으면 안 된다 — 거기엔 세로 벽선 몇 개뿐이라 좌우 끝이 같은 점이
+  //   되고 폭이 0 이 된다(실측: 기울인 그림에서 3동 중 2동이 통째로 버려졌다).
+  //   건물 밑단은 그림에 '가로선'으로 그려져 있으므로, 바닥선 근처에서 잉크가 가장 많은
+  //   행을 골라 그 행의 연속 구간을 쓴다. 이 값은 기울기와 무관한 실측값이다.
+  const baseSpan = (a4, b4) => {
+    let bestY = -1, bestN = -1;
+    for (let dy = -2; dy <= 2; dy++) {
+      const y = baseY + dy; if (y < 0 || y >= h) continue;
+      let n = 0;
+      for (let x = a4; x <= b4; x++) if (bldg[y * w + x]) n++;
+      if (n > bestN) { bestN = n; bestY = y; }
+    }
+    if (bestY < 0 || bestN <= 0) return null;
+    let p0 = -1, p1 = -1;
+    for (let x = a4; x <= b4; x++) if (bldg[bestY * w + x]) { if (p0 < 0) p0 = x; p1 = x; }
+    return [p0, p1];
+  };
+  const clB = baseSpan(0, w - 1) || [fa, fb];
+  const winsOf = (x0, x1, eh) => {
+    const wd = x1 - x0 + 1, ht = Math.round(eh);
+    if (wd < 12 || ht < 12) return null;
+    const y0 = Math.max(0, Math.round(baseY - eh)), y1 = Math.min(h - 1, Math.round(baseY));
+    const rw = wd, rh = y1 - y0 + 1;
+    if (rh < 12) return null;
+    // 앞면 안쪽 = 실루엣 내부. 밖은 아예 후보에서 뺀다(하늘의 흰 바탕이 섞이면 전부 망가진다).
+    const inside = new Uint8Array(rw * rh);
+    let faceA = 0;
+    for (let x = x0; x <= x1; x++) {
+      const top = Math.max(y0, Math.round(baseY - prof[x]));
+      for (let y = Math.max(y0, top); y <= y1; y++) { inside[(y - y0) * rw + (x - x0)] = 1; faceA++; }
+    }
+    if (faceA < 200) return null;
+    const st = new Int32Array(rw * rh);
+    // 성분 수집기 — mask 가 1 인 연결 덩어리의 bbox 를 모은다
+    const comps = (mask, dropBorder) => {
+      const seen = new Uint8Array(rw * rh), out = [];
+      for (let p = 0; p < mask.length; p++) {
+        if (!mask[p] || seen[p]) continue;
+        let t = 0, area = 0, bx0 = 1e9, by0 = 1e9, bx1 = -1e9, by1 = -1e9, touch = false;
+        st[t++] = p; seen[p] = 1;
+        while (t) {
+          const q = st[--t], qx = q % rw, qy = (q / rw) | 0;
+          area++;
+          if (qx < bx0) bx0 = qx; if (qx > bx1) bx1 = qx;
+          if (qy < by0) by0 = qy; if (qy > by1) by1 = qy;
+          if (qx === 0 || qx === rw - 1 || qy === 0 || qy === rh - 1) touch = true;
+          if (qx > 0 && mask[q - 1] && !seen[q - 1]) { seen[q - 1] = 1; st[t++] = q - 1; }
+          if (qx < rw - 1 && mask[q + 1] && !seen[q + 1]) { seen[q + 1] = 1; st[t++] = q + 1; }
+          if (qy > 0 && mask[q - rw] && !seen[q - rw]) { seen[q - rw] = 1; st[t++] = q - rw; }
+          if (qy < rh - 1 && mask[q + rw] && !seen[q + rw]) { seen[q + rw] = 1; st[t++] = q + rw; }
+        }
+        if (dropBorder && touch) continue;
+        out.push({ area, bx0, by0, bx1, by1 });
+      }
+      return out;
+    };
+    // ① 갇힌 흰 구멍 — 앞면 안쪽에서 잉크·색이 아닌 곳. 실루엣 경계에 닿는 덩어리(=바탕벽)는 뺀다.
+    const white = new Uint8Array(rw * rh);
+    for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) {
+      const p = (y - y0) * rw + (x - x0);
+      if (inside[p] && !bldg[y * w + x]) white[p] = 1;
+    }
+    // ② 색칠한 창
+    const blue = new Uint8Array(rw * rh);
+    for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) {
+      const p = (y - y0) * rw + (x - x0);
+      if (inside[p] && blueA[y * w + x]) blue[p] = 1;
+    }
+    const cand = comps(white, true).map(c => (c.src = 'hole', c))
+      .concat(comps(blue, false).map(c => (c.src = 'fill', c)));
+    // 거르기 — 앞면 대비 크기, 사각형다움, 비례. 손그림이라 넉넉히 잡되 극단은 버린다.
+    const wins = [];
+    for (const c of cand) {
+      const bw = c.bx1 - c.bx0 + 1, bh = c.by1 - c.by0 + 1;
+      if (bw < 3 || bh < 3) continue;
+      const ar = c.area / faceA;
+      // 상한은 넉넉히 — 앞면의 1/4을 차지하는 큰 창은 흔하다. 전면 통유리(0.8+)만 걸러내면 된다.
+      if (ar < 0.0015 || ar > 0.30) continue;              // 너무 작으면 잡티, 크면 벽·전면유리
+      const asp = bw / bh;
+      if (asp < 0.18 || asp > 5.5) continue;               // 선 조각 배제
+      if (c.area / (bw * bh) < 0.45) continue;             // 속이 찬 덩어리만 (획 조각 배제)
+      // ★갇힌 흰 구멍은 창틀 '안쪽'이다 — 선 두께만큼 실제 창보다 작다(실측 12% 과소).
+      //   구멍 경계에서 바깥으로 잉크가 이어지는 두께를 국소로 재서 되돌린다.
+      //   (해칭·인접선을 타고 번지지 않게 변 길이의 25% 로 상한)
+      let ex0 = c.bx0, ex1 = c.bx1, ey0 = c.by0, ey1 = c.by1;
+      if (c.src === 'hole') {
+        const inkAt = (px, py) => (px >= 0 && px < rw && py >= 0 && py < rh) &&
+          !!bldg[(py + y0) * w + (px + x0)];
+        const cap = (v2, lim) => Math.min(v2, Math.max(1, Math.round(lim * 0.25)));
+        const ym = (c.by0 + c.by1) >> 1, xm = (c.bx0 + c.bx1) >> 1;
+        let t2 = 0; while (inkAt(c.bx0 - 1 - t2, ym) && t2 < bw) t2++; ex0 -= cap(t2, bw);
+        t2 = 0; while (inkAt(c.bx1 + 1 + t2, ym) && t2 < bw) t2++; ex1 += cap(t2, bw);
+        t2 = 0; while (inkAt(xm, c.by0 - 1 - t2) && t2 < bh) t2++; ey0 -= cap(t2, bh);
+        t2 = 0; while (inkAt(xm, c.by1 + 1 + t2) && t2 < bh) t2++; ey1 += cap(t2, bh);
+      }
+      wins.push({ cx: (ex0 + ex1) / 2, cy: (ey0 + ey1) / 2, bw: ex1 - ex0 + 1, bh: ey1 - ey0 + 1 });
+    }
+    // ★'2개 이상'을 요구했더니 큰 창 하나짜리 동이 통째로 버려졌다(실측: 3동 중 1동 누락).
+    //   창을 못 읽으면 균일 격자로 후퇴할 뿐이라 놓치는 쪽이 손해가 크다 — 1개도 받는다.
+    if (wins.length < 1 || wins.length > 40) return null;
+    // 겹치는 후보 병합 — ①과 ②가 같은 창을 두 번 잡는다
+    wins.sort((a, b) => b.bw * b.bh - a.bw * a.bh);
+    const keep = [];
+    for (const c of wins) {
+      if (keep.some(k => Math.abs(k.cx - c.cx) < (k.bw + c.bw) * 0.35 &&
+                         Math.abs(k.cy - c.cy) < (k.bh + c.bh) * 0.35)) continue;
+      keep.push(c);
+    }
+    if (!keep.length) return null;
+    // 픽셀 좌표 그대로 돌려준다 — 정규화(기울기 되돌리기 포함)는 호출부 한 곳에서 한다.
+    return keep.map(c => ({ cx: x0 + c.cx, cy: y0 + c.cy, bw: c.bw, bh: c.bh }));
+  };
+  for (let i = 0; i < massList.length; i++) {
+    const rawL = Math.max(0, Math.round(bounds[i])), rawR = Math.min(w - 1, Math.round(bounds[i + 1]));
+    let x0 = rawL, x1 = rawR;
+    // ★매스 경계는 '골의 한가운데'다 — 떨어져 있는 동에서는 틈의 절반이 매스 구간에 끼어
+    //   창이 왼쪽으로 밀린다(실측 u 오차 0.12). 실루엣이 실제로 서 있는 구간으로 좁힌다.
+    {
+      let hl = 0;
+      for (let x = x0; x <= x1; x++) if (prof[x] > hl) hl = prof[x];
+      const thr2 = hl * 0.35;
+      let a2 = x0, b2 = x1;
+      while (a2 < x1 && prof[a2] <= thr2) a2++;
+      while (b2 > a2 && prof[b2] <= thr2) b2--;
+      if (b2 - a2 > 8) { x0 = a2; x1 = b2; }
+    }
+    const wd = Math.max(1, x1 - x0);
+    // ★처마 높이 — 창 높이의 기준자다. 두 번 틀렸으니 근거를 남긴다.
+    //   ① 층수 추정이 쓰는 '8% 안쪽' 값을 그대로 쓰면 박공 경사만큼 높게 잡혀 v 가 눌린다
+    //      (실측 0.55 → 0.517).
+    //   ② 그렇다고 매스 안 최솟값을 쓰면 안 된다 — 실루엣 프로파일은 평활화돼 있어서
+    //      바깥 가장자리에서 반쯤 꺼진다. 끝 동이 71px(실제 150)로 잡혀 판독 영역이
+    //      아래 절반만 남고 창이 통째로 잘렸다(실측: 3동 중 2동 누락).
+    //   → 이웃 박공과 만나는 '골'이 곧 처마선이다. 그 값을 쓰고, 떨어져 있어 골이 바닥까지
+    //     내려가면(틈) 국소 최댓값의 35% 문턱으로 걸러 ①로 후퇴한다.
+    let hLoc = 0;
+    for (let x = x0; x <= x1; x++) if (prof[x] > hLoc) hLoc = prof[x];
+    const e0 = prof[Math.max(0, Math.round(x0 + wd * 0.08))];
+    const e1 = prof[Math.min(w - 1, Math.round(x1 - wd * 0.08))];
+    const vly = [];
+    if (i > 0) vly.push(prof[Math.max(0, Math.round(bounds[i]))]);
+    if (i < massList.length - 1) vly.push(prof[Math.min(w - 1, Math.round(bounds[i + 1]))]);
+    const vOk = vly.filter(v2 => v2 > hLoc * 0.35);
+    const eh = vOk.length ? Math.min.apply(null, vOk) : Math.max(e0, e1);
+    if (eh < 10) continue;
+    const ws = winsOf(x0, x1, eh);
+    if (!ws) continue;
+    // ── 밑변 좌표계로 옮겨 정규화 ──
+    // ★매스 경계(bounds)는 '지붕 골'에서 잰 값이라 기울기만큼 옆으로 밀려 있다. 그대로 쓰면
+    //   기울어진 그림에서 창이 통째로 어긋난다(실측 u 오차 0.18). 골은 처마 높이에서 났으니
+    //   ln*eh 만큼 되돌리면 밑변에서의 경계가 된다. 양 끝동의 바깥 경계는 되돌릴 필요 없이
+    //   바닥 근처 행을 직접 훑어 잰다(부호별 경우 나누기가 필요 없어진다).
+    // ★동별 기울기가 아니라 '무리 전체' 기울기를 쓴다. 붙어 있는 동은 이웃에 가려 자기
+    //   모서리를 온전히 못 보여줘서 동별 값이 제각각이다(실측 -0.15 그림에서
+    //   -0.08 / -0.49 / +0.06 — 부호까지 틀린다). 바깥 실루엣에서 잰 무리 값은 오차 1도 안쪽이고,
+    //   골(경계)을 밀어낸 것도 그림 전체의 전단이므로 기준자로 옳다.
+    const ln = leanAvg || 0;
+    const shift = ln * eh;
+    // 이 매스가 바닥에서 실제로 서 있는 구간. 이웃과 붙어 있으면 바닥이 끝까지 차 있으므로
+    // (경계를 못 잰다) 골 위치를 ln*eh 만큼 되돌려 쓴다. 떨어져 있으면 잰 값이 곧 답이다.
+    const bs = baseSpan(rawL, rawR) || [rawL, rawR];
+    const left = (i === 0) ? clB[0]
+      : (bs[0] > rawL + 1 ? bs[0] : Math.round(bounds[i]) - shift);
+    const right = (i === massList.length - 1) ? clB[1]
+      : (bs[1] < rawR - 1 ? bs[1] : Math.round(bounds[i + 1]) - shift);
+    const bwB = right - left;
+    if (bwB < 8) continue;
+    massList[i].wins = ws.map(q => {
+      const bx = q.cx - ln * (baseY - q.cy);            // 창 중심을 밑변 높이로 되돌린다
+      return {
+        u: +Math.min(0.97, Math.max(0.03, (bx - left) / bwB)).toFixed(3),
+        v: +Math.min(0.97, Math.max(0.03, (baseY - q.cy) / eh)).toFixed(3),
+        wFrac: +Math.min(0.6, Math.max(0.03, q.bw / bwB)).toFixed(3),
+        hFrac: +Math.min(0.8, Math.max(0.04, q.bh / eh)).toFixed(3),
+      };
+    }).sort((a, b) => (a.v - b.v) || (a.u - b.u));
+  }
 
   // 붙어 있는가 — 골이 충분히 높으면 한 덩어리로 이어진 동들이다
   const attachedN = valleys.filter(v => v.lo > 0 && v.v / v.lo >= 0.35).length;

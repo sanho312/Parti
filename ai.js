@@ -1120,6 +1120,7 @@
           massList: (!exp.count || exp.count === c.masses) ? c.massList : null,
           attached: c.attached, lean: c.lean || 0,
         };
+        const winN = (spec.massList || []).reduce((a, m) => a + ((m && m.wins) ? m.wins.length : 0), 0);
         const r = window.PARTI_ARCH.buildComplex(spec);
         if (!r) continue;
         cpxN++; lastConcept = spec;
@@ -1130,6 +1131,7 @@
           + `  (봉우리 ${c.masses}개${c.attached ? ' · 서로 붙은 덩어리' : ''}${c.meta.courtyard ? ' · 마당 초록 검출' : ''}`
           + (Math.abs(c.lean || 0) > 0.05 ? ` · 기울기 ${(Math.atan(c.lean) * 180 / Math.PI).toFixed(0)}도` : '')
           + (c.depthRatio ? ` · 측면 음영으로 잰 깊이 ${(spec.d / 1000).toFixed(1)}m` : '')
+          + (winN ? ` · 그림에서 창 ${winN}개 자리 그대로` : '')
           + `, 동 폭 ${r.widths.map(v => (v / 1000).toFixed(0)).join('/')}m)`);
       }
       let builtFromPlan = null;

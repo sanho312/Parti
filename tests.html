@@ -3543,6 +3543,120 @@ function tests(){
                   eqi(cp9.arrange, 'arc', '  부채꼴 배치');
                 });
               }).then(() => {
+                // ── ★창 위치 판독 ──
+                // 창은 균일 격자로 만들고 있었다(비유리 스케치는 아예 0개). 그림에 그려진
+                // 창의 자리·크기를 읽어 그대로 뚫는다. 정답을 아는 그림을 그려 오차를 잰다.
+                const mkW = (spec, op) => {
+                  op = op || {};
+                  const cw2 = AD.createElement('canvas'); cw2.width = 660; cw2.height = 420;
+                  const gw = cw2.getContext('2d');
+                  gw.fillStyle = '#fff'; gw.fillRect(0, 0, 660, 420); gw.lineJoin = 'round';
+                  const bY = 360, ox2 = 70, mw2 = op.mw || 160, gp = op.gap || 0, eh2 = 150;
+                  const rz = op.flat ? 0 : 55, lnW = op.lean || 0;
+                  spec.forEach((ws2, i2) => {
+                    const a2 = ox2 + i2 * (mw2 + gp), b2 = a2 + mw2;
+                    const sx2 = (y2) => lnW * (bY - y2);
+                    gw.strokeStyle = '#222'; gw.lineWidth = 2;
+                    gw.beginPath();
+                    gw.moveTo(a2, bY); gw.lineTo(a2 + sx2(bY - eh2), bY - eh2);
+                    if (rz) gw.lineTo((a2 + b2) / 2 + sx2(bY - eh2 - rz), bY - eh2 - rz);
+                    gw.lineTo(b2 + sx2(bY - eh2), bY - eh2); gw.lineTo(b2, bY);
+                    gw.closePath(); gw.stroke();
+                    ws2.forEach(q2 => {
+                      const cy2 = bY - q2.v * eh2, cx2 = a2 + q2.u * mw2 + sx2(cy2);
+                      const ww2 = q2.w * mw2, hh2 = q2.h * eh2;
+                      if (q2.fill) { gw.fillStyle = '#5b8fd0'; gw.fillRect(cx2 - ww2 / 2, cy2 - hh2 / 2, ww2, hh2); }
+                      else gw.strokeRect(cx2 - ww2 / 2, cy2 - hh2 / 2, ww2, hh2);
+                    });
+                  });
+                  return cw2.toDataURL('image/png');
+                };
+                // 읽은 창을 정답과 짝지어 최대 오차와 누락 수를 낸다
+                const scoreW = (rr, GT) => {
+                  let miss = 0, extra = 0, mu = 0, mv = 0, mw3 = 0, mh = 0, n2 = 0;
+                  (rr.massList || []).forEach((m2, i2) => {
+                    const g2 = GT[i2] || [], got = (m2.wins || []).slice();
+                    g2.forEach(q2 => {
+                      let bi = -1, bd = 1e9;
+                      got.forEach((p2, k2) => { const d2 = Math.hypot(p2.u - q2.u, p2.v - q2.v);
+                        if (d2 < bd) { bd = d2; bi = k2; } });
+                      if (bi < 0 || bd > 0.25) { miss++; return; }
+                      const p2 = got.splice(bi, 1)[0]; n2++;
+                      mu = Math.max(mu, Math.abs(p2.u - q2.u)); mv = Math.max(mv, Math.abs(p2.v - q2.v));
+                      mw3 = Math.max(mw3, Math.abs(p2.wFrac - q2.w)); mh = Math.max(mh, Math.abs(p2.hFrac - q2.h));
+                    });
+                    extra += got.length;
+                  });
+                  return { miss, extra, n: n2, u: +mu.toFixed(3), v: +mv.toFixed(3), w: +mw3.toFixed(3), h: +mh.toFixed(3) };
+                };
+                const GTW = [[{ u: 0.25, v: 0.55, w: 0.22, h: 0.30 }, { u: 0.75, v: 0.55, w: 0.22, h: 0.30 }],
+                             [{ u: 0.30, v: 0.30, w: 0.18, h: 0.22 }, { u: 0.70, v: 0.30, w: 0.18, h: 0.22 },
+                              { u: 0.50, v: 0.72, w: 0.30, h: 0.20 }],
+                             [{ u: 0.50, v: 0.50, w: 0.44, h: 0.42 }, { u: 0.20, v: 0.20, w: 0.14, h: 0.16 }]];
+                const GTB = [[{ u: 0.30, v: 0.55, w: 0.20, h: 0.28, fill: 1 }, { u: 0.70, v: 0.55, w: 0.20, h: 0.28, fill: 1 }],
+                             [{ u: 0.50, v: 0.50, w: 0.30, h: 0.34, fill: 1 }],
+                             [{ u: 0.35, v: 0.60, w: 0.18, h: 0.24, fill: 1 }, { u: 0.70, v: 0.35, w: 0.18, h: 0.24, fill: 1 }]];
+                return VZ.traceConcept(mkW(GTW)).then(w1 => {
+                  const s1 = scoreW(w1, GTW);
+                  eqi(s1.miss + s1.extra, 0, '★창 위치 판독 — 선으로 그린 창 7개 전부 (누락 ' + s1.miss + ' / 오검출 ' + s1.extra + ')');
+                  ok(s1.u <= 0.05 && s1.v <= 0.05, '  자리 오차 (u ' + s1.u + ' / v ' + s1.v + ')');
+                  ok(s1.w <= 0.06 && s1.h <= 0.06, '  크기 오차 (w ' + s1.w + ' / h ' + s1.h + ')');
+                  return VZ.traceConcept(mkW(GTB));
+                }).then(w2 => {
+                  const s2 = scoreW(w2, GTB);
+                  eqi(w2.masses, 3, '★색칠한 창을 동으로 세지 않는다 (파란 군집 보정에 폭 문턱)');
+                  eqi(s2.miss + s2.extra, 0, '  색으로 칠한 창 5개 전부 (누락 ' + s2.miss + ' / 오검출 ' + s2.extra + ')');
+                  ok(s2.u <= 0.05 && s2.v <= 0.05, '  자리 오차 (u ' + s2.u + ' / v ' + s2.v + ')');
+                  // ★가장자리 평활화 함정 — 처마를 매스 안 최솟값으로 잡으면 끝 동이 반토막 난다
+                  return VZ.traceConcept(mkW(GTW, { flat: true, mw: 130, gap: 40 }));
+                }).then(w3 => {
+                  const s3 = scoreW(w3, GTW);
+                  ok(s3.miss <= 1, '★떨어진 동·평지붕에서도 읽는다 (누락 ' + s3.miss + ')');
+                  ok(s3.u <= 0.06, '  틈의 절반이 끼어도 자리가 안 밀린다 (u ' + s3.u + ')');
+                  return VZ.traceConcept(mkW(GTW, { lean: 0.20 }));
+                }).then(w4 => {
+                  const s4 = scoreW(w4, GTW);
+                  ok(s4.u <= 0.06, '★기울인 그림 — 밑변 좌표로 되돌려 읽는다 (u ' + s4.u + ')');
+                  return VZ.traceConcept(mkW(GTW, { lean: -0.15 }));
+                }).then(w5 => {
+                  const s5 = scoreW(w5, GTW);
+                  ok(s5.u <= 0.06, '  반대로 기울여도 (u ' + s5.u + ')');
+                  return VZ.traceConcept(mkW([[], [], []]));
+                }).then(w6 => {
+                  eqi((w6.massList || []).reduce((a2, m2) => a2 + ((m2.wins || []).length), 0), 0,
+                    '★창을 안 그리면 오검출 0 (없는 창을 만들지 않는다)');
+                });
+              }).then(() => {
+                // ── ★읽은 창 자리에 뚫기 ──
+                const bW = C.state.entities.length;
+                const unitW = (wins) => {
+                  C.state.entities.length = bW;
+                  A.buildComplex({ count: 1, floors: 1, w: 12000, d: 12000, roof: 'gable',
+                    arrange: 'arc', attached: true, glass: false, lean: 0,
+                    massList: [{ wFrac: 1, hFrac: 1, wins: wins }] });
+                  return C.state.entities.slice(bW).filter(e6 => e6.bim && e6.bim.kind === 'opening');
+                };
+                // 유리가 아니면 창이 하나도 없었다 — 그림에서 읽은 창이 그 자리를 메운다
+                const noW = unitW(null);
+                eqi(noW.length, 0, '★비유리 스케치는 원래 개구부 0 (읽은 창이 없을 때)');
+                const w3a = unitW([{ u: 0.3, v: 0.30, wFrac: 0.20, hFrac: 0.23 },
+                                   { u: 0.7, v: 0.30, wFrac: 0.20, hFrac: 0.23 },
+                                   { u: 0.5, v: 0.70, wFrac: 0.31, hFrac: 0.21 }]);
+                eqi(w3a.filter(e6 => e6.bim.ot === 'window').length, 3, '★읽은 창 3개가 그대로 3개');
+                eqi(w3a.filter(e6 => e6.bim.ot === 'door').length, 1, '  바닥에 닿은 개구부가 없으면 빈 자리에 현관을 넣는다');
+                // ★허리창(밑끝 0.185)을 문으로 승격하면 2.1m 를 차지해 위 창을 삼킨다
+                ok(w3a.filter(e6 => e6.bim.ot === 'door').every(e6 =>
+                  Math.round(Math.hypot(e6.x2 - e6.x1, e6.y2 - e6.y1)) <= 1300),
+                  '  승격한 현관이 창 폭(2.4m)을 뺏지 않는다');
+                const sills = w3a.filter(e6 => e6.bim.ot === 'window').map(e6 => e6.bim.sill).sort((a2, b2) => a2 - b2);
+                ok(sills[2] > sills[0] * 2, '★창 높이가 그림을 따라간다 — 위·아래 두 단 (' + sills.join('/') + ')');
+                // 바닥에 닿게 그린 개구부는 문으로
+                const wD = unitW([{ u: 0.5, v: 0.14, wFrac: 0.12, hFrac: 0.26 },
+                                  { u: 0.2, v: 0.5, wFrac: 0.15, hFrac: 0.25 }]);
+                eqi(wD.filter(e6 => e6.bim.ot === 'door').length, 1, '★밑변에 닿게 그린 개구부는 현관으로');
+                eqi(wD.filter(e6 => e6.bim.ot === 'window').length, 1, '  나머지는 창');
+                C.state.entities.length = bW;
+              }).then(() => {
                 // ★라우팅 근거 지표 — 전역 임계값 추측이 실물에서 두 번 뒤집힌 뒤 도입한 증거들.
                 //   도면은 무채색·축정렬·이중선, 손그림은 사선 지배 → 이 표가 오판을 막는다.
                 return VZ.traceImage(cv2.toDataURL('image/png'), { widthMM: 8000 }).then(rp => {
