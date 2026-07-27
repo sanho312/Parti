@@ -760,6 +760,37 @@ async function traceConcept(src, opts) {
   }
   void dSum; void dN;
 
+  // ── ★창 판독만 2배 해상도로 ──
+  // 전체 분석은 maxSide(기본 700)로 한다 — 동 수·기울기·깊이의 임계가 그 크기에 맞춰
+  // 실측으로 조정돼 있어서 건드리면 전부 다시 맞춰야 한다. 창 판독만 떼어 원본에서
+  // 한 번 더 크게 그려 읽는다. 사진 속 창은 20~70px 이라 표시(멀리언·개폐 사선)가
+  // 뭉개지는데, 2배면 40~140px 이 되어 판정 가능 구간으로 들어온다.
+  let Ww = w, Wh = h, WK = 1, Wbldg = bldg, WblueA = blueA, Wprof = prof, WbaseY = baseY;
+  if (im.width > w * 1.4 || im.height > h * 1.4) {
+    try {
+      const c2 = toCanvas(im, Math.min(1600, (o.maxSide || 700) * 2));
+      if (c2.w > w * 1.2) {
+        const d2 = c2.ctx.getImageData(0, 0, c2.w, c2.h).data;
+        const n2 = c2.w * c2.h;
+        const b2 = new Uint8Array(n2), q2 = new Uint8Array(n2);
+        for (let i2 = 0, p2 = 0; i2 < d2.length; i2 += 4, p2++) {
+          const r2 = d2[i2], g3 = d2[i2 + 1], l2 = d2[i2 + 2];
+          const L2 = (r2 * 299 + g3 * 587 + l2 * 114) / 1000;
+          const isG2 = g3 > r2 + 12 && g3 > l2 + 12;
+          const isB2 = l2 > r2 + 12 && l2 > g3 + 4;
+          if (isB2) q2[p2] = 1;
+          if (!isG2 && (L2 < inkThr || isB2)) b2[p2] = 1;   // 임계는 같은 사진이므로 그대로
+        }
+        WK = c2.w / w; Ww = c2.w; Wh = c2.h; Wbldg = b2; WblueA = q2;
+        WbaseY = Math.round(baseY * WK);
+        Wprof = new Float32Array(Ww);
+        for (let x2 = 0; x2 < Ww; x2++)
+          Wprof[x2] = prof[Math.min(w - 1, Math.round(x2 / WK))] * WK;
+      }
+    } catch (e) { /* 고해상도 실패는 치명적이지 않다 — 기본 공간으로 읽는다 */ }
+  }
+
+
   // ── ★창 위치 판독 ──
   // 지금까지 창은 '균일 격자'로 만들었다(비유리 스케치는 아예 0개였다). 그림에 창이
   // 그려져 있으면 그 자리에 뚫는 게 맞다. 투시 스케치에서 창이 화면에 남기는 자국은 둘이다.
@@ -778,20 +809,20 @@ async function traceConcept(src, opts) {
   const baseSpan = (a4, b4, whole) => {
     let bestY = -1, bestN = -1;
     for (let dy = -2; dy <= 2; dy++) {
-      const y = baseY + dy; if (y < 0 || y >= h) continue;
+      const y = WbaseY + dy; if (y < 0 || y >= Wh) continue;
       let n = 0;
-      for (let x = a4; x <= b4; x++) if (bldg[y * w + x]) n++;
+      for (let x = a4; x <= b4; x++) if (Wbldg[y * Ww + x]) n++;
       if (n > bestN) { bestN = n; bestY = y; }
     }
     if (bestY < 0 || bestN <= 0) return null;
     if (whole) {
       let p0 = -1, p1 = -1;
-      for (let x = a4; x <= b4; x++) if (bldg[bestY * w + x]) { if (p0 < 0) p0 = x; p1 = x; }
+      for (let x = a4; x <= b4; x++) if (Wbldg[bestY * Ww + x]) { if (p0 < 0) p0 = x; p1 = x; }
       return [p0, p1];
     }
     let s0 = -1, bs = -1, be = -1, gapRun = 0;
     for (let x = a4; x <= b4 + 1; x++) {
-      const on = x <= b4 && !!bldg[bestY * w + x];
+      const on = x <= b4 && !!Wbldg[bestY * Ww + x];
       if (on) { if (s0 < 0) s0 = x; gapRun = 0; }
       else if (s0 >= 0) {
         gapRun++;
@@ -804,18 +835,18 @@ async function traceConcept(src, opts) {
     }
     return bs >= 0 ? [bs, be] : null;
   };
-  const clB = baseSpan(0, w - 1, true) || [fa, fb];
+  const clB = baseSpan(0, Ww - 1, true) || [fa * WK, fb * WK];
   const winsOf = (x0, x1, eh) => {
     const wd = x1 - x0 + 1, ht = Math.round(eh);
     if (wd < 12 || ht < 12) return null;
-    const y0 = Math.max(0, Math.round(baseY - eh)), y1 = Math.min(h - 1, Math.round(baseY));
+    const y0 = Math.max(0, Math.round(WbaseY - eh)), y1 = Math.min(Wh - 1, Math.round(WbaseY));
     const rw = wd, rh = y1 - y0 + 1;
     if (rh < 12) return null;
     // 앞면 안쪽 = 실루엣 내부. 밖은 아예 후보에서 뺀다(하늘의 흰 바탕이 섞이면 전부 망가진다).
     const inside = new Uint8Array(rw * rh);
     let faceA = 0;
     for (let x = x0; x <= x1; x++) {
-      const top = Math.max(y0, Math.round(baseY - prof[x]));
+      const top = Math.max(y0, Math.round(WbaseY - Wprof[x]));
       for (let y = Math.max(y0, top); y <= y1; y++) { inside[(y - y0) * rw + (x - x0)] = 1; faceA++; }
     }
     if (faceA < 200) return null;
@@ -847,13 +878,13 @@ async function traceConcept(src, opts) {
     const white = new Uint8Array(rw * rh);
     for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) {
       const p = (y - y0) * rw + (x - x0);
-      if (inside[p] && !bldg[y * w + x]) white[p] = 1;
+      if (inside[p] && !Wbldg[y * Ww + x]) white[p] = 1;
     }
     // ② 색칠한 창
     const blue = new Uint8Array(rw * rh);
     for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) {
       const p = (y - y0) * rw + (x - x0);
-      if (inside[p] && blueA[y * w + x]) blue[p] = 1;
+      if (inside[p] && WblueA[y * Ww + x]) blue[p] = 1;
     }
     const cand = comps(white, true).map(c => (c.src = 'hole', c))
       .concat(comps(blue, false).map(c => (c.src = 'fill', c)));
@@ -875,7 +906,7 @@ async function traceConcept(src, opts) {
       let ex0 = c.bx0, ex1 = c.bx1, ey0 = c.by0, ey1 = c.by1;
       if (c.src === 'hole') {
         const inkAt = (px, py) => (px >= 0 && px < rw && py >= 0 && py < rh) &&
-          !!bldg[(py + y0) * w + (px + x0)];
+          !!Wbldg[(py + y0) * w + (px + x0)];
         const cap = (v2, lim) => Math.min(v2, Math.max(1, Math.round(lim * 0.25)));
         const ym = (c.by0 + c.by1) >> 1, xm = (c.bx0 + c.bx1) >> 1;
         let t2 = 0; while (inkAt(c.bx0 - 1 - t2, ym) && t2 < bw) t2++; ex0 -= cap(t2, bw);
@@ -957,7 +988,7 @@ async function traceConcept(src, opts) {
       let tot = 0;
       for (let y = ay0; y <= ay1; y++) for (let x = ax0; x <= ax1; x++) {
         tot++;
-        if (bldg[(y + y0) * w + (x + x0)]) pts.push([(x - bx0) / fw2, (y - by0) / fh2]);
+        if (Wbldg[(y + y0) * Ww + (x + x0)]) pts.push([(x - bx0) / fw2, (y - by0) / fh2]);
       }
       void aw; void ah;
       if (!tot) return null;
@@ -1062,17 +1093,17 @@ async function traceConcept(src, opts) {
     return ['fix', 0];                                      // 모른다
   };
   for (let i = 0; i < massList.length; i++) {
-    const rawL = Math.max(0, Math.round(bounds[i])), rawR = Math.min(w - 1, Math.round(bounds[i + 1]));
+    const rawL = Math.max(0, Math.round(bounds[i] * WK)), rawR = Math.min(Ww - 1, Math.round(bounds[i + 1] * WK));
     let x0 = rawL, x1 = rawR;
     // ★매스 경계는 '골의 한가운데'다 — 떨어져 있는 동에서는 틈의 절반이 매스 구간에 끼어
     //   창이 왼쪽으로 밀린다(실측 u 오차 0.12). 실루엣이 실제로 서 있는 구간으로 좁힌다.
     {
       let hl = 0;
-      for (let x = x0; x <= x1; x++) if (prof[x] > hl) hl = prof[x];
+      for (let x = x0; x <= x1; x++) if (Wprof[x] > hl) hl = Wprof[x];
       const thr2 = hl * 0.35;
       let a2 = x0, b2 = x1;
-      while (a2 < x1 && prof[a2] <= thr2) a2++;
-      while (b2 > a2 && prof[b2] <= thr2) b2--;
+      while (a2 < x1 && Wprof[a2] <= thr2) a2++;
+      while (b2 > a2 && Wprof[b2] <= thr2) b2--;
       if (b2 - a2 > 8) { x0 = a2; x1 = b2; }
     }
     const wd = Math.max(1, x1 - x0);
@@ -1085,12 +1116,12 @@ async function traceConcept(src, opts) {
     //   → 이웃 박공과 만나는 '골'이 곧 처마선이다. 그 값을 쓰고, 떨어져 있어 골이 바닥까지
     //     내려가면(틈) 국소 최댓값의 35% 문턱으로 걸러 ①로 후퇴한다.
     let hLoc = 0;
-    for (let x = x0; x <= x1; x++) if (prof[x] > hLoc) hLoc = prof[x];
-    const e0 = prof[Math.max(0, Math.round(x0 + wd * 0.08))];
-    const e1 = prof[Math.min(w - 1, Math.round(x1 - wd * 0.08))];
+    for (let x = x0; x <= x1; x++) if (Wprof[x] > hLoc) hLoc = Wprof[x];
+    const e0 = Wprof[Math.max(0, Math.round(x0 + wd * 0.08))];
+    const e1 = Wprof[Math.min(Ww - 1, Math.round(x1 - wd * 0.08))];
     const vly = [];
-    if (i > 0) vly.push(prof[Math.max(0, Math.round(bounds[i]))]);
-    if (i < massList.length - 1) vly.push(prof[Math.min(w - 1, Math.round(bounds[i + 1]))]);
+    if (i > 0) vly.push(Wprof[Math.max(0, Math.round(bounds[i] * WK))]);
+    if (i < massList.length - 1) vly.push(Wprof[Math.min(Ww - 1, Math.round(bounds[i + 1] * WK))]);
     const vOk = vly.filter(v2 => v2 > hLoc * 0.35);
     const eh = vOk.length ? Math.min.apply(null, vOk) : Math.max(e0, e1);
     if (eh < 10) continue;
@@ -1111,16 +1142,16 @@ async function traceConcept(src, opts) {
     // (경계를 못 잰다) 골 위치를 ln*eh 만큼 되돌려 쓴다. 떨어져 있으면 잰 값이 곧 답이다.
     const bs = baseSpan(rawL, rawR) || [rawL, rawR];
     const left = (i === 0) ? clB[0]
-      : (bs[0] > rawL + 1 ? bs[0] : Math.round(bounds[i]) - shift);
+      : (bs[0] > rawL + 1 ? bs[0] : Math.round(bounds[i] * WK) - shift);
     const right = (i === massList.length - 1) ? clB[1]
-      : (bs[1] < rawR - 1 ? bs[1] : Math.round(bounds[i + 1]) - shift);
+      : (bs[1] < rawR - 1 ? bs[1] : Math.round(bounds[i + 1] * WK) - shift);
     const bwB = right - left;
     if (bwB < 8) continue;
     massList[i].wins = ws.map(q => {
-      const bx = q.cx - ln * (baseY - q.cy);            // 창 중심을 밑변 높이로 되돌린다
+      const bx = q.cx - ln * (WbaseY - q.cy);            // 창 중심을 밑변 높이로 되돌린다
       return {
         u: +Math.min(0.97, Math.max(0.03, (bx - left) / bwB)).toFixed(3),
-        v: +Math.min(0.97, Math.max(0.03, (baseY - q.cy) / eh)).toFixed(3),
+        v: +Math.min(0.97, Math.max(0.03, (WbaseY - q.cy) / eh)).toFixed(3),
         wFrac: +Math.min(0.6, Math.max(0.03, q.bw / bwB)).toFixed(3),
         hFrac: +Math.min(0.8, Math.max(0.04, q.bh / eh)).toFixed(3),
         cols: q.cols, rows: q.rows, panes: q.panes, mark: q.mark ? q.mark.kind : null,

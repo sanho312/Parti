@@ -3770,6 +3770,43 @@ function tests(){
                   '★3D 부재 수가 종류마다 다르다 — 미서기 ' + nOf('wslide') + ' vs 여닫이 ' + nOf('wswing'));
                 C.state.entities.length = bT;
               }).then(() => {
+                // ── ★창 판독만 2배 해상도로 ──
+                // 전체 분석은 maxSide(700)로 한다 — 동 수·기울기·깊이 임계가 그 크기에 맞춰
+                // 실측 조정돼 있다. 창 판독만 원본에서 한 번 더 크게 그려 읽는다.
+                // 실측 한계: 기본공간 기준 창 폭 24px → 20px 로 내려갔다.
+                const mkS = (S, basePx, t) => {
+                  const drawn = basePx / (S === 1 ? 1 : (700 / (520 * S)));
+                  const wf = drawn / (320 * S), lw = Math.max(1, Math.round(drawn * 0.077));
+                  const cv = AD.createElement('canvas');
+                  cv.width = 520 * S; cv.height = 460 * S;
+                  const g = cv.getContext('2d');
+                  g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height);
+                  g.strokeStyle = '#222'; g.lineWidth = lw; g.lineJoin = 'round'; g.lineCap = 'round';
+                  const bY = 380 * S, a = 100 * S, b = a + 320 * S, eh = 220 * S, rz = 60 * S;
+                  g.beginPath(); g.moveTo(a, bY); g.lineTo(a, bY - eh);
+                  g.lineTo((a + b) / 2, bY - eh - rz); g.lineTo(b, bY - eh); g.lineTo(b, bY);
+                  g.closePath(); g.stroke();
+                  const cx = (a + b) / 2, cy = bY - 0.55 * eh;
+                  const ww = wf * 320 * S, hh = wf * 1.25 * 220 * S;
+                  const L = cx - ww / 2, R = cx + ww / 2, T = cy - hh / 2, B = cy + hh / 2;
+                  g.strokeRect(L, T, ww, hh);
+                  if (t === 'slide') { g.beginPath(); g.moveTo(cx, T); g.lineTo(cx, B); g.stroke(); }
+                  if (t === 'hung') { g.beginPath(); g.moveTo(L, cy); g.lineTo(R, cy); g.stroke(); }
+                  return cv.toDataURL('image/png');
+                };
+                const readS = (S, px, t) => VZ.traceConcept(mkS(S, px, t)).then(r => {
+                  const ws = (r.massList && r.massList[0] && r.massList[0].wins) || [];
+                  return ws.length === 1 ? ws[0].kind : null;
+                });
+                // 원본이 큰 사진: 기본공간 20px 짜리 창도 읽힌다 (2배 경로가 없으면 못 읽는다)
+                return Promise.all([readS(3, 20, 'slide'), readS(3, 20, 'hung'),
+                                    readS(3, 30, 'slide'), readS(1, 30, 'slide')]).then(rs => {
+                  eqi(rs[0], 'wslide', '★원본이 크면 기본공간 20px 창도 종류가 읽힌다 (2배 판독)');
+                  eqi(rs[1], 'hung', '  오르내리창도');
+                  eqi(rs[2], 'wslide', '  큰 창은 당연히 (회귀 확인)');
+                  eqi(rs[3], 'wslide', '  원본이 작아 축소가 없을 때도 기존대로');
+                });
+              }).then(() => {
                 // ★라우팅 근거 지표 — 전역 임계값 추측이 실물에서 두 번 뒤집힌 뒤 도입한 증거들.
                 //   도면은 무채색·축정렬·이중선, 손그림은 사선 지배 → 이 표가 오판을 막는다.
                 return VZ.traceImage(cv2.toDataURL('image/png'), { widthMM: 8000 }).then(rp => {
