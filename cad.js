@@ -2845,7 +2845,9 @@ function drawTable(title, cols, rows) {
     Math.max.apply(null, cells.map(rw => String(rw[c] == null ? '' : rw[c]).length)) * TH * 0.62 + PAD * 2);
   const W = cw.reduce((a, v) => a + v, 0), H = RH * cells.length;
   const { X0, Y1 } = tableAnchor();
-  const ln = (x1, y1, x2, y2) => addEntity({ type: 'LINE', layer: '일람표',
+  // ★표마다 이름표(tbl)를 달아 둔다 — 도면 세트가 '어느 표인지'를 알아야 장을 나눈다.
+  //   위치로 묶으려면 표 간격과 행 간격을 비교하는 휴리스틱이 되고, 그건 표 모양이 바뀌면 깨진다.
+  const ln = (x1, y1, x2, y2) => addEntity({ type: 'LINE', layer: '일람표', tbl: title,
     x1: Math.round(x1), y1: Math.round(y1), x2: Math.round(x2), y2: Math.round(y2) });
   let y = Y1;
   for (let r = 0; r <= cells.length; r++) { ln(X0, y, X0 + W, y); y -= RH; }
@@ -2854,13 +2856,13 @@ function drawTable(title, cols, rows) {
   cells.forEach((rw, r) => {
     let cx = X0;
     rw.forEach((txt, c) => {
-      if (txt != null && txt !== '') addEntity({ type: 'TEXT', layer: '일람표',
+      if (txt != null && txt !== '') addEntity({ type: 'TEXT', layer: '일람표', tbl: title,
         x: Math.round(cx + PAD), y: Math.round(Y1 - RH * r - RH * 0.68),
         height: TH, text: String(txt), rotation: 0 });
       cx += cw[c];
     });
   });
-  addEntity({ type: 'TEXT', layer: '일람표', x: Math.round(X0), y: Math.round(Y1 + RH * 0.5),
+  addEntity({ type: 'TEXT', layer: '일람표', tbl: title, x: Math.round(X0), y: Math.round(Y1 + RH * 0.5),
     height: TH * 1.3, text: title, rotation: 0 });
   return { X0, Y1, W, H, n: cells.length };
 }
@@ -3025,11 +3027,20 @@ function cmdAutoDim(arg) {
   return r;
 }
 
-// ── 도면 한 장으로 묶기 (시트) ──
-// ★평면·단면·입면·표가 따로 놀면 납품이 안 된다. 도면틀과 표제란을 두고 한 장에 배치한다.
+// ── 도면 묶기 (시트 · 세트) ──
+// ★평면·단면·입면·표가 따로 놀면 납품이 안 된다. 도면틀과 표제란을 두고 배치한다.
 //   시트는 '종이 mm' 로 그린다 — 모델(mm)을 1/축척 으로 줄여 얹는다. 그래야 축척이 뜻을 갖는다.
 const SHEET_SIZES = { A0: [1189, 841], A1: [841, 594], A2: [594, 420], A3: [420, 297], A4: [297, 210] };
 const SHEET_SCALES = [20, 30, 50, 100, 200, 300, 500, 1000];
+// 도면 번호 체계 — 종류마다 100 번대를 준다. 이게 있어야 '세트'다:
+// 한 장 안에서 순서는 배치일 뿐이지만, 여러 장이 되면 번호가 곧 순서이고 목차다.
+const SHEET_SERIES = [
+  { kind: 'gen',  base: 1,   name: '건축개요 · 면적표' },
+  { kind: 'plan', base: 101, name: '평면도' },
+  { kind: 'elev', base: 201, name: '입면도' },
+  { kind: 'sec',  base: 301, name: '단면도' },
+  { kind: 'ow',   base: 601, name: '창호일람표' },
+];
 function sheetClone(e, k, tx, ty) {
   const c = cloneEntity(e);
   const P = (x, y) => [x * k + tx, y * k + ty];
@@ -3064,76 +3075,133 @@ function entsBBox(ents) {
   return x1 > x0 ? { x0, y0, x1, y1, w: x1 - x0, h: y1 - y0 } : null;
 }
 // 시트에 올릴 뷰 모으기 — 현재 도면(평면·표) + 이미 만들어 둔 단면/입면 탭
+// ★표는 표마다 따로 뽑는다(drawTable 이 달아 둔 tbl 이름표로). 면적표와 창호일람표는
+//   도면 체계에서 자리가 다르다 — 하나로 뭉치면 세트를 나눌 수가 없다.
 function sheetSources() {
   docs[curDoc] = captureDoc();
   const out = [];
+  // ★이미 만든 시트는 원본이 아니다. 세트를 두 번 돌리면 'A-301 단면도' 시트가
+  //   /단면/ 에 걸려 시트 안에 시트가 들어간다.
+  const isSheet = (d) => ((d && d.entities) || []).some(e => e.layer === '도면틀');
+  // 세트를 만든 직후엔 지금 탭이 시트다. 그 상태로 다시 돌리면 평면이 통째로 빠지므로
+  // (실제로 그렇게 만들어 봤다 — 평면·표가 없는 23장짜리가 나왔다) 첫 작업 도면을 원본으로 삼는다.
+  let base = curDoc;
+  if (isSheet(docs[curDoc])) {
+    const alt = docs.findIndex(d => ((d && d.entities) || []).length && !isSheet(d)
+      && !/단면|입면/.test((d && d.fileName) || ''));
+    if (alt >= 0) base = alt;
+  }
   docs.forEach((d, i) => {
     const ents = (d && d.entities) || [];
-    if (!ents.length) return;
-    const nm = d.fileName || (i === curDoc ? '평면' : '도면-' + (i + 1));
-    if (i === curDoc) {
+    if (!ents.length || isSheet(d)) return;
+    const nm = d.fileName || (i === base ? '평면' : '도면-' + (i + 1));
+    if (i === base) {
       const plan = ents.filter(e => e.layer !== '일람표');
-      const tbl = ents.filter(e => e.layer === '일람표');
       if (plan.length) out.push({ name: '평면도', ents: plan, kind: 'plan' });
-      if (tbl.length) out.push({ name: '표', ents: tbl, kind: 'table' });
+      const tbl = ents.filter(e => e.layer === '일람표');
+      const groups = new Map();
+      for (const e of tbl) {
+        const k = e.tbl || '표';
+        if (!groups.has(k)) groups.set(k, []);
+        groups.get(k).push(e);
+      }
+      for (const [k, es] of groups)
+        out.push({ name: k, ents: es, kind: /창호/.test(k) ? 'ow' : 'gen' });
     } else if (/단면|입면/.test(nm)) {
       out.push({ name: nm, ents, kind: /입면/.test(nm) ? 'elev' : 'sec' });
     }
   });
-  return out;
+  // ★같은 이름의 단면이 여러 장이면 최신 것만 쓴다 — '단면자동'을 두 번 돌리면 탭이
+  //   쌓여서 같은 그림이 여덟 장 들어간 세트가 나온다. 버린 건 조용히 넘기지 않고 알린다.
+  const seen = new Map();
+  for (const s2 of out) seen.set(s2.name, s2);
+  const uniq = [...seen.values()];
+  if (uniq.length < out.length)
+    logLine('  같은 이름의 도면 ' + (out.length - uniq.length) + '개는 최신 것만 썼습니다 '
+      + '(단면·입면 탭이 겹쳐 있습니다).', 'info');
+  return uniq;
 }
-function sheetBuild(opt) {
+// 어떤 뷰를 몇 장에 어떻게 나눌지 — 그리기와 분리해 둔다(순수 함수라 그대로 시험할 수 있다).
+function sheetPlan(srcs, opt) {
+  const o = Object.assign({ perSheet: 2 }, opt || {});
+  const per = Math.max(1, o.perSheet);
+  const pages = [];
+  const push = (base, name, part, seq, many) => pages.push({
+    no: 'A-' + String(base + seq).padStart(3, '0'),
+    name: name + (many ? ' (' + (seq + 1) + ')' : ''), views: part });
+  for (const S of SHEET_SERIES) {
+    const mine = srcs.filter(s => s.kind === S.kind);
+    for (let i = 0; i < mine.length; i += per)
+      push(S.base, S.name, mine.slice(i, i + per), Math.floor(i / per), mine.length > per);
+  }
+  // 체계에 없는 종류는 뒤에 몰아 붙인다 — 조용히 빠뜨리는 것보다 낫다
+  const rest = srcs.filter(s => !SHEET_SERIES.some(S => S.kind === s.kind));
+  for (let i = 0; i < rest.length; i += per)
+    push(901, '기타', rest.slice(i, i + per), Math.floor(i / per), rest.length > per);
+  return pages;
+}
+// 현재 문서에 시트 한 장을 그린다. 축척은 '이 장에 올릴 뷰'로만 정한다 —
+// ★이게 세트의 실익이다. 한 장에 다 넣으면 가장 큰 뷰에 끌려가 전부 작아진다.
+function sheetDraw(srcs, opt) {
   const o = Object.assign({ size: 'A1', title: null, scale: 0 }, opt || {});
   const [SW, SH] = SHEET_SIZES[o.size] || SHEET_SIZES.A1;
-  const srcs = sheetSources();
-  if (!srcs.length) return null;
   // 도면틀 여백(왼쪽은 철하는 쪽이라 넓게) · 표제란
   const M = 10, ML = 20, TBW = 180, TBH = 55;
   const ax0 = ML, ay0 = M, ax1 = SW - M, ay1 = SH - M;          // 도면틀 안쪽
+  const tx0 = SW - M - TBW, ty0 = M, tx1 = SW - M, ty1 = M + TBH;   // 표제란 — 오른쪽 아래
   const cols = Math.ceil(Math.sqrt(srcs.length)), rows = Math.ceil(srcs.length / cols);
   const cw = (ax1 - ax0) / cols, ch = (ay1 - ay0) / rows;
+  // 칸 — 표제란과 겹치는 칸은 그만큼 '올리고 낮춘다'.
+  // ★올리기만 하면 칸 높이는 그대로라 위로 넘친다. 뷰가 한 개뿐인 장(세트)에서 드러났다 —
+  //   그때는 칸이 곧 용지 전체라 61mm 올린 만큼 그대로 용지 밖으로 나갔다.
+  const cellOf = (i) => {
+    const c = i % cols, r = Math.floor(i / cols);
+    const bx = ax0 + c * cw, by = ay1 - (r + 1) * ch;          // 위 칸부터 채운다
+    const hit = (bx + cw > tx0 - 4 && by < ty1 + 4);
+    return hit ? { bx, by: by + TBH + 6, ch: Math.max(20, ch - TBH - 6) } : { bx, by, ch };
+  };
   // 축척 — 모든 뷰가 자기 칸에 들어가는 가장 큰 표준 축척
   const boxes = srcs.map(s => entsBBox(s.ents));
   let k = Infinity;
   boxes.forEach((b, i) => {
     if (!b) return;
-    const pad = srcs[i].kind === 'table' ? 6 : 12;               // 뷰 이름표 자리
-    k = Math.min(k, (cw - 8) / Math.max(1, b.w), (ch - pad) / Math.max(1, b.h));
+    const pad = srcs[i].kind === 'gen' || srcs[i].kind === 'ow' ? 6 : 12;   // 뷰 이름표 자리
+    k = Math.min(k, (cw - 8) / Math.max(1, b.w), (cellOf(i).ch - pad) / Math.max(1, b.h));
   });
   let denom = o.scale > 0 ? o.scale : 0;
   if (!denom) {
     denom = SHEET_SCALES.find(d => 1 / d <= k) || SHEET_SCALES[SHEET_SCALES.length - 1];
   }
   k = 1 / denom;
-  newDocTab();
-  setFileName('도면-' + o.size);
   ensureLayer('도면틀', '#8d9099'); ensureLayer('표제란', '#cfd3da'); ensureLayer('뷰이름', '#e0a33a');
   const rect = (x0, y0, x1, y1, ly) => addEntity({ type: 'LWPOLYLINE', layer: ly, closed: true,
     points: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]] });
   rect(0, 0, SW, SH, '도면틀');                                   // 용지
   rect(ML - 5, M - 5, SW - M + 5, SH - M + 5, '도면틀');           // 도면틀
-  // 표제란 — 오른쪽 아래
-  const tx0 = SW - M - TBW, ty0 = M, tx1 = SW - M, ty1 = M + TBH;
   rect(tx0, ty0, tx1, ty1, '표제란');
   addEntity({ type: 'LINE', layer: '표제란', x1: tx0, y1: ty1 - 18, x2: tx1, y2: ty1 - 18 });
   addEntity({ type: 'LINE', layer: '표제란', x1: tx0, y1: ty0 + 14, x2: tx1, y2: ty0 + 14 });
   const T = (x, y, h, s) => addEntity({ type: 'TEXT', layer: '표제란', x, y, height: h, text: s, rotation: 0 });
   T(tx0 + 5, ty1 - 13, 7, o.title || (currentFileName || 'PARTI PROJECT'));
-  T(tx0 + 5, ty0 + 20, 4.5, '축척  1:' + denom + '        용지  ' + o.size);
+  if (o.name) T(tx0 + 5, ty0 + 27, 6, o.name);                    // 도면명 (세트일 때만)
+  T(tx0 + 5, o.name ? ty0 + 17 : ty0 + 20, 4.5, '축척  1:' + denom + '        용지  ' + o.size);
   const d = new Date();
   const ds = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0')
     + '-' + String(d.getDate()).padStart(2, '0');
   T(tx0 + 5, ty0 + 5, 4.5, '작성  ' + ds + '        Parti');
+  // 도면번호 · 매수 — 오른쪽 아래 칸. 세트에서 이걸 보고 순서를 잡는다.
+  if (o.no) {
+    addEntity({ type: 'LINE', layer: '표제란', x1: tx1 - 55, y1: ty0, x2: tx1 - 55, y2: ty0 + 14 });
+    T(tx1 - 51, ty0 + 4.5, 6.5, o.no);
+    if (o.pages > 1) T(tx1 - 22, ty0 + 4.5, 4.5, o.page + ' / ' + o.pages);
+  }
   // 뷰 배치 — 칸 가운데 정렬
   const placed = [];
   srcs.forEach((s, i) => {
     const b = boxes[i]; if (!b) return;
-    const c = i % cols, r = Math.floor(i / cols);
-    const bx = ax0 + c * cw, by = ay1 - (r + 1) * ch;            // 위 칸부터 채운다
-    const skip = (bx + cw > tx0 - 4 && by < ty1 + 4);            // 표제란과 겹치는 칸은 건너뛴다
-    const oy = skip ? by + TBH + 6 : by;
+    const { bx, by: oy, ch: chi } = cellOf(i);
     const tx = bx + (cw - b.w * k) / 2 - b.x0 * k;
-    const ty = oy + (ch - b.h * k) / 2 - b.y0 * k + 3;
+    const ty = oy + (chi - b.h * k) / 2 - b.y0 * k + 3;
     let n = 0;
     for (const e of s.ents) { const q = sheetClone(e, k, tx, ty); if (q) { addEntity(q); n++; } }
     addEntity({ type: 'TEXT', layer: '뷰이름', x: bx + 4, y: oy + 2, height: 5,
@@ -3144,11 +3212,40 @@ function sheetBuild(opt) {
   renderLayers(); draw(); updateStat(); renderDocTabs();
   return { size: o.size, denom, views: placed, sheetW: SW, sheetH: SH };
 }
+function sheetBuild(opt) {
+  const o = Object.assign({ size: 'A1' }, opt || {});
+  const srcs = sheetSources();
+  if (!srcs.length) return null;
+  newDocTab();
+  setFileName('도면-' + o.size);
+  return sheetDraw(srcs, o);
+}
+// 세트 — 종류마다 장을 따로 내고 번호를 붙인다. 장마다 새 탭이다.
+function sheetSetBuild(opt) {
+  const o = Object.assign({ size: 'A2', title: null, scale: 0, perSheet: 2 }, opt || {});
+  const srcs = sheetSources();
+  if (!srcs.length) return null;
+  const pages = sheetPlan(srcs, o);
+  // ★프로젝트명은 원본 도면 이름이다. 탭을 만들기 전에 잡아 둬야 한다 —
+  //   새 탭을 연 뒤에 읽으면 방금 만든 시트 이름이 프로젝트명으로 박힌다.
+  const proj = o.title || currentFileName || 'PARTI PROJECT';
+  const made = [];
+  pages.forEach((pg, i) => {
+    newDocTab();
+    setFileName(pg.no + ' ' + pg.name);
+    const r = sheetDraw(pg.views, Object.assign({}, o, { title: proj, no: pg.no,
+      name: pg.name, page: i + 1, pages: pages.length }));
+    made.push({ no: pg.no, name: pg.name, denom: r.denom, views: r.views.length, doc: curDoc });
+  });
+  return { size: o.size, sheets: made, count: made.length,
+    docs: made.map(m => m.doc), sheetW: SHEET_SIZES[o.size][0], sheetH: SHEET_SIZES[o.size][1] };
+}
 function cmdSheet(arg) {
   const a = String(arg || '').trim();
   const size = (a.match(/A[0-4]/i) || [])[0];
   const sc = (a.match(/1\s*[:：]\s*(\d+)/) || [])[1];
   const home = curDoc;
+  if (/세트|여러|set|묶음/i.test(a)) return cmdSheetSet(a);
   const r = sheetBuild({ size: size ? size.toUpperCase() : 'A1', scale: sc ? +sc : 0 });
   if (!r) { switchDoc(home); logLine('  묶을 도면이 없습니다 — 평면이나 단면을 먼저 만들어 주세요.', 'info'); return; }
   for (const v of r.views) logLine('  ' + v.name + ' — 요소 ' + v.n, 'info');
@@ -3163,9 +3260,34 @@ function cmdSheet(arg) {
     return r;
   }
   logLine('  ' + r.size + ' 도면 한 장으로 묶었습니다 (축척 1:' + r.denom + ', 뷰 ' + r.views.length + '개). '
-    + 'PDF 로 받으려면 "도면묶기 pdf"', 'ok');
+    + '장을 나누려면 "도면세트", PDF 는 "도면묶기 pdf"', 'ok');
   return r;
 }
+function cmdSheetSet(arg) {
+  const a = String(arg || '').trim();
+  const size = (a.match(/A[0-4]/i) || [])[0];
+  const sc = (a.match(/1\s*[:：]\s*(\d+)/) || [])[1];
+  const per = (a.match(/(\d)\s*(?:뷰|장당|per)/) || [])[1];
+  const home = curDoc;
+  const r = sheetSetBuild({ size: size ? size.toUpperCase() : 'A2', scale: sc ? +sc : 0,
+    perSheet: per ? +per : 2 });
+  if (!r) { switchDoc(home); logLine('  묶을 도면이 없습니다 — 평면이나 단면을 먼저 만들어 주세요.', 'info'); return; }
+  for (const s of r.sheets)
+    logLine('  ' + s.no + '  ' + s.name + '   축척 1:' + s.denom + ' · 뷰 ' + s.views, 'info');
+  if (/pdf/i.test(a)) {
+    const pdf = buildPDFSet(r.docs, { paper: r.size.toLowerCase(), landscape: true,
+      scaleDenom: 1, units: 'mm', marginMM: 0, title: null });
+    saveBlob(new Blob([pdf], { type: 'application/pdf' }), (proj0() || 'parti') + '_도면세트.pdf');
+    logLine('  ' + r.size + ' 도면 세트 ' + r.count + '장을 PDF 한 파일로 내보냈습니다 '
+      + '(1:1 인쇄 — 각 장에 적힌 축척이 실제로 맞습니다).', 'ok');
+    return r;
+  }
+  logLine('  ' + r.size + ' 도면 세트 ' + r.count + '장을 만들었습니다 (하단 탭에서 열람). '
+    + 'PDF 한 파일로 받으려면 "도면세트 pdf"', 'ok');
+  return r;
+}
+// 세트 PDF 이름은 '프로젝트' 이름이어야 한다 — 마지막 시트 이름(A-601 창호일람표)이 아니라.
+function proj0() { return (docs[0] && docs[0].fileName) || null; }
 
 // ── 단면·입면 자동 생성 ──
 // ★단면은 '아무 데나 자른 것'이 아니라 '보여줄 것을 자른 것'이어야 한다.
@@ -12436,7 +12558,7 @@ const INSTANT_CMDS = {
   railing: cmdRailingTag,
   setaslight: cmdSetAsLight,
   owsave: cmdOwSave, owlist: cmdOwList, owdel: () => cmdOwDel(prompt('삭제할 창호 기호 이름 (@ 없이):') || ''),   // 커스텀 창호 기호
-  owsched: cmdOwSchedule, areatable: cmdAreaTable, autosection: cmdAutoSection, sheet: cmdSheet,
+  owsched: cmdOwSchedule, areatable: cmdAreaTable, autosection: cmdAutoSection, sheet: cmdSheet, sheetset: cmdSheetSet,
   autodim: cmdAutoDim,
   raytrace: cmdRaytrace,
   rendered: cmdRendered,
@@ -12907,6 +13029,7 @@ const CMD_ALIASES = {
   areatable: 'areatable', 면적표: 'areatable', 건축개요: 'areatable', 개요표: 'areatable',
   autosection: 'autosection', 단면자동: 'autosection', 자동단면: 'autosection', 단면일괄: 'autosection',
   sheet: 'sheet', 도면묶기: 'sheet', 시트: 'sheet', 도면판: 'sheet', 한장: 'sheet',
+  sheetset: 'sheetset', 도면세트: 'sheetset', 세트: 'sheetset', 도면일습: 'sheetset', 여러장: 'sheetset',
   autodim: 'autodim', 치수자동: 'autodim', 자동치수: 'autodim', 치수기입: 'autodim',
   unsetlight: 'unsetlight', 광원해제: 'unsetlight',
   raytrace: 'raytrace', rt: 'raytrace', raytraced: 'raytrace', 레이트레이싱: 'raytrace', 렌더: 'raytrace',
@@ -15451,7 +15574,10 @@ const PAPER_SIZES = { // pt (1mm=2.8346pt)
   a0: [3370.39, 2383.94], letter: [792, 612],
 };
 // opt: { paper:'a3', landscape:true, scaleDenom:100(=1:100, 0=자동맞춤), region:{minX..}|null, title:{...}|null, units:'mm' }
-function buildPDF(opt) {
+function buildPDF(opt) { return pdfWrap([pdfPage(opt)]); }
+// ★한 장짜리와 여러 장짜리가 같은 코드를 쓰게 갈랐다. 도면 세트를 장마다 따로 내려받게
+//   하면 그건 세트가 아니라 파일 더미다 — PDF 는 한 파일 안에 여러 페이지로 들어가야 한다.
+function pdfPage(opt) {
   opt = opt || {};
   const MM = 2.83464567; // mm → pt
   const size = PAPER_SIZES[opt.paper || 'a3'] || PAPER_SIZES.a3;
@@ -15525,14 +15651,20 @@ function buildPDF(opt) {
     txt(bx + bw * 0.7 + 4 * MM, by + bh * 0.62, 'SCALE: ' + (t.scale || ''), 9);
     txt(bx + bw * 0.7 + 4 * MM, by + bh * 0.2, 'DATE: ' + (t.date || ''), 7);
   }
-  const content = ops.join('\n');
-  // PDF 객체 조립 (오프셋 정확히 계산)
+  return { content: ops.join('\n'), PW, PH };
+}
+// 페이지들을 한 파일로 조립한다. 객체 번호는 1 카탈로그 · 2 페이지묶음 · 3 글꼴,
+// 그 뒤로 장마다 (4+2i)=페이지 · (5+2i)=내용. 상호참조표는 문자열 길이로 정확히 센다.
+function pdfWrap(pages) {
+  const num = n => (Math.round(n * 1000) / 1000).toFixed(3);
   const objs = [];
   objs.push('<< /Type /Catalog /Pages 2 0 R >>');
-  objs.push('<< /Type /Pages /Kids [3 0 R] /Count 1 >>');
-  objs.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${num(PW)} ${num(PH)}] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>`);
-  objs.push(`<< /Length ${content.length} >>\nstream\n${content}\nendstream`);
+  objs.push(`<< /Type /Pages /Kids [${pages.map((_, i) => (4 + 2 * i) + ' 0 R').join(' ')}] /Count ${pages.length} >>`);
   objs.push('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>');
+  pages.forEach((p, i) => {
+    objs.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${num(p.PW)} ${num(p.PH)}] /Resources << /Font << /F1 3 0 R >> >> /Contents ${5 + 2 * i} 0 R >>`);
+    objs.push(`<< /Length ${p.content.length} >>\nstream\n${p.content}\nendstream`);
+  });
   let pdf = '%PDF-1.4\n';
   const offsets = [];
   for (let i = 0; i < objs.length; i++) { offsets.push(pdf.length); pdf += `${i + 1} 0 obj\n${objs[i]}\nendobj\n`; }
@@ -15541,6 +15673,15 @@ function buildPDF(opt) {
   for (const off of offsets) pdf += String(off).padStart(10, '0') + ' 00000 n \n';
   pdf += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
   return pdf;
+}
+// 도면 세트 → 여러 장짜리 PDF 한 파일. 탭마다 레이어·색이 다르므로 실제로 그 탭으로
+// 옮겨 가며 뽑는다 — 레이어를 흉내내면 숨겨 둔 레이어가 인쇄되는 사고가 난다.
+function buildPDFSet(idxs, opt) {
+  const home = curDoc;
+  const pages = [];
+  for (const i of idxs) { switchDoc(i, true); pages.push(pdfPage(opt)); }
+  switchDoc(home, true);
+  return pdfWrap(pages);
 }
 function writeEntity(g, e, H, owner) {
   // AC1021(R2007) 구조: 핸들(5) + 소유자(330, R13+ 필수) + AcDbEntity + 서브클래스 마커
@@ -16207,14 +16348,14 @@ function applyDoc(d) {
   if (typeof renderSunPanel === 'function') renderSunPanel();   // 복원한 태양·날씨를 패널에 반영
   draw();
 }
-function switchDoc(i) {
+function switchDoc(i, quiet) {
   if (i === curDoc || !docs[i]) { renderDocTabs(); return; }
   docs[curDoc] = captureDoc();
   curDoc = i;
   applyDoc(docs[i]);
   renderDocTabs();
   if (window.WEBCAD_API && WEBCAD_API.onDocChange) WEBCAD_API.onDocChange();
-  logLine(`▷ 탭 전환: ${currentFileName || '새 파일'}`, 'info');
+  if (!quiet) logLine(`▷ 탭 전환: ${currentFileName || '새 파일'}`, 'info');
 }
 function newDocTab() {
   docs[curDoc] = captureDoc();
@@ -16487,6 +16628,8 @@ window.__CADTEST__ = {
   owSchedRows, owSchedCSV, owSchedDraw, cmdOwSchedule, owTypeKo,
   areaData, areaRows, areaCSV, cmdAreaTable, drawTable, polyAreaM2,
   autoSecLines, cmdAutoSection, sheetBuild, cmdSheet, sheetSources, entsBBox, SHEET_SIZES,
+  sheetPlan, sheetDraw, sheetSetBuild, cmdSheetSet, SHEET_SERIES, buildPDFSet, pdfWrap,
+  switchDoc, curDocIdx: () => curDoc, docCount: () => docs.length,
   autoDimPlan, cmdAutoDim, buildPDF, PAPER_SIZES,
   MAT_PRESETS, MAT_ALIAS, matOf, matKey, matHex, matBoxUV, matGeo, matBuild, matTextures, matDrawTex, cmdMaterial, rtGeoSig, bimSolidColor, secHatchFor, computePatternSegs, owWt, OPENING_TYPES, owSaveDef, owPlaced, layerAutoBim, applyLayerRoleTo, addEntity, renderLayers,
   runCommandInput, feedCmdArg,
@@ -16537,7 +16680,7 @@ window.WEBCAD_AI_BRIDGE = {
   runBoolean, isBoolable, bimSolids,
   genSectionView,   // 입면/단면 자동 생성 (AI make_views 도구)
   // 도면 일습 — 코워커가 한 문장으로 전 과정을 잇는 데 쓴다 (치수→표→단면→시트)
-  cmdAutoDim, cmdOwSchedule, cmdAreaTable, cmdAutoSection, cmdSheet,
+  cmdAutoDim, cmdOwSchedule, cmdAreaTable, cmdAutoSection, cmdSheet, cmdSheetSet,
   renderLayers,     // 레이어 정리 후 패널 갱신 (AI organize_layers 도구)
   switchDoc, getCurDoc: () => curDoc, getDocName: () => currentFileName,   // 입면/단면은 새 탭에 생성 — 봇이 원본 탭으로 복귀할 때 사용
   is3D: is3DActive,

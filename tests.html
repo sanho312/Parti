@@ -4282,6 +4282,102 @@ function tests(){
                 ok(C.PAPER_SIZES && C.PAPER_SIZES.a0, '  A0 용지도 지원한다');
                 C.state.entities.length = bH;
               }).then(() => {
+                // ── ★도면 여러 장으로 (세트) ──
+                // 한 장에 다 넣으면 축척이 '가장 큰 뷰'에 끌려가 전부 작아진다. 종류마다 장을
+                // 나누고 도면번호를 붙이면 장마다 제 축척을 갖는다 — 그게 세트를 만드는 실익이다.
+                // ① 번호 체계는 순수 함수로 먼저 본다. 그리기와 섞으면 무엇이 틀렸는지 알 수 없다.
+                const fakeZ = [
+                  { name: '평면도', kind: 'plan', ents: [] },
+                  { name: '창호일람표', kind: 'ow', ents: [] },
+                  { name: '건축개요 · 면적표', kind: 'gen', ents: [] },
+                  { name: '횡단면(복도)', kind: 'sec', ents: [] },
+                  { name: '종단면(동 배열)', kind: 'sec', ents: [] },
+                  { name: '입면(마당 쪽)', kind: 'elev', ents: [] },
+                ];
+                const pgZ = C.sheetPlan(fakeZ, {});
+                eqi(pgZ.length, 5, '★6뷰가 5장으로 나뉜다 (단면 2개는 한 장에)');
+                eqi(pgZ.map(p => p.no).join(' '), 'A-001 A-101 A-201 A-301 A-601',
+                  '★도면번호를 체계대로 — 총괄·평면·입면·단면·일람표');
+                eqi(new Set(pgZ.map(p => p.no)).size, pgZ.length, '  번호가 겹치지 않는다');
+                eqi(pgZ.reduce((a, p) => a + p.views.length, 0), fakeZ.length,
+                  '★뷰를 하나도 빠뜨리지 않는다');
+                const manyZ = C.sheetPlan(fakeZ.concat([{ name: '단면3', kind: 'sec', ents: [] }]), {});
+                ok(manyZ.some(p => p.no === 'A-302'), '  같은 종류가 넘치면 A-302 로 이어진다');
+                eqi(C.sheetPlan(fakeZ, { perSheet: 1 }).length, 6, '  장당 1뷰면 6장');
+                const oddZ = C.sheetPlan([{ name: '무엇', kind: '???', ents: [] }], {});
+                eqi(oddZ.length && oddZ[0].no, 'A-901', '  체계에 없는 종류도 버리지 않고 A-901 로');
+              }).then(() => {
+                // ② 실제로 그려 본다 — 축척이 한 장짜리보다 크고, 표가 장별로 갈리는지.
+                // ★앞 시험이 남긴 탭을 그대로 돌려준다 — 뒤 시험들이 그 탭에서 이어 돈다.
+                //   여기서 작업 도면(0번)으로 옮겨 놓고 끝내면 뒤 시험이 남의 도형을 재게 된다.
+                const homeZ = C.curDocIdx();
+                C.switchDoc(0);                                  // 시트 탭이 아니라 작업 도면에서 시작
+                const bZ = C.state.entities.length;
+                A.buildComplex({ count: 3, floors: 2, w: 9000, d: 11000, roof: 'gable',
+                  arrange: 'arc', attached: true, glass: false, lean: 0 });
+                C.cmdOwSchedule(''); C.cmdAreaTable('');
+                // ★표는 표마다 이름표를 달아 둔다 — 위치로 묶으면 표 모양이 바뀔 때 깨진다.
+                const srcZ = C.sheetSources();
+                const tblZ = srcZ.filter(s => s.kind === 'ow' || s.kind === 'gen');
+                eqi(tblZ.length, 2, '★창호일람표와 면적표를 따로 뽑는다 (한 덩어리가 아니다)');
+                ok(tblZ.some(s => /창호/.test(s.name)) && tblZ.some(s => /면적/.test(s.name)),
+                  '  표가 제 이름을 갖는다');
+                ok(!srcZ.some(s => s.ents.some(e0 => e0.layer === '도면틀')),
+                  '★이미 만든 시트를 다시 시트에 얹지 않는다');
+                const oneZ = C.cmdSheet('A2');                   // 한 장짜리
+                C.switchDoc(0);
+                const setZ = C.cmdSheetSet('A2');
+                ok(setZ && setZ.count >= 4, '★도면 세트 ' + (setZ ? setZ.count : 0) + '장을 만든다');
+                const worstZ = Math.max.apply(null, setZ.sheets.map(s => s.denom));
+                ok(worstZ <= oneZ.denom, '★세트에서 가장 작은 축척도 한 장짜리보다 작지 않다 (1:'
+                  + worstZ + ' vs 1:' + oneZ.denom + ')');
+                ok(setZ.sheets.some(s => s.denom < oneZ.denom),
+                  '★적어도 한 장은 실제로 더 크게 나온다 (세트를 만드는 이유)');
+                eqi(setZ.sheets.every(s => s.views >= 1), true, '  빈 장이 없다');
+                // 표제란 — 도면번호와 매수
+                const esZ = C.state.entities;                    // 마지막 장
+                const lastZ = setZ.sheets[setZ.sheets.length - 1];
+                ok(esZ.some(e0 => e0.layer === '표제란' && e0.type === 'TEXT' && e0.text === lastZ.no),
+                  '★표제란에 도면번호를 적는다 (' + lastZ.no + ')');
+                ok(esZ.some(e0 => e0.layer === '표제란' && e0.type === 'TEXT'
+                  && e0.text === setZ.count + ' / ' + setZ.count), '★매수를 적는다 (n / N)');
+                ok(esZ.some(e0 => e0.layer === '표제란' && e0.type === 'TEXT' && e0.text === lastZ.name),
+                  '  도면명을 적는다 (' + lastZ.name + ')');
+                // 용지 밖으로 나가지 않는다 — 장마다
+                const SWz = 594, SHz = 420;
+                const ptsZ = (e0) => e0.type === 'LINE' ? [[e0.x1, e0.y1], [e0.x2, e0.y2]]
+                  : e0.points ? e0.points : e0.type === 'TEXT' ? [[e0.x, e0.y]]
+                  : (e0.cx != null ? [[e0.cx, e0.cy]] : []);
+                let outZ = 0;
+                for (const d0 of setZ.docs) {
+                  C.switchDoc(d0);
+                  outZ += C.state.entities.filter(e0 => ptsZ(e0).some(p0 =>
+                    p0[0] < -1 || p0[0] > SWz + 1 || p0[1] < -1 || p0[1] > SHz + 1)).length;
+                }
+                eqi(outZ, 0, '★모든 장의 모든 요소가 A2 용지 안에 들어간다');
+                // ③ PDF — 세트는 '한 파일 여러 페이지'여야 한다. 장마다 따로 받으면 파일 더미다.
+                const pdfZ = String(C.buildPDFSet(setZ.docs, { paper: 'a2', landscape: true,
+                  scaleDenom: 1, units: 'mm', marginMM: 0, title: null }));
+                ok(/^%PDF-1\./.test(pdfZ) && /%%EOF/.test(pdfZ),
+                  '★세트 PDF 가 온전히 나온다 (' + Math.round(pdfZ.length / 1024) + 'KB)');
+                eqi((pdfZ.match(/\/Type\s*\/Page[^s]/g) || []).length, setZ.count,
+                  '★페이지가 장 수만큼 들어간다 (' + setZ.count + '장)');
+                ok(new RegExp('/Count ' + setZ.count).test(pdfZ), '  페이지 묶음 개수도 맞는다');
+                const mbZ = (pdfZ.match(/MediaBox\s*\[([^\]]+)\]/g) || []);
+                eqi(mbZ.length, setZ.count, '  장마다 용지 상자를 갖는다');
+                const nZ = (mbZ[0].match(/[\d.]+/g) || []).map(Number);
+                ok(Math.abs((nZ[2] - nZ[0]) / 2.83464567 - 594) < 2, '  A2 실치수 (594mm)');
+                // ★상호참조표가 어긋나면 뷰어가 파일을 못 연다 — 오프셋을 실제로 확인한다.
+                const xrefZ = +(pdfZ.match(/startxref\s+(\d+)/) || [])[1];
+                eqi(pdfZ.slice(xrefZ, xrefZ + 4), 'xref', '★xref 오프셋이 실제 위치와 맞는다');
+                const offsZ = (pdfZ.slice(xrefZ).match(/^(\d{10}) 00000 n/gm) || []).map(v => +v.slice(0, 10));
+                ok(offsZ.length >= 5 && offsZ.every((o0, i0) =>
+                  pdfZ.slice(o0, o0 + 14).indexOf((i0 + 1) + ' 0 obj') === 0),
+                  '★객체 오프셋이 전부 제 객체를 가리킨다 (' + offsZ.length + '개)');
+                C.switchDoc(0);
+                C.state.entities.length = bZ;
+                C.switchDoc(homeZ);
+              }).then(() => {
                 // ── ★내부 실 구획 ──
                 // 결과물이 외피뿐이라 안이 통째로 비어 있었다. 부채꼴 쐐기는 (각도, 반지름)
                 // 공간에서 직사각형이므로, 이미 검증된 재귀 이분할기 slice() 를 그 공간에서
@@ -4647,6 +4743,15 @@ function tests(){
               ok(/A3/.test(r), '★문장에서 용지를 읽는다 (A3)');
               ok(/PDF/.test(r), '★문장에서 PDF 요청을 읽어 내보내기까지 끝낸다');
               ok(/1:1 인쇄/.test(r), '  인쇄 축척이 도면과 맞는다는 것을 밝힌다');
+              C.state.entities.length = b3;
+              // ★"세트" 라고 하면 한 장이 아니라 장을 나눠 번호를 붙여야 한다
+              return LR('이 이미지로 A2 도면 세트로 나눠서 만들어줘', [{ dataUrl: mkSketch() }]);
+            })
+            .then(r => {
+              ok(/도면 세트/.test(r), '★"세트" 라고 하면 한 장이 아니라 세트로 만든다');
+              ok(/A-101/.test(r), '★도면번호를 답에 밝힌다 (A-101 …)');
+              ok(/\d+장/.test(r), '  몇 장인지 밝힌다');
+              ok(!/뷰 \d+개/.test(r), '  한 장짜리 문구를 섞지 않는다');
               C.state.entities.length = b3;
             })
             // ★사용자 실패 시나리오: 스케치 1장 + 자연어 한 문장만으로 실제 생성되어야 한다

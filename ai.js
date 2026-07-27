@@ -1190,13 +1190,24 @@
         const paper = ((t.match(/(?:^|[^A-Za-z0-9])(A[0-4])(?![0-9])/i) || [])[1] || '');
         const wantPdf = /pdf|피디에프|인쇄|출력|뽑아/i.test(t);
         const sArg = [paper.toUpperCase(), wantPdf ? 'pdf' : ''].filter(Boolean).join(' ');
-        let sheet = null;
-        try { sheet = br.cmdSheet && br.cmdSheet(sArg); if (sheet) steps.push(wantPdf ? '도면 한 장 + PDF' : '도면 한 장'); }
-        catch (e) { steps.push('도면 한 장(실패)'); }
+        // 한 장이냐 세트냐 — 문장에서 읽는다. 세트면 종류마다 장을 나누고 번호를 붙인다.
+        const wantSet = /세트|여러\s*장|장별|나눠|나누어|일습|낱장/.test(t);
+        let sheet = null, set = null;
+        if (wantSet) {
+          try { set = br.cmdSheetSet && br.cmdSheetSet(sArg); if (set) steps.push(wantPdf ? '도면 세트 + PDF' : '도면 세트'); }
+          catch (e) { steps.push('도면 세트(실패)'); }
+        } else {
+          try { sheet = br.cmdSheet && br.cmdSheet(sArg); if (sheet) steps.push(wantPdf ? '도면 한 장 + PDF' : '도면 한 장'); }
+          catch (e) { steps.push('도면 한 장(실패)'); }
+        }
         if (steps.length) {
-          lines.push('· 도면 일습 → ' + steps.join(' → ')
-            + (sheet ? `  (${sheet.size} · 축척 1:${sheet.denom} · 뷰 ${sheet.views.length}개`
-              + (wantPdf ? ' · PDF 내려받음 — 1:1 인쇄하면 도면의 축척이 실제로 맞습니다' : ' — 지금 그 탭입니다') + ')' : ''));
+          const tail = set
+            ? `  (${set.size} · ${set.count}장 — ${set.sheets.map(x => x.no).join(' ')}`
+              + (wantPdf ? ' · PDF 한 파일로 내려받음' : ' — 하단 탭에 있습니다') + ')'
+            : sheet ? `  (${sheet.size} · 축척 1:${sheet.denom} · 뷰 ${sheet.views.length}개`
+              + (wantPdf ? ' · PDF 내려받음 — 1:1 인쇄하면 도면의 축척이 실제로 맞습니다' : ' — 지금 그 탭입니다') + ')'
+            : '';
+          lines.push('· 도면 일습 → ' + steps.join(' → ') + tail);
         }
       }
       let builtFromPlan = null;
