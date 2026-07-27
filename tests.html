@@ -4311,8 +4311,12 @@ function tests(){
                 // 계단은 올라가는 층에만, 지면·조경은 1층에만
                 eqi(kn(fv[2], 'stair').length, 0, '★최상층에는 올라갈 계단이 없다');
                 ok(kn(fv[1], 'stair').length > 0, '  중간층에는 있다');
-                ok(kn(fv[0], 'slab').length > 0 && kn(fv[1], 'slab').length === 0,
+                // ★지상 바닥판·대지만 본다 — 발코니 바닥판(두께 180)은 위층에 있는 게 맞다
+                const grd = (v) => kn(v, 'slab').filter(e0 => e0.bim.t !== 180);
+                ok(grd(fv[0]).length > 0 && grd(fv[1]).length === 0,
                   '★지면·바닥판은 1층에만 (2층 도면에 대지가 깔리면 안 된다)');
+                ok(kn(fv[1], 'slab').some(e0 => e0.bim.t === 180),
+                  '  대신 2층에는 발코니 바닥판이 있다');
                 eqi(kn(fv[3], 'roof').length > 0, true, '★지붕은 지붕 평면도로 빠진다');
                 ok(fv.slice(0, 3).every(v => kn(v, 'roof').length === 0),
                   '  층 평면도에는 지붕이 없다');
@@ -4693,6 +4697,53 @@ function tests(){
                   eqi(G.length, 2, '  구성이 같은 연속 층은 한 그룹 (상가 / 주거)');
                   eqi(G[1].floors.join(''), '234', '  2~4층이 한 그룹');
                 }
+                // ── ★발코니·처마 ──
+                // 2층부터 앞면에 내민다. 1층에 달면 그건 발코니가 아니라 마당이다.
+                // ★난간 없는 발코니는 3D 에서 '판만 떠 있는' 꼴이고 실제로도 위법이다.
+                const bB = C.state.entities.length;
+                const runB = (opt) => {
+                  C.state.entities.length = bB;
+                  A.buildComplex(Object.assign({ count: 2, floors: 4, w: 9000, d: 11000,
+                    roof: 'gable', arrange: 'arc', attached: true, glass: false, lean: 0 }, opt));
+                  const es = C.state.entities.slice(bB);
+                  const bal = es.filter(e0 => e0.layer === '발코니');
+                  const pa = (pts) => { let a2 = 0;
+                    for (let i0 = 0, j0 = pts.length - 1; i0 < pts.length; j0 = i0++)
+                      a2 += pts[j0][0] * pts[i0][1] - pts[i0][0] * pts[j0][1];
+                    return Math.abs(a2) / 2 / 1e6; };
+                  const sl = bal.filter(e0 => e0.bim && e0.bim.kind === 'slab');
+                  return { es, sl, rl: bal.filter(e0 => e0.bim && e0.bim.kind === 'railing'),
+                    tops: [...new Set(sl.map(e0 => e0.bim.top))].sort((a2, b2) => a2 - b2),
+                    area: sl.length ? pa(sl[0].points) : 0,
+                    foot: es.filter(e0 => e0.bim && e0.bim.kind === 'slab' && e0.bim.t === 150
+                      && (e0.bim.top || 0) === 0).reduce((a2, e0) => a2 + pa(e0.points), 0),
+                    roofBB: C.entsBBox(es.filter(e0 => e0.bim && e0.bim.kind === 'roof'
+                      && e0.layer === '지붕')) };
+                };
+                const BB = runB({});
+                eqi(BB.sl.length, 6, '★발코니 — 2동 × 2~4층 = 6개');
+                eqi(BB.tops.join(','), '3000,6000,9000', '★1층에는 달지 않는다 (2층부터)');
+                eqi(BB.rl.length, BB.sl.length, '★발코니마다 난간 하나 (판만 떠 있으면 안 된다)');
+                ok(BB.rl.every(e0 => e0.bim.h >= 1200), '  난간 높이 1.2m 이상 (규정)');
+                ok(BB.area > 4 && BB.area < 14, '  발코니 한 개 ' + BB.area.toFixed(1) + '㎡ (깊이 1.5m)');
+                // ★건축면적은 그대로여야 한다 — 발코니가 지상 바닥판으로 세어지면 면적표가 틀린다
+                const B0 = runB({ balcony: false });
+                eqi(BB.foot.toFixed(2), B0.foot.toFixed(2),
+                  '★발코니는 건축면적에 안 들어간다 (' + BB.foot.toFixed(1) + '㎡ 그대로)');
+                eqi(B0.sl.length, 0, '  "발코니 없이" 면 달지 않는다');
+                eqi(runB({ floors: 1 }).sl.length, 0, '★1층짜리 건물에는 없다');
+                // 상가·필로티 층에는 달지 않는다 — 주거 층의 것이다
+                const BS = runB({ floorProgram: { 2: 'shop' } });
+                ok(!BS.tops.includes(3000) && BS.tops.includes(6000),
+                  '★상가 층에는 달지 않는다 (2층 상가 → 3·4층에만)');
+                // 처마 — 기본값은 예전 그대로, 옵션으로 깊게
+                const BE = runB({ eaveOvh: 600 });
+                ok(BE.roofBB.w > BB.roofBB.w,
+                  '★처마를 깊게 하면 지붕이 실제로 더 나온다 ('
+                  + Math.round(BB.roofBB.w) + ' → ' + Math.round(BE.roofBB.w) + 'mm)');
+                eqi(Math.round(BB.roofBB.w), Math.round(runB({ eaveOvh: 300 }).roofBB.w),
+                  '  기본값(300)은 예전 그대로 — 말하지 않으면 안 바뀐다');
+                C.state.entities.length = bB;
                 // ── ★복도·계단 ──
                 // 방끼리 직접 연결하면 안방을 지나야 다른 방이 나온다. 뒤쪽에 복도 띠를 두고
                 // 방들이 거기로 열리게 한다(앞은 주 실이 차지해 마당 조망을 갖는다).
@@ -4759,7 +4810,8 @@ function tests(){
                 A.buildComplex({ count: 3, floors: 2, w: 9000, d: 11000, roof: 'gable',
                   arrange: 'arc', attached: true, glass: false, lean: 0 });
                 const esF = C.state.entities.slice(bR), solF = C.bimSolids();
-                const railE = esF.filter(e0 => e0.bim && e0.bim.kind === 'railing');
+                // ★계단 난간만 센다 — 발코니 난간(레이어 '발코니')과 섞이면 무엇을 재는지 흐려진다
+                const railE = esF.filter(e0 => e0.bim && e0.bim.kind === 'railing' && e0.layer !== '발코니');
                 eqi(railE.length, 3, '★계단 난간 — 계단마다 하나 (난간 없는 계단은 위법이다)');
                 const railIds = new Set(railE.map(e0 => e0.id));
                 const railS = solF.filter(s0 => railIds.has(s0.eid));

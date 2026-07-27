@@ -593,6 +593,7 @@ function buildComplex(spec) {
   br.pushUndo();
   br.ensureLayer('벽', '#cfc7ba'); br.ensureLayer('개구부', '#ff9f0a');
   br.ensureLayer('지붕', '#b8695a'); br.ensureLayer('조경', '#6aa84f'); br.ensureLayer('문자', '#8fa3c8');
+  br.ensureLayer('발코니', '#8fa3c8');
   br.ensureLayer('유리', '#7ea6d1'); br.ensureLayer('조경길', '#e0dacc'); br.ensureLayer('바닥', '#bdb6a8');
   br.ensureLayer('홈통', '#8d9099'); br.ensureLayer('실', '#9fb3c8');
   const counts = { wall: 0, window: 0, door: 0, roof: 0, court: 0, slab: 0, room: 0 };
@@ -602,7 +603,9 @@ function buildComplex(spec) {
   // · 방화벽은 지붕면 위로 500mm 이상 돌출 — 건축물의 피난·방화구조 규칙 제21조
   //   (나란한 박공동 사이에 연속된 골(valley)을 만들지 않는 실무 해법이기도 하다)
   const RIDGE_F = 0.42;      // 비대칭 박공 — 용마루가 폭의 42% 지점 (스케치의 치우친 봉우리)
-  const RAKE = 300;          // 박공측(앞뒤) 내밀기
+  // ★처마 내밀기는 옵션이다(기본 300 — 예전 값 그대로). 깊은 처마는 입면에 그림자선을
+  //   만들어 벽면이 납작해 보이지 않게 한다. IRC R804 실무 범위 152~610mm 안에서 받는다.
+  const RAKE = Math.max(120, Math.min(900, Math.round(o.eaveOvh || 300)));   // 박공측(앞뒤) 내밀기
   const EAVE = 500;          // 처마측(양 끝동 바깥) 내밀기
   const OVH = RAKE;
   const PARTY = 200;         // 세대분리벽(측벽) 두께
@@ -651,6 +654,38 @@ function buildComplex(spec) {
       buildInterior(br, o, counts, roomSeq, Object.assign({}, ctx,
         { floors: g.floors, program: g.program, stairFloors: pend.concat(up) }));
       pend = [];
+    }
+  };
+  // ── 발코니 ──
+  // ★2층부터 앞면(마당 쪽)에 내민다. 1층에 달면 그건 발코니가 아니라 마당이다.
+  //   난간 없는 발코니는 3D 에서 '판만 떠 있는' 꼴이고 실제로도 위법이다(높이 1.2m 이상).
+  //   상가·사무실·필로티 층에는 달지 않는다 — 주거 층의 것이다.
+  const BALD = 1500;                                  // 내민 깊이 (한국 주거 관례 1.5m)
+  const balconyAt = (Fl, Fr, Bl, Br2) => {
+    if (o.balcony === false || Math.max(1, o.floors || 1) < 2) return;
+    const mfx = (Fl[0] + Fr[0]) / 2, mfy = (Fl[1] + Fr[1]) / 2;
+    const mbx = (Bl[0] + Br2[0]) / 2, mby = (Bl[1] + Br2[1]) / 2;
+    const dx = mfx - mbx, dy = mfy - mby, dl = Math.hypot(dx, dy) || 1;
+    const nx = dx / dl, ny = dy / dl;                  // 바깥(앞) 방향
+    const ux = Fr[0] - Fl[0], uy = Fr[1] - Fl[1], ul = Math.hypot(ux, uy) || 1;
+    if (ul < 3000) return;                             // 앞면이 짧으면 달지 않는다
+    const kx = ux / ul, ky = uy / ul, hw = ul * 0.3;   // 앞면의 60%
+    const R2 = (p) => [Math.round(p[0]), Math.round(p[1])];
+    const A = [mfx - kx * hw, mfy - ky * hw], B = [mfx + kx * hw, mfy + ky * hw];
+    const A2 = [A[0] + nx * BALD, A[1] + ny * BALD], B2 = [B[0] + nx * BALD, B[1] + ny * BALD];
+    const SKIP = { shop: 1, office: 1, piloti: 1 };
+    for (const g of FG) for (const fl of g.floors) {
+      if (fl < 2 || SKIP[g.program]) continue;
+      const z = (fl - 1) * o.floorH;
+      const sl = br.addEntity({ type: 'LWPOLYLINE', layer: '발코니', closed: true,
+        points: [R2(A), R2(B), R2(B2), R2(A2)] });
+      // 두께를 바닥판(150)과 다르게 — 건축면적·치수 회귀가 '지상 바닥판'을 두께로 세고 있다
+      sl.bim = { kind: 'slab', t: 180, top: z };
+      counts.balcony = (counts.balcony || 0) + 1;
+      const rl = br.addEntity({ type: 'LWPOLYLINE', layer: '발코니', closed: false,
+        points: [R2(A), R2(A2), R2(B2), R2(B)] });
+      rl.bim = { kind: 'railing', h: 1200, t: 50, postT: 60, spacing: 1100, base: z };
+      counts.rail = (counts.rail || 0) + 1;
     }
   };
   const wall = (p, q, t2, h2, sh2) => {
@@ -886,6 +921,7 @@ function buildComplex(spec) {
       // ── 내부 실 구획 ── (부채꼴 쐐기: 각도축을 호길이로 환산해 넘긴다)
       runInterior({ FL, FR, BR, BL, W: Math.abs(aL - aR) * ((r0 + r1i) / 2), D: Ds[i], chord, wSh,
         mat: curMat, sideExtL: (i === 0 || gap > 0), sideExtR: (i === n - 1 || gap > 0) });
+      balconyAt(FL, FR, BL, BR);
       const cM = PT((aL + aR) / 2, (r0 + r1i) / 2);
       br.addEntity({ type: 'TEXT', layer: '문자', x: Math.round(cM[0]), y: Math.round(cM[1]), height: 400, text: (i + 1) + '동' });
     }
@@ -968,6 +1004,7 @@ function buildComplex(spec) {
       runInterior({ FL: P[0], FR: P[1], BR: P[2], BL: P[3],
         W: Ws[i], D: Ds[i], chord: Ws[i], wSh: null, mat: curMat,
         sideExtL: true, sideExtR: true });
+      balconyAt(P[0], P[1], P[3], P[2]);
       br.addEntity({ type: 'TEXT', layer: '문자', x: Math.round(C[0]), y: Math.round(C[1]), height: 400, text: (i + 1) + '동' });
     };
     if (o.arrange === 'row') {

@@ -1014,6 +1014,12 @@
     if (/일렬|한 ?줄|나란|선형/.test(t)) o.arrange = 'row';
     else if (/원형|중정|마당 ?둘레|둥글게/.test(t)) o.arrange = 'circle';
     if (/유리 ?없|창 ?없/.test(t)) o.glass = false;
+    // 발코니·처마 — "발코니 없이", "처마 깊게", "처마 600"
+    if (/발코니\s*(없|빼|제외)/.test(t)) o.balcony = false;
+    else if (/발코니/.test(t)) o.balcony = true;
+    const em = numOf(t, /처마\s*(\d{3,4})/);
+    if (em) o.eaveOvh = em;
+    else if (/처마\s*(?:를)?\s*(?:더\s*)?(깊게|길게|넓게|많이)/.test(t)) o.eaveOvh = 600;
     // 동별 깊이 — "깊이 8,12,12,14,20m" 처럼 쉼표로 나열하면 그대로 쓴다.
     // (단일 투시에서 깊이는 자동으로 못 읽는다 — 판독기가 재려 했다가 잡음만 재서 철회했다)
     const dm = t.match(/깊이\s*([\d.,\s\/]+)\s*m/);
@@ -1037,7 +1043,8 @@
     if ((!imgs || !imgs.length) && window.PARTI_ARCH) {
       const exp = parseComplexSpec(t);
       const has = exp.count || exp.floors || exp.w || exp.d || exp.roof || exp.arrange
-        || exp.glass != null || (exp.depths && exp.depths.length) || exp.floorProgram;
+        || exp.glass != null || (exp.depths && exp.depths.length) || exp.floorProgram
+        || exp.balcony != null || exp.eaveOvh;
       if (lastConcept && (exp.count || (has && /다시|바꿔|변경|수정|말고/.test(t)))) {
         const spec = Object.assign({}, lastConcept, exp);
         const r = window.PARTI_ARCH.buildComplex(spec);
@@ -1285,6 +1292,7 @@
       const e2 = parseComplexSpec(t);
       const spec = { count: e2.count || 5, floors: e2.floors || 1, w: e2.w || 8000, d: e2.d || 12000, depths: e2.depths || null,
         roof: e2.roof || 'gable', arrange: e2.arrange || 'circle', floorProgram: e2.floorProgram || null,
+        balcony: e2.balcony, eaveOvh: e2.eaveOvh || 0,
         glass: e2.glass != null ? e2.glass : true, floorH: numOf(t, /층고\s*(\d{3,5})/) || 3000 };
       const r = window.PARTI_ARCH.buildComplex(spec);
       if (!r) return '배치를 만들지 못했습니다.';
