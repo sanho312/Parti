@@ -1170,6 +1170,30 @@
           + (r.counts && r.counts.room ? ` · 내부 실 ${r.counts.room}개 구획` : '')
           + `, 동 폭 ${r.widths.map(v => (v / 1000).toFixed(0)).join('/')}m)`);
       }
+      // ── ★한 문장으로 도면 일습 ──
+      // 판독·생성은 됐는데 그 다음이 전부 수동 명령이었다. "도면 한 장 만들어줘" 한 마디로
+      // 치수 → 창호일람표 → 면적표 → 단면·입면 → 시트까지 이어 준다.
+      // ★순서가 중요하다: 치수·표는 모델 도면에 얹혀야 시트가 그걸 모아 갈 수 있고,
+      //   단면은 BIM 을 보므로 치수와 무관하며, 시트는 맨 마지막이어야 모든 탭이 모인다.
+      if ((cpxN || massN || planN) && /도면\s*(한\s*장|세트|일습|일체|전부)|한\s*장으로|풀\s*세트|도면화|도면까지|일습/.test(t)) {
+        const br = B(), steps = [];
+        const run = (fn, label) => {
+          if (typeof fn !== 'function') return;
+          try { const r2 = fn(); if (r2 !== false) steps.push(label); }
+          catch (e) { steps.push(label + '(실패: ' + String(e.message || e).slice(0, 40) + ')'); }
+        };
+        run(() => br.cmdAutoDim && br.cmdAutoDim(''), '치수');
+        run(() => br.cmdOwSchedule && br.cmdOwSchedule(''), '창호일람표');
+        run(() => br.cmdAreaTable && br.cmdAreaTable(''), '면적표');
+        run(() => br.cmdAutoSection && br.cmdAutoSection(''), '단면·입면');
+        let sheet = null;
+        try { sheet = br.cmdSheet && br.cmdSheet(''); if (sheet) steps.push('도면 한 장'); }
+        catch (e) { steps.push('도면 한 장(실패)'); }
+        if (steps.length) {
+          lines.push('· 도면 일습 → ' + steps.join(' → ')
+            + (sheet ? `  (${sheet.size} · 축척 1:${sheet.denom} · 뷰 ${sheet.views.length}개 — 지금 그 탭입니다)` : ''));
+        }
+      }
       let builtFromPlan = null;
       if (allStrokes.length && SKm && SKm.importStrokes) {
         SKm.importStrokes(allStrokes);

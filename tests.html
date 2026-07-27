@@ -4523,6 +4523,28 @@ function tests(){
                 C.state.entities.length = b3;
               });
             })
+            // ── ★한 문장으로 도면 일습 ──
+            // 판독·생성은 됐는데 그 다음이 전부 수동 명령이었다. 한 마디로 이어 준다.
+            .then(() => {
+              C.state.entities.length = b3;
+              return LR('이 이미지로 도면 한 장 만들어줘', [{ dataUrl: mkSketch() }]);
+            })
+            .then(r => {
+              ok(/스케치 판독/.test(r), '★한 문장 — 이미지에서 판독·생성까지');
+              ok(/도면 일습/.test(r), '★그 한 문장으로 도면 일습까지 이어진다');
+              ok(/치수/.test(r) && /창호일람표/.test(r) && /면적표/.test(r),
+                '  치수·창호일람표·면적표가 들어간다');
+              ok(/단면/.test(r), '  단면·입면도');
+              ok(/축척 1:/.test(r) && /뷰 \d+개/.test(r),
+                '★마지막은 도면 한 장 (용지·축척·뷰 수를 밝힌다)');
+              C.state.entities.length = b3;
+              return LR('박공 3동 1층 부채꼴로 세워줘');
+            })
+            .then(r => {
+              ok(!/도면 일습/.test(r),
+                '★일습을 요청하지 않으면 하지 않는다 (매번 무겁게 돌지 않는다)');
+              C.state.entities.length = b3;
+            })
             // ★사용자 실패 시나리오: 스케치 1장 + 자연어 한 문장만으로 실제 생성되어야 한다
             .then(() => LR('이 이미지를 기반으로 건물의 도면과 모델링을 생성해줘.', [{ dataUrl: mkSketch() }]))
             .then(r => {

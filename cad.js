@@ -16523,6 +16523,8 @@ window.WEBCAD_AI_BRIDGE = {
   translateEntity, applyTransform, T_rotate, move3DEnt, gumRotate, meshSphere, meshCone,
   runBoolean, isBoolable, bimSolids,
   genSectionView,   // 입면/단면 자동 생성 (AI make_views 도구)
+  // 도면 일습 — 코워커가 한 문장으로 전 과정을 잇는 데 쓴다 (치수→표→단면→시트)
+  cmdAutoDim, cmdOwSchedule, cmdAreaTable, cmdAutoSection, cmdSheet,
   renderLayers,     // 레이어 정리 후 패널 갱신 (AI organize_layers 도구)
   switchDoc, getCurDoc: () => curDoc, getDocName: () => currentFileName,   // 입면/단면은 새 탭에 생성 — 봇이 원본 탭으로 복귀할 때 사용
   is3D: is3DActive,
