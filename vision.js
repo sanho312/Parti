@@ -497,9 +497,6 @@ async function traceConcept(src, opts) {
         const isSide = (x) => Math.abs(mean(x) - med) >= Math.max(18, devHi * 0.5);
         for (let k = valid.length - 1; k >= 0 && isSide(valid[k]); k--) sideR++;
         for (let k = 0; k < valid.length && isSide(valid[k]); k++) sideL++;
-        dbgSide.tail = valid.slice(-6).map(x => [x, +mean(x).toFixed(0), isSide(x)]);
-        dbgSide.head = valid.slice(0, 6).map(x => [x, +mean(x).toFixed(0), isSide(x)]);
-        dbgSide.thr = +(devHi * 0.5).toFixed(1);
         if (sideL === valid.length) { sideL = 0; sideR = 0; }   // 전부 '측면'이면 판정 무의미
       }
     }
@@ -581,6 +578,13 @@ async function traceConcept(src, opts) {
   // ※comps 로 동 수를 덮어쓰지 않는다 — 실측 결과 유리면과 윤곽선이 따로 세어져(동당 2개)
   //   오히려 부풀렸다. 진단값으로만 남기고, 동 수는 실루엣 봉우리·유리 군집으로 판단한다.
   const masses = Math.max(1, Math.min(12, massList.length));
+  // ※동별(棟別) 깊이는 여기서 내지 않는다 — 두 번 실험해 둘 다 불가로 결론.
+  //   ① 실루엣 봉우리 높이: 깊이가 깊을수록 용마루가 뒤·위로 물러나 높아진다. 그러나
+  //      '경사만 다르게' 그린 대조군의 패턴이 거의 같았다(깊이만: .805/.846/.887/.930/.933,
+  //      경사만: .768/.806/.845/.903/1.00) → 단일 뷰에서 깊이와 물매는 분리되지 않는다.
+  //   ② 지붕면의 가로 폭: 깊이에만 반응하는 좋은 신호지만, 붙어 있는 동은 다음 동이
+  //      앞을 가려 끝 동 말고는 측정 자체가 불가능하다.
+  //   → 무리 전체 깊이(아래)만 내고, 동별 차이는 사용자가 문장으로 지정하게 한다.
   // 측면 폭 → 깊이 배수. 투시각을 모르므로 2점 투시 30~45° 관용값(깊이/측면폭 ≈ 1.6)을 쓴다.
   // 값이 없으면(음영이 없거나 측면이 안 보이면) null — 잘못된 값을 내보내지 않는다.
   {
