@@ -3165,7 +3165,9 @@ function tests(){
           const bF = C.state.entities.length;
           A0.buildComplex({ count: 5, floors: 3, w: 8000, d: 12000, roof: 'gable', arrange: 'arc', attached: true });
           const eF = C.state.entities.slice(bF);
-          const winF = eF.filter(e0 => e0.bim && e0.bim.kind === 'opening' && e0.bim.ot === 'window');
+          // 실에서 자동으로 넣은 창(src='room')은 커튼월 리듬 검사 대상이 아니다
+          const winF = eF.filter(e0 => e0.bim && e0.bim.kind === 'opening'
+            && e0.bim.ot === 'window' && e0.bim.src !== 'room');
           const sills = [...new Set(winF.map(e0 => Math.round(e0.bim.sill / 100) * 100))];
           eqi(sills.length, 3, '★층간 스팬드럴 — 층마다 유리가 끊긴다 (sill 단계 ' + sills.sort((p, q) => p - q).join('/') + ')');
           ok(eF.some(e0 => e0.bim && e0.bim.kind === 'slab' && e0.bim.top === 80), '★진입 계단 — 기단 앞 디딤판');
@@ -3646,9 +3648,11 @@ function tests(){
                   A.buildComplex({ count: 1, floors: 1, w: 12000, d: 12000, roof: 'gable',
                     arrange: 'arc', attached: true, glass: false, lean: 0,
                     massList: [{ wFrac: 1, hFrac: 1, wins: wins }] });
-                  // ★내부 실 문(t=100)은 이 검사 대상이 아니다 — 읽은 창이 만든 외피 개구부만 본다
+                  // ★내부 실 문(t=100)과 실에서 자동으로 넣은 창(src='room')은 이 검사 대상이
+                  //   아니다 — 그림에서 읽은 창이 만든 외피 개구부만 본다.
                   return C.state.entities.slice(bW)
-                    .filter(e6 => e6.bim && e6.bim.kind === 'opening' && e6.bim.t !== 100);
+                    .filter(e6 => e6.bim && e6.bim.kind === 'opening'
+                      && e6.bim.t !== 100 && e6.bim.src !== 'room');
                 };
                 // 유리가 아니면 창이 하나도 없었다 — 그림에서 읽은 창이 그 자리를 메운다
                 const noW = unitW(null);
@@ -3796,9 +3800,11 @@ function tests(){
                     { u: 0.82, v: 0.5, wFrac: 0.14, hFrac: 0.3, kind: 'wswing', kindConf: 0.8 }] }] });
                 const eT = C.state.entities.slice(bT);
                 const opT = eT.filter(e7 => e7.bim && e7.bim.kind === 'opening');
-                const wtT = opT.filter(e7 => e7.bim.ot === 'window').map(e7 => e7.bim.wt).sort();
+                const wtT = opT.filter(e7 => e7.bim.ot === 'window' && e7.bim.src !== 'room')
+                  .map(e7 => e7.bim.wt).sort();
                 eqi(wtT.join(','), 'hung,wslide,wswing', '★판독한 창 종류가 개구부 wt 로 실린다');
-                ok(opT.filter(e7 => e7.bim.ot === 'window').every(e7 => e7.bim.wtConf != null),
+                ok(opT.filter(e7 => e7.bim.ot === 'window' && e7.bim.src !== 'room')
+                  .every(e7 => e7.bim.wtConf != null),
                   '  확신도도 함께 실린다 (나중에 되물을 근거)');
                 // ★버그 수정 — 'single' 은 OPENING_TYPES.door 에 없는 값이라 2D 에서 문이
                 //   붙박이창 이중선으로 그려지고 있었다.
@@ -4174,6 +4180,36 @@ function tests(){
                   '  계단에 폭·높이·단높이가 들어 있다 (cad.js 가 평면 심볼과 3D 를 만든다)');
                 const CS = runC({ w: 3000 });
                 eqi(CS.corr.length, 0, '★좁은 동에는 복도를 넣지 않는다 (밴드가 성립하지 않는다)');
+                // ── ★실마다 창 ──
+                // 창을 외피에만 균일하게 뚫으면 어떤 방은 창이 없고 어떤 방은 여러 개다.
+                // 실이 객체가 된 뒤로는 '이 실의 외벽 구간에 개구부가 있는가'를 물을 수 있다.
+                // ★배분 기준은 면적이 아니라 '창이 필요한가'다 — 면적만 보고 담으면 한 밴드에
+                //   침실이 셋 몰려 가운데 하나가 창을 못 받는다(실측 21실 중 6실).
+                C.state.entities.length = bR;
+                A.buildComplex({ count: 3, floors: 1, w: 9000, d: 11000, roof: 'gable',
+                  arrange: 'arc', attached: true, glass: false, lean: 0 });
+                const esW = C.state.entities.slice(bR);
+                const rmW = esW.filter(e0 => e0.bim && e0.bim.kind === 'room'
+                  && e0.bim.floor === 1 && e0.bim.name !== '복도');
+                const wnW = esW.filter(e0 => e0.bim && e0.bim.ot === 'window');
+                const inW = (p, x, y) => { let c0 = false;
+                  for (let i0 = 0, j0 = p.length - 1; i0 < p.length; j0 = i0++)
+                    if (((p[i0][1] > y) !== (p[j0][1] > y)) &&
+                        (x < (p[j0][0] - p[i0][0]) * (y - p[i0][1]) / (p[j0][1] - p[i0][1]) + p[i0][0]))
+                      c0 = !c0;
+                  return c0; };
+                const noWinW = rmW.filter(r0 => !wnW.some(w0 => {
+                  const mx0 = (w0.x1 + w0.x2) / 2, my0 = (w0.y1 + w0.y2) / 2;
+                  const L0 = Math.hypot(w0.x2 - w0.x1, w0.y2 - w0.y1) || 1;
+                  const nx0 = -(w0.y2 - w0.y1) / L0, ny0 = (w0.x2 - w0.x1) / L0;
+                  return inW(r0.points, mx0 + nx0 * 400, my0 + ny0 * 400)
+                    || inW(r0.points, mx0 - nx0 * 400, my0 - ny0 * 400); })).map(r0 => r0.bim.name);
+                ok(!noWinW.some(n0 => /침실|거실|주방|원룸/.test(n0)),
+                  '★거주실(침실·거실·주방)은 전부 창을 받는다 (창 없는 실: '
+                    + (noWinW.join(',') || '없음') + ')');
+                ok(noWinW.length < rmW.length,
+                  '  창 없는 실은 욕실 계열뿐 (' + noWinW.length + '/' + rmW.length + ')');
+                C.state.entities.length = bR;
                 C.state.entities.length = bR;
               }).then(() => {
                 // ★라우팅 근거 지표 — 전역 임계값 추측이 실물에서 두 번 뒤집힌 뒤 도입한 증거들.

@@ -586,19 +586,40 @@ function buildComplex(spec) {
         let cells, corrCell = null;
         if (useCorr) {
           corrCell = { x: xc0, y: 0, w: CORR, h: Ds[i], room: { name: '복도' } };
-          // 큰 실부터 번갈아 담아 두 밴드의 면적을 맞춘다 (한쪽만 깊어지지 않게)
-          const sorted = items.slice().sort((a2, b2) => b2.area - a2.area);
+          // ★배분 기준은 면적이 아니라 '창이 필요한가'다.
+          //   면적만 보고 담으면 한 밴드에 침실이 셋 몰려 가운데 하나가 창을 못 받는다(실측).
+          //   밴드의 창 자리는 앞·뒤 두 곳뿐이므로, 거주실을 밴드마다 둘씩 나눠 담는다.
+          //   현관은 복도가 있으면 뺀다 — 복도 앞끝이 곧 현관이라 따로 두면 뒤로 밀린다.
+          const NEEDWIN = /침실|거실|주방|작업|업무|회의|원룸/;
+          const src = items.filter(it => !/현관/.test(it.name));
+          const need0 = src.filter(it => NEEDWIN.test(it.name)).sort((a2, b2) => b2.area - a2.area);
+          const rest0 = src.filter(it => !NEEDWIN.test(it.name)).sort((a2, b2) => b2.area - a2.area);
           const LB = [], RB = [];
-          let la = 0, ra = 0;
-          for (const it of sorted) { if (la <= ra) { LB.push(it); la += it.area; } else { RB.push(it); ra += it.area; } }
+          need0.forEach((it, k) => (k % 2 ? RB : LB).push(it));      // 거주실을 번갈아
+          let la = LB.reduce((a2, v) => a2 + v.area, 0), ra = RB.reduce((a2, v) => a2 + v.area, 0);
+          for (const it of rest0) { if (la <= ra) { LB.push(it); la += it.area; } else { RB.push(it); ra += it.area; } }
           // ★최소 실 깊이를 보장한다 — 면적 비례로만 나누면 욕실이 90cm 깊이가 된다(실측).
           //   먼저 모두에게 최소값을 주고 남은 깊이만 면적 비례로 나눈다.
           //   그래도 다 못 들어가면 작은 실부터 뺀다 — 들어가지도 않는 실을 그리지 않는다.
           const MINRD = 1800;
+          // ★창이 필요한 실은 밴드 양 끝(앞·뒤)에 놓는다.
+          //   면적 순으로만 쌓으면 침실이 밴드 가운데에 갇혀 외벽에 닿지 못한다
+          //   (실측: 21실 중 6실이 창 없는 방 — 침실2·욕실·욕실2).
+          //   욕실·현관·창고는 창이 없어도 성립하므로 가운데를 맡는다.
           const band = (bx, bw, list) => {
             let L2 = list.slice();
             while (L2.length > 1 && L2.length * MINRD > Ds[i]) {
               L2.sort((a2, b2) => a2.area - b2.area); L2.shift();
+            }
+            {
+              const need = L2.filter(it => NEEDWIN.test(it.name));
+              const rest = L2.filter(it => !NEEDWIN.test(it.name));
+              if (need.length && rest.length) {
+                need.sort((a2, b2) => b2.area - a2.area);
+                const head = need.shift();                    // 가장 큰 실은 앞(마당 쪽)
+                const tail = need.length ? [need.pop()] : [];  // 그 다음은 뒤
+                L2 = [head].concat(need, rest, tail);
+              }
             }
             const tot = L2.reduce((a2, v) => a2 + v.area, 0) || 1;
             const rem = Ds[i] - L2.length * MINRD;
@@ -632,6 +653,7 @@ function buildComplex(spec) {
         const onEdge = (a2, b2, lim) => Math.abs(a2 - lim) < EPS2 && Math.abs(b2 - lim) < EPS2;
         const seen = new Set();
         const madeWalls = [];                                // {key, cell, A, B, len}
+        const extEdges = [];                                 // 실이 외벽에 면한 변 (창 자리)
         for (const c of cells) {
           const x1 = c.x, x2 = c.x + c.w, y1 = c.y, y2 = c.y + c.h;
           // 셀의 네 변 중 '쐐기 외곽에 붙은 변'은 이미 외벽이 있으므로 만들지 않는다
@@ -643,7 +665,19 @@ function buildComplex(spec) {
           ];
           void corrCell;
           for (const [ax, ay, bx, by, isExt] of edges) {
-            if (isExt) continue;
+            if (isExt) {
+              // ★외벽에 면한 변은 창 자리 후보다. 단 이웃과 공유하는 측벽(세대분리벽)은
+              //   창을 뚫으면 옆 동으로 뚫린다 — 무리 끝동이거나 떨어져 있을 때만 쓴다.
+              const vert = Math.abs(ax - bx) < EPS2;
+              const outer = !vert ? true
+                : (Math.abs(ax) < EPS2 ? (i === 0 || gap > 0) : (i === n - 1 || gap > 0));
+              if (outer && c !== corrCell) {
+                const A3 = PXY(ax, ay), B3 = PXY(bx, by);
+                const L3 = Math.hypot(B3[0] - A3[0], B3[1] - A3[1]);
+                if (L3 >= 1500) extEdges.push({ cell: c, A: A3, B: B3, len: L3 });
+              }
+              continue;
+            }
             const k = [Math.round(ax), Math.round(ay), Math.round(bx), Math.round(by)].join(',');
             const k2 = [Math.round(bx), Math.round(by), Math.round(ax), Math.round(ay)].join(',');
             if (seen.has(k) || seen.has(k2)) continue;           // 이웃 실과 공유하는 벽은 한 번만
@@ -708,6 +742,49 @@ function buildComplex(spec) {
             dpe.bim = { kind: 'opening', ot: 'door', wt: 'swing',
               h: STD.doorH, sill: f * o.floorH, t: STD.wallInt };
             counts.door++;
+          }
+        }
+        // ── ★실마다 창 ──
+        // 창을 외피에만 균일하게 뚫으면 어떤 방은 창이 없고 어떤 방은 여러 개가 된다.
+        // 실이 객체가 된 지금은 '이 실의 외벽 구간에 개구부가 하나라도 있는가'를 물을 수 있다.
+        // 없으면 그 구간 한가운데에 하나 넣는다 — 창 없는 방을 만들지 않는다.
+        {
+          const ops = br.state.entities.filter(e2 => e2.bim && e2.bim.kind === 'opening'
+            && e2.bim.ot === 'window' && e2.type === 'LINE');
+          const byCell = new Map();
+          for (const ee of extEdges) {
+            if (!byCell.has(ee.cell)) byCell.set(ee.cell, []);
+            byCell.get(ee.cell).push(ee);
+          }
+          for (const [c, list] of byCell) {
+            const best = list.slice().sort((a2, b2) => b2.len - a2.len)[0];
+            const ux2 = (best.B[0] - best.A[0]) / best.len, uy2 = (best.B[1] - best.A[1]) / best.len;
+            // 이 구간에 이미 창이 있는가 — 개구부 중심을 이 변에 투영해 안에 들어오는지
+            const has = ops.some(e2 => {
+              const mx2 = (e2.x1 + e2.x2) / 2, my2 = (e2.y1 + e2.y2) / 2;
+              const t3 = (mx2 - best.A[0]) * ux2 + (my2 - best.A[1]) * uy2;
+              if (t3 < 0 || t3 > best.len) return false;
+              const px2 = best.A[0] + ux2 * t3, py2 = best.A[1] + uy2 * t3;
+              return Math.hypot(mx2 - px2, my2 - py2) < 400;      // 같은 벽면 위
+            });
+            if (has) continue;
+            const bath = /욕실|화장실/.test(c.room.name);
+            const ww2 = Math.min(bath ? STD.bathWinW : STD.winW, best.len * 0.5);
+            if (ww2 < 500) continue;
+            const s3 = best.len / 2;
+            for (let f = 0; f < Math.max(1, o.floors); f++) {
+              const e3 = br.addEntity({ type: 'LINE', layer: '개구부',
+                x1: Math.round(best.A[0] + ux2 * (s3 - ww2 / 2)),
+                y1: Math.round(best.A[1] + uy2 * (s3 - ww2 / 2)),
+                x2: Math.round(best.A[0] + ux2 * (s3 + ww2 / 2)),
+                y2: Math.round(best.A[1] + uy2 * (s3 + ww2 / 2)) });
+              // src='room' — 그림에서 읽은 창·커튼월과 구분한다(판독 결과를 검사하는 회귀가
+              // 이 창까지 세면 의미가 흐려진다). 창호일람표에는 똑같이 잡힌다.
+              e3.bim = { kind: 'opening', ot: 'window', wt: 'fix', src: 'room',
+                h: bath ? STD.bathWinH : STD.winH,
+                sill: f * o.floorH + (bath ? STD.bathWinSill : STD.winSill), t: STD.wallExt };
+              counts.window++;
+            }
           }
         }
         // ── ★계단 ──
