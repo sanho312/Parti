@@ -1136,9 +1136,15 @@
         const winN = allWins.length;
         // 판독한 창 종류 요약 — 확신이 있는 것만 이름을 밝힌다.
         // (표시를 안 그린 창은 붙박이 기본값일 뿐 '읽어서 확신한 값'이 아니다)
-        const KO = { fix: '붙박이', wswing: '여닫이', wslide: '미서기', hung: '오르내리' };
+        const KO = { fix: '붙박이', wswing: '여닫이', wslide: '미서기', hung: '오르내리',
+          swing: '여닫이문', dswing: '쌍여닫이문', slide: '미서기문', fold: '접이문' };
         const tally = {};
-        allWins.forEach(q => { if ((q.kindConf || 0) >= 0.4) tally[q.kind] = (tally[q.kind] || 0) + 1; });
+        allWins.forEach(q => {
+          // 밑변에 닿은 개구부는 문이 된다 — 문 종류로 센다 (arch.js 의 승격 조건과 같다)
+          const isDoorish = (q.v - (q.hFrac || 0) / 2) <= 0.08;
+          const k = isDoorish ? q.dkind : q.kind, cf = isDoorish ? q.dkindConf : q.kindConf;
+          if ((cf || 0) >= 0.4 && k) tally[k] = (tally[k] || 0) + 1;
+        });
         const kindTxt = Object.keys(tally).map(k => (KO[k] || k) + ' ' + tally[k]).join('·');
         const r = window.PARTI_ARCH.buildComplex(spec);
         if (!r) continue;

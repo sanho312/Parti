@@ -1092,6 +1092,19 @@ async function traceConcept(src, opts) {
     if (mark === 'none') return ['fix', 0.15];              // 표시가 없다 = 안 그렸다
     return ['fix', 0];                                      // 모른다
   };
+  // 같은 근거를 문 카탈로그로도 매핑한다 — 밑변에 닿은 개구부는 문이 되기 때문이다.
+  // (OPENING_TYPES.door: swing 여닫이 · dswing 쌍여닫이 · slide 미서기 · pocket 미닫이
+  //  · fold 접이 · dact 자재 · rev 회전)
+  // ★창과 같은 모호함이 있다 — '세로 2분할'은 쌍여닫이문일 수도 미서기문일 수도 있다.
+  //   출입구는 쌍여닫이가 더 흔하다는 판단으로 그쪽을 택하되 확신도를 낮게 둔다.
+  //   회전문(원)·자재문은 사각형 판독으로 잡을 수 없어 대상에서 뺀다.
+  const doorKindOf = (cols, rows, mark) => {
+    if (cols >= 3 && rows === 1) return ['fold', 0.4];       // 좁은 칸이 여럿 = 접이문
+    if (cols === 2 && rows === 1) return ['dswing', 0.5];
+    if (mark === 'apexL' || mark === 'apexR' || mark === 'apexT' || mark === 'apexB')
+      return ['swing', 0.8];
+    return ['swing', 0.15];                                  // 기본값 — 확신하지 않는다
+  };
   for (let i = 0; i < massList.length; i++) {
     const rawL = Math.max(0, Math.round(bounds[i] * WK)), rawR = Math.min(Ww - 1, Math.round(bounds[i + 1] * WK));
     let x0 = rawL, x1 = rawR;
@@ -1157,6 +1170,8 @@ async function traceConcept(src, opts) {
         cols: q.cols, rows: q.rows, panes: q.panes, mark: q.mark ? q.mark.kind : null,
         kind: kindOf(q.cols, q.rows, q.mark ? q.mark.kind : null)[0],
         kindConf: kindOf(q.cols, q.rows, q.mark ? q.mark.kind : null)[1],
+        dkind: doorKindOf(q.cols, q.rows, q.mark ? q.mark.kind : null)[0],
+        dkindConf: doorKindOf(q.cols, q.rows, q.mark ? q.mark.kind : null)[1],
       };
     }).sort((a, b) => (a.v - b.v) || (a.u - b.u));
   }

@@ -3807,6 +3807,72 @@ function tests(){
                   eqi(rs[3], 'wslide', '  원본이 작아 축소가 없을 때도 기존대로');
                 });
               }).then(() => {
+                // ── ★문 종류 판독 ──
+                // 밑변에 닿은 개구부는 문이 된다. 창과 같은 근거(칸 배열·개폐 표시)를
+                // 문 카탈로그(swing/dswing/slide/pocket/fold/dact/rev)로 매핑한다.
+                const mkD = (t) => {
+                  const cv = AD.createElement('canvas'); cv.width = 560; cv.height = 460;
+                  const g = cv.getContext('2d');
+                  g.fillStyle = '#fff'; g.fillRect(0, 0, 560, 460);
+                  g.strokeStyle = '#222'; g.lineWidth = 2; g.lineJoin = 'round'; g.lineCap = 'round';
+                  const bY = 380, a = 100, b = 460, eh = 240, rz = 60;
+                  g.beginPath(); g.moveTo(a, bY); g.lineTo(a, bY - eh);
+                  g.lineTo((a + b) / 2, bY - eh - rz); g.lineTo(b, bY - eh); g.lineTo(b, bY);
+                  g.closePath(); g.stroke();
+                  const dw = 110, dh = 150, L = (a + b) / 2 - dw / 2, R = L + dw;
+                  const T = bY - dh, B = bY - 2;
+                  g.strokeRect(L, T, dw, B - T);
+                  g.lineWidth = 1.4;
+                  if (t === 'dswing') { g.beginPath(); g.moveTo((L + R) / 2, T); g.lineTo((L + R) / 2, B); g.stroke(); }
+                  if (t === 'fold') { for (let i = 1; i < 4; i++) { g.beginPath();
+                    g.moveTo(L + dw * i / 4, T); g.lineTo(L + dw * i / 4, B); g.stroke(); } }
+                  if (t === 'swingV') { g.setLineDash([4, 3]); g.beginPath();
+                    g.moveTo(R, T + 3); g.lineTo(L + 3, (T + B) / 2); g.lineTo(R, B - 3);
+                    g.stroke(); g.setLineDash([]); }
+                  return cv.toDataURL('image/png');
+                };
+                const bD = C.state.entities.length;
+                const runD = (t) => VZ.traceConcept(mkD(t), { maxSide: 560 }).then(r => {
+                  const ws = (r.massList && r.massList[0] && r.massList[0].wins) || [];
+                  C.state.entities.length = bD;
+                  A.buildComplex({ count: 1, floors: 1, w: 10000, d: 10000, roof: 'gable',
+                    arrange: 'arc', attached: true, glass: false, lean: 0,
+                    massList: [{ wFrac: 1, hFrac: 1, wins: ws }] });
+                  const dEnt = C.state.entities.slice(bD)
+                    .filter(e8 => e8.bim && e8.bim.ot === 'door');
+                  return { read: ws.length === 1 ? ws[0].dkind : null,
+                    conf: ws.length === 1 ? ws[0].dkindConf : null,
+                    made: dEnt.map(e8 => e8.bim.wt).join(',') };
+                });
+                return runD('plain').then(d1 => {
+                  eqi(d1.read, 'swing', '★문 종류 판독 — 표시 없는 문은 여닫이문(swing)');
+                  ok(d1.conf <= 0.2, '  단, 확신하지 않는다 (' + d1.conf + ')');
+                  eqi(d1.made, 'swing', '  생성된 문도 swing');
+                  return runD('dswing');
+                }).then(d2 => {
+                  eqi(d2.read, 'dswing', '★가운데가 나뉜 문 → 쌍여닫이문(dswing)');
+                  eqi(d2.made, 'dswing', '  생성까지 이어진다');
+                  return runD('fold');
+                }).then(d3 => {
+                  eqi(d3.read, 'fold', '★좁은 칸이 여럿인 문 → 접이문(fold)');
+                  eqi(d3.made, 'fold', '  생성까지 이어진다');
+                  return runD('swingV');
+                }).then(d4 => {
+                  eqi(d4.read, 'swing', '★개폐 사선이 있는 문 → 여닫이문');
+                  ok(d4.conf >= 0.7, '  이건 확신한다 (' + d4.conf + ')');
+                  // 3D 에서 종류가 실제로 달라 보이는가
+                  C.state.entities.length = bD;
+                  A.buildComplex({ count: 1, floors: 1, w: 10000, d: 10000, roof: 'gable',
+                    arrange: 'arc', attached: true, glass: false, lean: 0,
+                    massList: [{ wFrac: 1, hFrac: 1, wins: [
+                      { u: 0.5, v: 0.12, wFrac: 0.16, hFrac: 0.24, dkind: 'dswing',
+                        dkindConf: 0.5, kind: 'fix', kindConf: 0 }] }] });
+                  const eD = C.state.entities.slice(bD).find(x => x.bim && x.bim.ot === 'door');
+                  const nD = C.bimSolids().filter(s8 => s8.eid === (eD && eD.id)).length;
+                  ok(nD >= 2, '★3D 도 종류를 따른다 — 쌍여닫이문은 문짝이 2개 (' + nD + ')');
+                  C.state.entities.length = bD;
+                });
+              }).then(() => {
                 // ★라우팅 근거 지표 — 전역 임계값 추측이 실물에서 두 번 뒤집힌 뒤 도입한 증거들.
                 //   도면은 무채색·축정렬·이중선, 손그림은 사선 지배 → 이 표가 오판을 막는다.
                 return VZ.traceImage(cv2.toDataURL('image/png'), { widthMM: 8000 }).then(rp => {

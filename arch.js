@@ -424,7 +424,12 @@ function buildComplex(spec) {
       const P2 = [FL[0] + ux * (s + cw / 2), FL[1] + uy * (s + cw / 2)];
       const e = br.addEntity({ type: 'LINE', layer: '개구부',
         x1: Math.round(P1[0]), y1: Math.round(P1[1]), x2: Math.round(P2[0]), y2: Math.round(P2[1]) });
-      if (isDoor) { e.bim = { kind: 'opening', ot: 'door', wt: 'swing', h: 2100, sill: 0, t: STD.wallExt }; counts.door++; }
+      if (isDoor) {
+        // 판독한 문 종류를 그대로 — 근거가 없으면 여닫이 기본값이다
+        e.bim = { kind: 'opening', ot: 'door', wt: q.dkind || 'swing', h: 2100, sill: 0, t: STD.wallExt };
+        if (q.dkindConf != null) e.bim.wtConf = q.dkindConf;
+        counts.door++;
+      }
       else {
         // ★판독한 창 종류를 그대로 싣는다. 확신이 낮으면(안 그린 그림) 붙박이 기본값이다.
         e.bim = { kind: 'opening', ot: 'window', wt: q.kind || 'fix', h: Math.round(wh), sill, t: STD.wallExt };
