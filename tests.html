@@ -4594,6 +4594,56 @@ function tests(){
                 const R0 = runR({ rooms: false });
                 eqi(R0.inWall.length, 0, '  rooms:false 면 예전처럼 빈 외피 (선택 가능)');
                 C.state.entities.length = bR;
+                // ── ★일렬·링 배치에도 내부가 있어야 한다 ──
+                // 예전엔 부채꼴에서만 실을 만들었다. 배치를 '일렬'로 고르면 결과물이
+                // 껍데기뿐이라(실측: 2동 4층에 요소 54개, 실 0개) 면적표의 연면적이 비고,
+                // 층별 평면도는 층을 가를 근거를 못 찾고, 자동 단면은 복도를 못 찾았다.
+                // ★배치마다 새 알고리즘을 쓰지 않는다 — 네 꼭짓점만 넘기면 같은 구획기가 돈다.
+                const bA = C.state.entities.length;
+                const runA = (arr, att) => {
+                  C.state.entities.length = bA;
+                  A.buildComplex({ count: 2, floors: 4, w: 9000, d: 11000, roof: 'gable',
+                    arrange: arr, attached: att, glass: false, lean: 0 });
+                  const es = C.state.entities.slice(bA);
+                  const kn = (k) => es.filter(e0 => e0.bim && e0.bim.kind === k);
+                  const pa = (pts) => { let a2 = 0;
+                    for (let i0 = 0, j0 = pts.length - 1; i0 < pts.length; j0 = i0++)
+                      a2 += pts[j0][0] * pts[i0][1] - pts[i0][0] * pts[j0][1];
+                    return Math.abs(a2) / 2 / 1e6; };
+                  const f1 = kn('room').filter(r0 => r0.bim.floor === 1);
+                  return { es, kn, rooms: kn('room').length, f1,
+                    corr: kn('room').filter(r0 => /복도/.test(r0.bim.name)).length,
+                    stair: kn('stair').length,
+                    door: kn('opening').filter(e0 => e0.bim.ot === 'door').length,
+                    foot: kn('slab').filter(e0 => e0.bim.t === 150 && (e0.bim.top || 0) === 0)
+                      .reduce((a2, e0) => a2 + pa(e0.points), 0),
+                    area1: f1.reduce((a2, x) => a2 + x.bim.areaM2, 0),
+                    split: C.planFloorSplit(es).length };
+                };
+                const RW = runA('row', false);
+                ok(RW.rooms > 0, '★일렬 배치에도 실이 생긴다 (' + RW.rooms + '개 — 예전엔 0개)');
+                ok(RW.corr > 0, '  복도도 (' + RW.corr + '개)');
+                ok(RW.stair > 0, '  계단도 (' + RW.stair + '개)');
+                ok(RW.door > 0, '  실내문도 (' + RW.door + '개)');
+                // ★실 면적 합 = 건축면적. 직사각형이라 오차가 없어야 한다.
+                ok(Math.abs(RW.area1 - RW.foot) / Math.max(1, RW.foot) < 0.001,
+                  '★실 면적 합 = 건축면적 (' + RW.area1.toFixed(1) + ' ≈ ' + RW.foot.toFixed(1) + '㎡)');
+                eqi(RW.split, 4, '★층별 평면도가 갈린다 (1층·2~3층 기준층·4층·지붕)');
+                // 내벽이 매스 밖으로 나가지 않는다
+                const inPA = (p, x, y) => { let c0 = false;
+                  for (let i0 = 0, j0 = p.length - 1; i0 < p.length; j0 = i0++)
+                    if (((p[i0][1] > y) !== (p[j0][1] > y)) &&
+                        (x < (p[j0][0] - p[i0][0]) * (y - p[i0][1]) / (p[j0][1] - p[i0][1]) + p[i0][0]))
+                      c0 = !c0;
+                  return c0; };
+                const slabsA = RW.kn('slab').filter(e0 => e0.layer === '바닥' && e0.bim.t === 150);
+                const outA = RW.kn('wall').filter(e0 => e0.bim.t === 100)
+                  .filter(e0 => !slabsA.some(sl => inPA(sl.points, (e0.x1 + e0.x2) / 2, (e0.y1 + e0.y2) / 2)));
+                eqi(outA.length, 0, '★내벽이 매스 밖으로 삐져나가지 않는다 (일렬)');
+                const RG = runA('ring', false);
+                ok(RG.rooms > 0 && RG.corr > 0 && RG.stair > 0,
+                  '★링(마당 두르기) 배치도 마찬가지 (실 ' + RG.rooms + ' · 복도 ' + RG.corr + ')');
+                C.state.entities.length = bA;
                 // ── ★복도·계단 ──
                 // 방끼리 직접 연결하면 안방을 지나야 다른 방이 나온다. 뒤쪽에 복도 띠를 두고
                 // 방들이 거기로 열리게 한다(앞은 주 실이 차지해 마당 조망을 갖는다).

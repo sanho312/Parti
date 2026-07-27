@@ -270,6 +270,287 @@ function buildMassing(spec) {
 // 투시 스케치는 픽셀만으로 복원할 수 없다(깊이·왜곡). 대신 스케치의 '구성'(N동·지붕형·
 // 마당 배치)을 사용자에게 확인받아 그 구성대로 세운다. 각 동은 축 정렬(회전 없음) —
 // 배치는 스케치의 구성을 따른다: 'arc'(부채꼴로 늘어서고 마당은 그 앞) · 'circle'(마당을 두름) · 'row'(일렬).
+// ── ★내부 실 구획 ── (부채꼴·일렬·링 배치가 함께 쓴다)
+// 결과물이 외피뿐이면 안이 통째로 빈다. 네 꼭짓점으로 둘러싸인 어떤 사각형이든 (x, y)
+// 매개변수 공간에서는 직사각형이므로, 이미 검증된 재귀 이분할기 slice() 를 그 공간에서
+// 돌리고 겹선형 보간으로 되돌리면 그대로 실 구획이 된다 — 배치마다 새 알고리즘이 필요 없다.
+// ★부채꼴은 각도축을 '호길이'로 환산해 넘긴다(W). 라디안 그대로 주면 slice() 의
+//   '긴 변을 자른다' 판정이 무의미해져 실이 전부 한 방향으로만 잘린다.
+//   일렬·링 배치는 직사각형이라 W 가 곧 동 폭이다.
+function buildInterior(br, o, counts, roomSeq, ctx) {
+  const FL = ctx.FL, FR = ctx.FR, BR = ctx.BR, BL = ctx.BL;
+  const arcW = ctx.W, Di = ctx.D, chord = ctx.chord, wSh = ctx.wSh || null;
+  const curMat = ctx.mat || null;
+  if (o.rooms !== false && Di >= 3000 && chord >= 3000) {
+        const areaM2 = arcW * Di / 1e6;
+    const prog = o.program || (areaM2 < 26 ? 'oneroom' : areaM2 < 40 ? 'oneHalf'
+      : areaM2 < 60 ? 'tworoom' : 'threeroom');
+    const P = PROGRAMS[prog] || PROGRAMS.oneroom;
+    const fixed = P.rooms.filter(r2 => r2.fix), flex = P.rooms.filter(r2 => !r2.fix);
+    const fixSum = fixed.reduce((a2, r2) => a2 + r2.fix, 0);
+    const restA = Math.max(areaM2 * 0.25, areaM2 - fixSum);
+    const wSum = flex.reduce((a2, r2) => a2 + (r2.w || 1), 0) || 1;
+    const items = P.rooms.map(r2 => ({ name: r2.n, area: r2.fix ? r2.fix : restA * (r2.w || 1) / wSum }));
+    // ── ★복도를 아는 배치 (중복도) ──
+    // 재귀 이분할기는 복도를 모른다. 뒤쪽에 복도 띠만 두었더니 뒷줄 방만 복도에 닿고
+    // 나머지는 이웃을 거쳤다(실측: 내부문 21개 중 6개만 복도에 면함).
+    // → 복도를 앞뒤로 관통시키고(중복도) 방을 양쪽 밴드에 '깊이로만' 나눈다.
+    //   그러면 밴드의 모든 방이 복도변에 자기 면을 갖는다 — 동선이 원리적으로 보장된다.
+    //   폭이 좁아 밴드가 성립하지 않으면(복도폭+5m 미만) 예전처럼 이분할기로 돌아간다.
+    // ★쐐기는 앞이 좁고 뒤가 넓다 — 매개변수 폭을 그대로 쓰면 복도가 앞에서 유효폭 미만이
+    //   된다. 가장 좁은 앞쪽(현 chord)에서 STD.corridor 를 지키도록 되돌려 잡는다.
+    const CORR = STD.corridor * Math.max(1, arcW / Math.max(1, chord));
+    const useCorr = o.corridor !== false && arcW >= CORR + 5000 && items.length >= 3;
+    const xc0 = (arcW - CORR) / 2, xc1 = xc0 + CORR;     // 복도 좌·우 선
+    let cells, corrCell = null;
+    if (useCorr) {
+      corrCell = { x: xc0, y: 0, w: CORR, h: Di, room: { name: '복도' } };
+      // ★배분 기준은 면적이 아니라 '창이 필요한가'다.
+      //   면적만 보고 담으면 한 밴드에 침실이 셋 몰려 가운데 하나가 창을 못 받는다(실측).
+      //   밴드의 창 자리는 앞·뒤 두 곳뿐이므로, 거주실을 밴드마다 둘씩 나눠 담는다.
+      //   현관은 복도가 있으면 뺀다 — 복도 앞끝이 곧 현관이라 따로 두면 뒤로 밀린다.
+      const NEEDWIN = /침실|거실|주방|작업|업무|회의|원룸/;
+      const src = items.filter(it => !/현관/.test(it.name));
+      const need0 = src.filter(it => NEEDWIN.test(it.name)).sort((a2, b2) => b2.area - a2.area);
+      const rest0 = src.filter(it => !NEEDWIN.test(it.name)).sort((a2, b2) => b2.area - a2.area);
+      const LB = [], RB = [];
+      need0.forEach((it, k) => (k % 2 ? RB : LB).push(it));      // 거주실을 번갈아
+      let la = LB.reduce((a2, v) => a2 + v.area, 0), ra = RB.reduce((a2, v) => a2 + v.area, 0);
+      for (const it of rest0) { if (la <= ra) { LB.push(it); la += it.area; } else { RB.push(it); ra += it.area; } }
+      // ★최소 실 깊이를 보장한다 — 면적 비례로만 나누면 욕실이 90cm 깊이가 된다(실측).
+      //   먼저 모두에게 최소값을 주고 남은 깊이만 면적 비례로 나눈다.
+      //   그래도 다 못 들어가면 작은 실부터 뺀다 — 들어가지도 않는 실을 그리지 않는다.
+      const MINRD = 1800;
+      // ★창이 필요한 실은 밴드 양 끝(앞·뒤)에 놓는다.
+      //   면적 순으로만 쌓으면 침실이 밴드 가운데에 갇혀 외벽에 닿지 못한다
+      //   (실측: 21실 중 6실이 창 없는 방 — 침실2·욕실·욕실2).
+      //   욕실·현관·창고는 창이 없어도 성립하므로 가운데를 맡는다.
+      const band = (bx, bw, list) => {
+        let L2 = list.slice();
+        while (L2.length > 1 && L2.length * MINRD > Di) {
+          L2.sort((a2, b2) => a2.area - b2.area); L2.shift();
+        }
+        {
+          const need = L2.filter(it => NEEDWIN.test(it.name));
+          const rest = L2.filter(it => !NEEDWIN.test(it.name));
+          if (need.length && rest.length) {
+            need.sort((a2, b2) => b2.area - a2.area);
+            const head = need.shift();                    // 가장 큰 실은 앞(마당 쪽)
+            const tail = need.length ? [need.pop()] : [];  // 그 다음은 뒤
+            L2 = [head].concat(need, rest, tail);
+          }
+        }
+        const tot = L2.reduce((a2, v) => a2 + v.area, 0) || 1;
+        const rem = Di - L2.length * MINRD;
+        const hs = rem >= 0 ? L2.map(it => MINRD + rem * it.area / tot)
+          : L2.map(() => Di / L2.length);
+        let y = 0; const out2 = [];
+        L2.forEach((it, k) => {
+          const hh = (k === L2.length - 1) ? (Di - y) : hs[k];
+          out2.push({ x: bx, y, w: bw, h: hh, room: { name: it.name } });
+          y += hh;
+        });
+        return out2;
+      };
+      cells = band(0, xc0, LB).concat(band(xc1, arcW - xc1, RB));
+      cells.push(corrCell);
+    } else {
+      cells = slice({ x: 0, y: 0, w: arcW, h: Di }, items);
+    }
+    // ── (x, y) → 세계 좌표 ──
+    // ★쐐기 네 꼭짓점의 겹선형(bilinear) 보간을 쓴다. 호를 다시 각도로 되돌리면
+    //   실 경계가 호를 여러 조각으로 근사하는 셈이라, 현 하나로 그린 '벽·바닥판'보다
+    //   바깥으로 부푼다(실측: 실 면적 합이 건축면적보다 0.9% 컸다).
+    //   벽이 현이면 실도 같은 현 위에 있어야 한다 — 그래야 실 면적 합 = 건축면적이다.
+    const PXY = (x, y) => {
+      const u = Math.max(0, Math.min(1, x / arcW)), v = Math.max(0, Math.min(1, y / Di));
+      const px = (1 - u) * (1 - v) * FL[0] + u * (1 - v) * FR[0] + u * v * BR[0] + (1 - u) * v * BL[0];
+      const py = (1 - u) * (1 - v) * FL[1] + u * (1 - v) * FR[1] + u * v * BR[1] + (1 - u) * v * BL[1];
+      return wSh ? [px + wSh[0], py + wSh[1]] : [px, py];   // 기운 동이면 벽도 같이 기운다
+    };
+    const EPS2 = 1;
+    const onEdge = (a2, b2, lim) => Math.abs(a2 - lim) < EPS2 && Math.abs(b2 - lim) < EPS2;
+    const seen = new Set();
+    const madeWalls = [];                                // {key, cell, A, B, len}
+    const extEdges = [];                                 // 실이 외벽에 면한 변 (창 자리)
+    for (const c of cells) {
+      const x1 = c.x, x2 = c.x + c.w, y1 = c.y, y2 = c.y + c.h;
+      // 셀의 네 변 중 '쐐기 외곽에 붙은 변'은 이미 외벽이 있으므로 만들지 않는다
+      const edges = [
+        [x1, y1, x2, y1, onEdge(y1, y1, 0)],                 // 앞(마당 쪽)
+        [x1, y2, x2, y2, onEdge(y2, y2, Di)],             // 뒤
+        [x1, y1, x1, y2, onEdge(x1, x1, 0)],                 // 좌
+        [x2, y1, x2, y2, onEdge(x2, x2, arcW)],              // 우
+      ];
+      void corrCell;
+      for (const [ax, ay, bx, by, isExt] of edges) {
+        if (isExt) {
+          // ★외벽에 면한 변은 창 자리 후보다. 단 이웃과 공유하는 측벽(세대분리벽)은
+          //   창을 뚫으면 옆 동으로 뚫린다 — 무리 끝동이거나 떨어져 있을 때만 쓴다.
+          const vert = Math.abs(ax - bx) < EPS2;
+          const outer = !vert ? true
+            : (Math.abs(ax) < EPS2 ? ctx.sideExtL !== false : ctx.sideExtR !== false);
+          if (outer && c !== corrCell) {
+            const A3 = PXY(ax, ay), B3 = PXY(bx, by);
+            const L3 = Math.hypot(B3[0] - A3[0], B3[1] - A3[1]);
+            if (L3 >= 1500) extEdges.push({ cell: c, A: A3, B: B3, len: L3 });
+          }
+          continue;
+        }
+        const k = [Math.round(ax), Math.round(ay), Math.round(bx), Math.round(by)].join(',');
+        const k2 = [Math.round(bx), Math.round(by), Math.round(ax), Math.round(ay)].join(',');
+        if (seen.has(k) || seen.has(k2)) continue;           // 이웃 실과 공유하는 벽은 한 번만
+        seen.add(k);
+        const A2 = PXY(ax, ay), B2 = PXY(bx, by);
+        const len2 = Math.hypot(B2[0] - A2[0], B2[1] - A2[1]);
+        if (len2 < 600) continue;
+        for (let f = 0; f < Math.max(1, o.floors); f++) {
+          const iw = br.addEntity({ type: 'LINE', layer: '벽',
+            x1: Math.round(A2[0]), y1: Math.round(A2[1]),
+            x2: Math.round(B2[0]), y2: Math.round(B2[1]) });
+          iw.bim = { kind: 'wall', h: STD.ceil, t: STD.wallInt, base: f * o.floorH };
+          if (wSh) iw.bim.shear = wSh;
+          if (curMat) iw.mat = curMat;
+          counts.wall++;
+        }
+        // 복도에 면한 변 — 복도의 좌·우 선 위에 놓인 세로 변
+        madeWalls.push({ cell: c, A: A2, B: B2, len: len2,
+          corr: useCorr && Math.abs(ax - bx) < EPS2
+            && (Math.abs(ax - xc0) < EPS2 || Math.abs(ax - xc1) < EPS2) });
+      }
+      // ── 실을 '면적을 가진 객체'로 남긴다 ──
+      // 이름표만 찍으면 면적표를 뽑을 수 없다. 실 경계를 폴리라인으로 남기고 면적을 함께
+      // 실어 두면 층별·실별 면적이 데이터에서 바로 나온다(층마다 하나씩 — 연면적 계산용).
+      const RP2 = [PXY(c.x, c.y), PXY(c.x + c.w, c.y),
+        PXY(c.x + c.w, c.y + c.h), PXY(c.x, c.y + c.h)];
+      const a2 = Math.abs(RP2.reduce((acc, p, k) =>
+        acc + (p[0] * RP2[(k + 1) % 4][1] - RP2[(k + 1) % 4][0] * p[1]), 0)) / 2;   // 실측 폴리곤 면적
+      // ★실번호 — 층 백단위 + 순번(101, 102 …). 도면 표기와 면적표가 이 번호로 이어진다.
+      const nos = [];
+      for (let f = 0; f < Math.max(1, o.floors); f++) {
+        const fl = f + 1;
+        const seq = (roomSeq.get(fl) || 0) + 1; roomSeq.set(fl, seq);
+        const no = fl * 100 + seq;
+        nos.push(no);
+        const rp = br.addEntity({ type: 'LWPOLYLINE', layer: '실', closed: true,
+          points: RP2.map(p => [Math.round(p[0]), Math.round(p[1])]) });
+        rp.bim = { kind: 'room', name: c.room.name, areaM2: +(a2 / 1e6).toFixed(2),
+          top: f * o.floorH, floor: fl, no };
+      }
+      // ── 실명·면적 표기 ──
+      // 이름만 찍으면 도면에서 크기를 읽을 수 없다. 번호·이름 한 줄, 면적 한 줄로 적어
+      // 면적표와 같은 번호로 서로 참조되게 한다(한국 실무 실별 면적표 방식).
+      const cm2 = PXY(c.x + c.w / 2, c.y + c.h / 2);
+      const TH2 = 280;
+      // ★크기는 height 다. h 로 넣으면 e.height 가 undefined 가 되어 글자 크기가 NaN 이 되고,
+      //   경계상자도 NaN 이라 이름표가 도면 범위·시트 배치에서 통째로 빠진다.
+      // ★층을 달아 둔다 — 층별 평면도가 '1층 것'을 2층 도면에 얹지 않으려면 필요하다.
+      br.addEntity({ type: 'TEXT', layer: '문자', x: Math.round(cm2[0]),
+        y: Math.round(cm2[1] + TH2 * 0.7), height: TH2, text: nos[0] + ' ' + c.room.name,
+        bim: { kind: 'label', floor: 1 } });
+      br.addEntity({ type: 'TEXT', layer: '문자', x: Math.round(cm2[0]),
+        y: Math.round(cm2[1] - TH2 * 0.7), height: TH2 * 0.8,
+        text: (a2 / 1e6).toFixed(1) + '㎡', bim: { kind: 'label', floor: 1 } });
+      counts.room++;
+    }
+    // ── 실내문 ──
+    // ★내벽마다 문을 달면 안 된다(실측: 3동에 문 39개). 방 하나에 문 하나면 모든 방이
+    //   서로 이어진다(연결 트리). 첫 실은 현관 쪽이므로 건너뛴다.
+    // ★복도가 있으면 '복도에 면한 벽'을 최우선으로 고른다 — 그래야 방을 지나지 않는다.
+    //   복도 자신과 (복도가 없을 때는) 첫 실은 문을 받지 않는다.
+    const doored = new Set([corrCell || cells[0]]);
+    for (const c of cells) {
+      if (doored.has(c)) continue;
+      const all2 = madeWalls.filter(mw => mw.cell === c);
+      const pref = all2.filter(mw => mw.corr);
+      const mine = (pref.length ? pref : all2).sort((a2, b2) => b2.len - a2.len);
+      if (!mine.length) continue;
+      const mw = mine[0];
+      doored.add(c);
+      const L2 = mw.len, ux2 = (mw.B[0] - mw.A[0]) / L2, uy2 = (mw.B[1] - mw.A[1]) / L2;
+      const dw2 = Math.min(STD.doorW, L2 * 0.6);
+      const mx2 = (mw.A[0] + mw.B[0]) / 2, my2 = (mw.A[1] + mw.B[1]) / 2;
+      for (let f = 0; f < Math.max(1, o.floors); f++) {
+        const dpe = br.addEntity({ type: 'LINE', layer: '개구부',
+          x1: Math.round(mx2 - ux2 * dw2 / 2), y1: Math.round(my2 - uy2 * dw2 / 2),
+          x2: Math.round(mx2 + ux2 * dw2 / 2), y2: Math.round(my2 + uy2 * dw2 / 2) });
+        dpe.bim = { kind: 'opening', ot: 'door', wt: 'swing',
+          h: STD.doorH, sill: f * o.floorH, t: STD.wallInt };
+        counts.door++;
+      }
+    }
+    // ── ★실마다 창 ──
+    // 창을 외피에만 균일하게 뚫으면 어떤 방은 창이 없고 어떤 방은 여러 개가 된다.
+    // 실이 객체가 된 지금은 '이 실의 외벽 구간에 개구부가 하나라도 있는가'를 물을 수 있다.
+    // 없으면 그 구간 한가운데에 하나 넣는다 — 창 없는 방을 만들지 않는다.
+    {
+      const ops = br.state.entities.filter(e2 => e2.bim && e2.bim.kind === 'opening'
+        && e2.bim.ot === 'window' && e2.type === 'LINE');
+      const byCell = new Map();
+      for (const ee of extEdges) {
+        if (!byCell.has(ee.cell)) byCell.set(ee.cell, []);
+        byCell.get(ee.cell).push(ee);
+      }
+      for (const [c, list] of byCell) {
+        const best = list.slice().sort((a2, b2) => b2.len - a2.len)[0];
+        const ux2 = (best.B[0] - best.A[0]) / best.len, uy2 = (best.B[1] - best.A[1]) / best.len;
+        // 이 구간에 이미 창이 있는가 — 개구부 중심을 이 변에 투영해 안에 들어오는지
+        const has = ops.some(e2 => {
+          const mx2 = (e2.x1 + e2.x2) / 2, my2 = (e2.y1 + e2.y2) / 2;
+          const t3 = (mx2 - best.A[0]) * ux2 + (my2 - best.A[1]) * uy2;
+          if (t3 < 0 || t3 > best.len) return false;
+          const px2 = best.A[0] + ux2 * t3, py2 = best.A[1] + uy2 * t3;
+          return Math.hypot(mx2 - px2, my2 - py2) < 400;      // 같은 벽면 위
+        });
+        if (has) continue;
+        const bath = /욕실|화장실/.test(c.room.name);
+        const ww2 = Math.min(bath ? STD.bathWinW : STD.winW, best.len * 0.5);
+        if (ww2 < 500) continue;
+        const s3 = best.len / 2;
+        for (let f = 0; f < Math.max(1, o.floors); f++) {
+          const e3 = br.addEntity({ type: 'LINE', layer: '개구부',
+            x1: Math.round(best.A[0] + ux2 * (s3 - ww2 / 2)),
+            y1: Math.round(best.A[1] + uy2 * (s3 - ww2 / 2)),
+            x2: Math.round(best.A[0] + ux2 * (s3 + ww2 / 2)),
+            y2: Math.round(best.A[1] + uy2 * (s3 + ww2 / 2)) });
+          // src='room' — 그림에서 읽은 창·커튼월과 구분한다(판독 결과를 검사하는 회귀가
+          // 이 창까지 세면 의미가 흐려진다). 창호일람표에는 똑같이 잡힌다.
+          e3.bim = { kind: 'opening', ot: 'window', wt: 'fix', src: 'room',
+            h: bath ? STD.bathWinH : STD.winH,
+            sill: f * o.floorH + (bath ? STD.bathWinSill : STD.winSill), t: STD.wallExt };
+          counts.window++;
+        }
+      }
+    }
+    // ── ★계단 ──
+    // 2층 이상인데 계단이 없으면 위층에 올라갈 수 없다. 복도 한쪽 끝에 직선 계단을 놓는다.
+    // 경로 선(시작=아랫단, 끝=윗단)에 bim.kind='stair' 를 달면 평면 심볼과 3D 를 cad.js 가
+    // 같은 기하로 만들어 준다.
+    if (useCorr && o.floors >= 2) {
+      const RISER = 180, run = Math.max(2400, Math.min(Di * 0.55, (o.floorH / RISER) * 280));
+      const sy = xc0 + CORR / 2;                          // 복도 한가운데 (앞뒤로 오른다)
+      for (let f = 0; f + 1 < o.floors; f++) {
+        const S1 = PXY(sy, Di * 0.06), S2 = PXY(sy, Di * 0.06 + run);
+        const st = br.addEntity({ type: 'LINE', layer: '벽',
+          x1: Math.round(S1[0]), y1: Math.round(S1[1]),
+          x2: Math.round(S2[0]), y2: Math.round(S2[1]) });
+        st.bim = { kind: 'stair', w: Math.min(1200, CORR - 100), h: o.floorH,
+          riser: RISER, base: f * o.floorH };
+        counts.stair = (counts.stair || 0) + 1;
+        // ★계단 난간 — 난간 없는 계단은 3D 에서 '판만 떠 있는' 꼴이고 실제로도 위법이다.
+        //   (건축물의 피난·방화구조 규칙: 높이 1m 넘는 계단에는 난간)
+        //   경로에 높이가 있어야 난간이 경사를 따라가므로 z1/z2 를 준다.
+        const rl = br.addEntity({ type: 'LINE', layer: '벽',
+          x1: st.x1, y1: st.y1, x2: st.x2, y2: st.y2 });
+        rl.z1 = f * o.floorH; rl.z2 = (f + 1) * o.floorH;
+        rl.bim = { kind: 'railing', h: 1000, t: 50, postT: 60, spacing: 1100,
+          base: f * o.floorH };
+        counts.rail = (counts.rail || 0) + 1;
+      }
+    }
+  }
+}
+
 // 동은 마당을 향해 회전한다 — roofSolids 가 회전 사각형을 지원하므로 지붕도 함께 돈다.
 function buildComplex(spec) {
   const br = B(); if (!br) return null;
@@ -557,282 +838,10 @@ function buildComplex(spec) {
           x1: Math.round(fa1[0]), y1: Math.round(fa1[1]), x2: Math.round(fa2[0]), y2: Math.round(fa2[1]) });
         fa.bim = { kind: 'wall', h: 260, t: 120, base: Hi - 60 };
       }
-      // ── ★내부 실 구획 ──
-      // 지금까지 결과물은 외피뿐이라 안이 통째로 비어 있었다. 부채꼴 쐐기는 (각도, 반지름)
-      // 공간에서 직사각형이므로, 이미 검증된 재귀 이분할기 slice() 를 그 공간에서 돌리고
-      // 결과를 PT(a, r) 로 되돌리면 그대로 실 구획이 된다. 새 배치 알고리즘이 필요 없다.
-      // ★각도축은 '호길이'로 환산해서 넘긴다 — 라디안 그대로 주면 slice() 의 '긴 변을 자른다'
-      //   판정이 무의미해져 실이 전부 한 방향으로만 잘린다.
-      if (o.rooms !== false && Ds[i] >= 3000 && chord >= 3000) {
-        const rmid = (r0 + r1i) / 2;
-        const arcW = Math.abs(aL - aR) * rmid;              // 각도축을 호길이로
-        const areaM2 = arcW * Ds[i] / 1e6;
-        const prog = o.program || (areaM2 < 26 ? 'oneroom' : areaM2 < 40 ? 'oneHalf'
-          : areaM2 < 60 ? 'tworoom' : 'threeroom');
-        const P = PROGRAMS[prog] || PROGRAMS.oneroom;
-        const fixed = P.rooms.filter(r2 => r2.fix), flex = P.rooms.filter(r2 => !r2.fix);
-        const fixSum = fixed.reduce((a2, r2) => a2 + r2.fix, 0);
-        const restA = Math.max(areaM2 * 0.25, areaM2 - fixSum);
-        const wSum = flex.reduce((a2, r2) => a2 + (r2.w || 1), 0) || 1;
-        const items = P.rooms.map(r2 => ({ name: r2.n, area: r2.fix ? r2.fix : restA * (r2.w || 1) / wSum }));
-        // ── ★복도를 아는 배치 (중복도) ──
-        // 재귀 이분할기는 복도를 모른다. 뒤쪽에 복도 띠만 두었더니 뒷줄 방만 복도에 닿고
-        // 나머지는 이웃을 거쳤다(실측: 내부문 21개 중 6개만 복도에 면함).
-        // → 복도를 앞뒤로 관통시키고(중복도) 방을 양쪽 밴드에 '깊이로만' 나눈다.
-        //   그러면 밴드의 모든 방이 복도변에 자기 면을 갖는다 — 동선이 원리적으로 보장된다.
-        //   폭이 좁아 밴드가 성립하지 않으면(복도폭+5m 미만) 예전처럼 이분할기로 돌아간다.
-        // ★쐐기는 앞이 좁고 뒤가 넓다 — 매개변수 폭을 그대로 쓰면 복도가 앞에서 유효폭 미만이
-        //   된다. 가장 좁은 앞쪽(현 chord)에서 STD.corridor 를 지키도록 되돌려 잡는다.
-        const CORR = STD.corridor * Math.max(1, arcW / Math.max(1, chord));
-        const useCorr = o.corridor !== false && arcW >= CORR + 5000 && items.length >= 3;
-        const xc0 = (arcW - CORR) / 2, xc1 = xc0 + CORR;     // 복도 좌·우 선
-        let cells, corrCell = null;
-        if (useCorr) {
-          corrCell = { x: xc0, y: 0, w: CORR, h: Ds[i], room: { name: '복도' } };
-          // ★배분 기준은 면적이 아니라 '창이 필요한가'다.
-          //   면적만 보고 담으면 한 밴드에 침실이 셋 몰려 가운데 하나가 창을 못 받는다(실측).
-          //   밴드의 창 자리는 앞·뒤 두 곳뿐이므로, 거주실을 밴드마다 둘씩 나눠 담는다.
-          //   현관은 복도가 있으면 뺀다 — 복도 앞끝이 곧 현관이라 따로 두면 뒤로 밀린다.
-          const NEEDWIN = /침실|거실|주방|작업|업무|회의|원룸/;
-          const src = items.filter(it => !/현관/.test(it.name));
-          const need0 = src.filter(it => NEEDWIN.test(it.name)).sort((a2, b2) => b2.area - a2.area);
-          const rest0 = src.filter(it => !NEEDWIN.test(it.name)).sort((a2, b2) => b2.area - a2.area);
-          const LB = [], RB = [];
-          need0.forEach((it, k) => (k % 2 ? RB : LB).push(it));      // 거주실을 번갈아
-          let la = LB.reduce((a2, v) => a2 + v.area, 0), ra = RB.reduce((a2, v) => a2 + v.area, 0);
-          for (const it of rest0) { if (la <= ra) { LB.push(it); la += it.area; } else { RB.push(it); ra += it.area; } }
-          // ★최소 실 깊이를 보장한다 — 면적 비례로만 나누면 욕실이 90cm 깊이가 된다(실측).
-          //   먼저 모두에게 최소값을 주고 남은 깊이만 면적 비례로 나눈다.
-          //   그래도 다 못 들어가면 작은 실부터 뺀다 — 들어가지도 않는 실을 그리지 않는다.
-          const MINRD = 1800;
-          // ★창이 필요한 실은 밴드 양 끝(앞·뒤)에 놓는다.
-          //   면적 순으로만 쌓으면 침실이 밴드 가운데에 갇혀 외벽에 닿지 못한다
-          //   (실측: 21실 중 6실이 창 없는 방 — 침실2·욕실·욕실2).
-          //   욕실·현관·창고는 창이 없어도 성립하므로 가운데를 맡는다.
-          const band = (bx, bw, list) => {
-            let L2 = list.slice();
-            while (L2.length > 1 && L2.length * MINRD > Ds[i]) {
-              L2.sort((a2, b2) => a2.area - b2.area); L2.shift();
-            }
-            {
-              const need = L2.filter(it => NEEDWIN.test(it.name));
-              const rest = L2.filter(it => !NEEDWIN.test(it.name));
-              if (need.length && rest.length) {
-                need.sort((a2, b2) => b2.area - a2.area);
-                const head = need.shift();                    // 가장 큰 실은 앞(마당 쪽)
-                const tail = need.length ? [need.pop()] : [];  // 그 다음은 뒤
-                L2 = [head].concat(need, rest, tail);
-              }
-            }
-            const tot = L2.reduce((a2, v) => a2 + v.area, 0) || 1;
-            const rem = Ds[i] - L2.length * MINRD;
-            const hs = rem >= 0 ? L2.map(it => MINRD + rem * it.area / tot)
-              : L2.map(() => Ds[i] / L2.length);
-            let y = 0; const out2 = [];
-            L2.forEach((it, k) => {
-              const hh = (k === L2.length - 1) ? (Ds[i] - y) : hs[k];
-              out2.push({ x: bx, y, w: bw, h: hh, room: { name: it.name } });
-              y += hh;
-            });
-            return out2;
-          };
-          cells = band(0, xc0, LB).concat(band(xc1, arcW - xc1, RB));
-          cells.push(corrCell);
-        } else {
-          cells = slice({ x: 0, y: 0, w: arcW, h: Ds[i] }, items);
-        }
-        // ── (x, y) → 세계 좌표 ──
-        // ★쐐기 네 꼭짓점의 겹선형(bilinear) 보간을 쓴다. 호를 다시 각도로 되돌리면
-        //   실 경계가 호를 여러 조각으로 근사하는 셈이라, 현 하나로 그린 '벽·바닥판'보다
-        //   바깥으로 부푼다(실측: 실 면적 합이 건축면적보다 0.9% 컸다).
-        //   벽이 현이면 실도 같은 현 위에 있어야 한다 — 그래야 실 면적 합 = 건축면적이다.
-        const PXY = (x, y) => {
-          const u = Math.max(0, Math.min(1, x / arcW)), v = Math.max(0, Math.min(1, y / Ds[i]));
-          const px = (1 - u) * (1 - v) * FL[0] + u * (1 - v) * FR[0] + u * v * BR[0] + (1 - u) * v * BL[0];
-          const py = (1 - u) * (1 - v) * FL[1] + u * (1 - v) * FR[1] + u * v * BR[1] + (1 - u) * v * BL[1];
-          return wSh ? [px + wSh[0], py + wSh[1]] : [px, py];   // 기운 동이면 벽도 같이 기운다
-        };
-        const EPS2 = 1;
-        const onEdge = (a2, b2, lim) => Math.abs(a2 - lim) < EPS2 && Math.abs(b2 - lim) < EPS2;
-        const seen = new Set();
-        const madeWalls = [];                                // {key, cell, A, B, len}
-        const extEdges = [];                                 // 실이 외벽에 면한 변 (창 자리)
-        for (const c of cells) {
-          const x1 = c.x, x2 = c.x + c.w, y1 = c.y, y2 = c.y + c.h;
-          // 셀의 네 변 중 '쐐기 외곽에 붙은 변'은 이미 외벽이 있으므로 만들지 않는다
-          const edges = [
-            [x1, y1, x2, y1, onEdge(y1, y1, 0)],                 // 앞(마당 쪽)
-            [x1, y2, x2, y2, onEdge(y2, y2, Ds[i])],             // 뒤
-            [x1, y1, x1, y2, onEdge(x1, x1, 0)],                 // 좌
-            [x2, y1, x2, y2, onEdge(x2, x2, arcW)],              // 우
-          ];
-          void corrCell;
-          for (const [ax, ay, bx, by, isExt] of edges) {
-            if (isExt) {
-              // ★외벽에 면한 변은 창 자리 후보다. 단 이웃과 공유하는 측벽(세대분리벽)은
-              //   창을 뚫으면 옆 동으로 뚫린다 — 무리 끝동이거나 떨어져 있을 때만 쓴다.
-              const vert = Math.abs(ax - bx) < EPS2;
-              const outer = !vert ? true
-                : (Math.abs(ax) < EPS2 ? (i === 0 || gap > 0) : (i === n - 1 || gap > 0));
-              if (outer && c !== corrCell) {
-                const A3 = PXY(ax, ay), B3 = PXY(bx, by);
-                const L3 = Math.hypot(B3[0] - A3[0], B3[1] - A3[1]);
-                if (L3 >= 1500) extEdges.push({ cell: c, A: A3, B: B3, len: L3 });
-              }
-              continue;
-            }
-            const k = [Math.round(ax), Math.round(ay), Math.round(bx), Math.round(by)].join(',');
-            const k2 = [Math.round(bx), Math.round(by), Math.round(ax), Math.round(ay)].join(',');
-            if (seen.has(k) || seen.has(k2)) continue;           // 이웃 실과 공유하는 벽은 한 번만
-            seen.add(k);
-            const A2 = PXY(ax, ay), B2 = PXY(bx, by);
-            const len2 = Math.hypot(B2[0] - A2[0], B2[1] - A2[1]);
-            if (len2 < 600) continue;
-            for (let f = 0; f < Math.max(1, o.floors); f++) {
-              const iw = br.addEntity({ type: 'LINE', layer: '벽',
-                x1: Math.round(A2[0]), y1: Math.round(A2[1]),
-                x2: Math.round(B2[0]), y2: Math.round(B2[1]) });
-              iw.bim = { kind: 'wall', h: STD.ceil, t: STD.wallInt, base: f * o.floorH };
-              if (wSh) iw.bim.shear = wSh;
-              if (curMat) iw.mat = curMat;
-              counts.wall++;
-            }
-            // 복도에 면한 변 — 복도의 좌·우 선 위에 놓인 세로 변
-            madeWalls.push({ cell: c, A: A2, B: B2, len: len2,
-              corr: useCorr && Math.abs(ax - bx) < EPS2
-                && (Math.abs(ax - xc0) < EPS2 || Math.abs(ax - xc1) < EPS2) });
-          }
-          // ── 실을 '면적을 가진 객체'로 남긴다 ──
-          // 이름표만 찍으면 면적표를 뽑을 수 없다. 실 경계를 폴리라인으로 남기고 면적을 함께
-          // 실어 두면 층별·실별 면적이 데이터에서 바로 나온다(층마다 하나씩 — 연면적 계산용).
-          const RP2 = [PXY(c.x, c.y), PXY(c.x + c.w, c.y),
-            PXY(c.x + c.w, c.y + c.h), PXY(c.x, c.y + c.h)];
-          const a2 = Math.abs(RP2.reduce((acc, p, k) =>
-            acc + (p[0] * RP2[(k + 1) % 4][1] - RP2[(k + 1) % 4][0] * p[1]), 0)) / 2;   // 실측 폴리곤 면적
-          // ★실번호 — 층 백단위 + 순번(101, 102 …). 도면 표기와 면적표가 이 번호로 이어진다.
-          const nos = [];
-          for (let f = 0; f < Math.max(1, o.floors); f++) {
-            const fl = f + 1;
-            const seq = (roomSeq.get(fl) || 0) + 1; roomSeq.set(fl, seq);
-            const no = fl * 100 + seq;
-            nos.push(no);
-            const rp = br.addEntity({ type: 'LWPOLYLINE', layer: '실', closed: true,
-              points: RP2.map(p => [Math.round(p[0]), Math.round(p[1])]) });
-            rp.bim = { kind: 'room', name: c.room.name, areaM2: +(a2 / 1e6).toFixed(2),
-              top: f * o.floorH, floor: fl, no };
-          }
-          // ── 실명·면적 표기 ──
-          // 이름만 찍으면 도면에서 크기를 읽을 수 없다. 번호·이름 한 줄, 면적 한 줄로 적어
-          // 면적표와 같은 번호로 서로 참조되게 한다(한국 실무 실별 면적표 방식).
-          const cm2 = PXY(c.x + c.w / 2, c.y + c.h / 2);
-          const TH2 = 280;
-          // ★크기는 height 다. h 로 넣으면 e.height 가 undefined 가 되어 글자 크기가 NaN 이 되고,
-          //   경계상자도 NaN 이라 이름표가 도면 범위·시트 배치에서 통째로 빠진다.
-          // ★층을 달아 둔다 — 층별 평면도가 '1층 것'을 2층 도면에 얹지 않으려면 필요하다.
-          br.addEntity({ type: 'TEXT', layer: '문자', x: Math.round(cm2[0]),
-            y: Math.round(cm2[1] + TH2 * 0.7), height: TH2, text: nos[0] + ' ' + c.room.name,
-            bim: { kind: 'label', floor: 1 } });
-          br.addEntity({ type: 'TEXT', layer: '문자', x: Math.round(cm2[0]),
-            y: Math.round(cm2[1] - TH2 * 0.7), height: TH2 * 0.8,
-            text: (a2 / 1e6).toFixed(1) + '㎡', bim: { kind: 'label', floor: 1 } });
-          counts.room++;
-        }
-        // ── 실내문 ──
-        // ★내벽마다 문을 달면 안 된다(실측: 3동에 문 39개). 방 하나에 문 하나면 모든 방이
-        //   서로 이어진다(연결 트리). 첫 실은 현관 쪽이므로 건너뛴다.
-        // ★복도가 있으면 '복도에 면한 벽'을 최우선으로 고른다 — 그래야 방을 지나지 않는다.
-        //   복도 자신과 (복도가 없을 때는) 첫 실은 문을 받지 않는다.
-        const doored = new Set([corrCell || cells[0]]);
-        for (const c of cells) {
-          if (doored.has(c)) continue;
-          const all2 = madeWalls.filter(mw => mw.cell === c);
-          const pref = all2.filter(mw => mw.corr);
-          const mine = (pref.length ? pref : all2).sort((a2, b2) => b2.len - a2.len);
-          if (!mine.length) continue;
-          const mw = mine[0];
-          doored.add(c);
-          const L2 = mw.len, ux2 = (mw.B[0] - mw.A[0]) / L2, uy2 = (mw.B[1] - mw.A[1]) / L2;
-          const dw2 = Math.min(STD.doorW, L2 * 0.6);
-          const mx2 = (mw.A[0] + mw.B[0]) / 2, my2 = (mw.A[1] + mw.B[1]) / 2;
-          for (let f = 0; f < Math.max(1, o.floors); f++) {
-            const dpe = br.addEntity({ type: 'LINE', layer: '개구부',
-              x1: Math.round(mx2 - ux2 * dw2 / 2), y1: Math.round(my2 - uy2 * dw2 / 2),
-              x2: Math.round(mx2 + ux2 * dw2 / 2), y2: Math.round(my2 + uy2 * dw2 / 2) });
-            dpe.bim = { kind: 'opening', ot: 'door', wt: 'swing',
-              h: STD.doorH, sill: f * o.floorH, t: STD.wallInt };
-            counts.door++;
-          }
-        }
-        // ── ★실마다 창 ──
-        // 창을 외피에만 균일하게 뚫으면 어떤 방은 창이 없고 어떤 방은 여러 개가 된다.
-        // 실이 객체가 된 지금은 '이 실의 외벽 구간에 개구부가 하나라도 있는가'를 물을 수 있다.
-        // 없으면 그 구간 한가운데에 하나 넣는다 — 창 없는 방을 만들지 않는다.
-        {
-          const ops = br.state.entities.filter(e2 => e2.bim && e2.bim.kind === 'opening'
-            && e2.bim.ot === 'window' && e2.type === 'LINE');
-          const byCell = new Map();
-          for (const ee of extEdges) {
-            if (!byCell.has(ee.cell)) byCell.set(ee.cell, []);
-            byCell.get(ee.cell).push(ee);
-          }
-          for (const [c, list] of byCell) {
-            const best = list.slice().sort((a2, b2) => b2.len - a2.len)[0];
-            const ux2 = (best.B[0] - best.A[0]) / best.len, uy2 = (best.B[1] - best.A[1]) / best.len;
-            // 이 구간에 이미 창이 있는가 — 개구부 중심을 이 변에 투영해 안에 들어오는지
-            const has = ops.some(e2 => {
-              const mx2 = (e2.x1 + e2.x2) / 2, my2 = (e2.y1 + e2.y2) / 2;
-              const t3 = (mx2 - best.A[0]) * ux2 + (my2 - best.A[1]) * uy2;
-              if (t3 < 0 || t3 > best.len) return false;
-              const px2 = best.A[0] + ux2 * t3, py2 = best.A[1] + uy2 * t3;
-              return Math.hypot(mx2 - px2, my2 - py2) < 400;      // 같은 벽면 위
-            });
-            if (has) continue;
-            const bath = /욕실|화장실/.test(c.room.name);
-            const ww2 = Math.min(bath ? STD.bathWinW : STD.winW, best.len * 0.5);
-            if (ww2 < 500) continue;
-            const s3 = best.len / 2;
-            for (let f = 0; f < Math.max(1, o.floors); f++) {
-              const e3 = br.addEntity({ type: 'LINE', layer: '개구부',
-                x1: Math.round(best.A[0] + ux2 * (s3 - ww2 / 2)),
-                y1: Math.round(best.A[1] + uy2 * (s3 - ww2 / 2)),
-                x2: Math.round(best.A[0] + ux2 * (s3 + ww2 / 2)),
-                y2: Math.round(best.A[1] + uy2 * (s3 + ww2 / 2)) });
-              // src='room' — 그림에서 읽은 창·커튼월과 구분한다(판독 결과를 검사하는 회귀가
-              // 이 창까지 세면 의미가 흐려진다). 창호일람표에는 똑같이 잡힌다.
-              e3.bim = { kind: 'opening', ot: 'window', wt: 'fix', src: 'room',
-                h: bath ? STD.bathWinH : STD.winH,
-                sill: f * o.floorH + (bath ? STD.bathWinSill : STD.winSill), t: STD.wallExt };
-              counts.window++;
-            }
-          }
-        }
-        // ── ★계단 ──
-        // 2층 이상인데 계단이 없으면 위층에 올라갈 수 없다. 복도 한쪽 끝에 직선 계단을 놓는다.
-        // 경로 선(시작=아랫단, 끝=윗단)에 bim.kind='stair' 를 달면 평면 심볼과 3D 를 cad.js 가
-        // 같은 기하로 만들어 준다.
-        if (useCorr && o.floors >= 2) {
-          const RISER = 180, run = Math.max(2400, Math.min(Ds[i] * 0.55, (o.floorH / RISER) * 280));
-          const sy = xc0 + CORR / 2;                          // 복도 한가운데 (앞뒤로 오른다)
-          for (let f = 0; f + 1 < o.floors; f++) {
-            const S1 = PXY(sy, Ds[i] * 0.06), S2 = PXY(sy, Ds[i] * 0.06 + run);
-            const st = br.addEntity({ type: 'LINE', layer: '벽',
-              x1: Math.round(S1[0]), y1: Math.round(S1[1]),
-              x2: Math.round(S2[0]), y2: Math.round(S2[1]) });
-            st.bim = { kind: 'stair', w: Math.min(1200, CORR - 100), h: o.floorH,
-              riser: RISER, base: f * o.floorH };
-            counts.stair = (counts.stair || 0) + 1;
-            // ★계단 난간 — 난간 없는 계단은 3D 에서 '판만 떠 있는' 꼴이고 실제로도 위법이다.
-            //   (건축물의 피난·방화구조 규칙: 높이 1m 넘는 계단에는 난간)
-            //   경로에 높이가 있어야 난간이 경사를 따라가므로 z1/z2 를 준다.
-            const rl = br.addEntity({ type: 'LINE', layer: '벽',
-              x1: st.x1, y1: st.y1, x2: st.x2, y2: st.y2 });
-            rl.z1 = f * o.floorH; rl.z2 = (f + 1) * o.floorH;
-            rl.bim = { kind: 'railing', h: 1000, t: 50, postT: 60, spacing: 1100,
-              base: f * o.floorH };
-            counts.rail = (counts.rail || 0) + 1;
-          }
-        }
-      }
+      // ── 내부 실 구획 ── (부채꼴 쐐기: 각도축을 호길이로 환산해 넘긴다)
+      buildInterior(br, o, counts, roomSeq, {
+        FL, FR, BR, BL, W: Math.abs(aL - aR) * ((r0 + r1i) / 2), D: Ds[i], chord, wSh,
+        mat: curMat, sideExtL: (i === 0 || gap > 0), sideExtR: (i === n - 1 || gap > 0) });
       const cM = PT((aL + aR) / 2, (r0 + r1i) / 2);
       br.addEntity({ type: 'TEXT', layer: '문자', x: Math.round(cM[0]), y: Math.round(cM[1]), height: 400, text: (i + 1) + '동' });
     }
@@ -872,6 +881,7 @@ function buildComplex(spec) {
     // 회전 없는 배치 — 일렬 / 마당을 두른 링 (동끼리 떨어져 있어 겹침 없음)
     const place = (i, C, t, u) => {
       const W2 = Ws[i] / 2, D2 = Ds[i] / 2;   // 동별 깊이 — 링/일렬 배치에서도 반영
+      curMat = (ml && ml[i] && ml[i].mat) || o.mat || null;   // 이 동의 재료 (부채꼴과 같게)
       const P = [
         [C[0] - t[0] * W2 - u[0] * D2, C[1] - t[1] * W2 - u[1] * D2],
         [C[0] + t[0] * W2 - u[0] * D2, C[1] + t[1] * W2 - u[1] * D2],
@@ -907,6 +917,13 @@ function buildComplex(spec) {
         band(1, '벽');
       }
       if (o.glass) curtain(P[0], P[1], i === (n >> 1));
+      // ── 내부 실 구획 ── ★일렬·링 배치도 안이 있어야 한다. 예전엔 부채꼴에서만 실을
+      //   만들어서, 일렬로 놓으면 껍데기만 나오고 면적표·층별 평면도가 통째로 비었다.
+      //   직사각형이라 매개변수 공간이 그대로 세계 좌표다(쐐기 보정이 필요 없다).
+      //   동끼리 떨어져 있으므로 좌·우 측벽도 외벽이다 = 창을 뚫어도 된다.
+      buildInterior(br, o, counts, roomSeq, { FL: P[0], FR: P[1], BR: P[2], BL: P[3],
+        W: Ws[i], D: Ds[i], chord: Ws[i], wSh: null, mat: curMat,
+        sideExtL: true, sideExtR: true });
       br.addEntity({ type: 'TEXT', layer: '문자', x: Math.round(C[0]), y: Math.round(C[1]), height: 400, text: (i + 1) + '동' });
     };
     if (o.arrange === 'row') {
