@@ -857,17 +857,18 @@ async function traceConcept(src, opts) {
     }
     const cand = comps(white, true).map(c => (c.src = 'hole', c))
       .concat(comps(blue, false).map(c => (c.src = 'fill', c)));
-    // 거르기 — 앞면 대비 크기, 사각형다움, 비례. 손그림이라 넉넉히 잡되 극단은 버린다.
+    // ── 후보 거르기 ──
+    // ★이 단계는 '조각'도 통과시킨다. 모양(가로세로비·사각형다움) 판정은 묶은 뒤로 미룬다.
+    //   여기서 모양까지 걸렀더니, X 표시가 만든 삼각형이나 커튼선이 만든 얇은 조각이 개별
+    //   탈락해 창이 통째로 사라졌다(실측: X 표현·커튼 표현 창에서 검출 0개).
     const wins = [];
     for (const c of cand) {
       const bw = c.bx1 - c.bx0 + 1, bh = c.by1 - c.by0 + 1;
       if (bw < 3 || bh < 3) continue;
       const ar = c.area / faceA;
       // 상한은 넉넉히 — 앞면의 1/4을 차지하는 큰 창은 흔하다. 전면 통유리(0.8+)만 걸러내면 된다.
-      if (ar < 0.0015 || ar > 0.30) continue;              // 너무 작으면 잡티, 크면 벽·전면유리
-      const asp = bw / bh;
-      if (asp < 0.18 || asp > 5.5) continue;               // 선 조각 배제
-      if (c.area / (bw * bh) < 0.45) continue;             // 속이 찬 덩어리만 (획 조각 배제)
+      if (ar < 0.0006 || ar > 0.30) continue;              // 너무 작으면 잡티, 크면 벽·전면유리
+      if (c.area / (bw * bh) < 0.35) continue;             // 속이 빈 획 조각만 배제
       // ★갇힌 흰 구멍은 창틀 '안쪽'이다 — 선 두께만큼 실제 창보다 작다(실측 12% 과소).
       //   구멍 경계에서 바깥으로 잉크가 이어지는 두께를 국소로 재서 되돌린다.
       //   (해칭·인접선을 타고 번지지 않게 변 길이의 25% 로 상한)
@@ -882,22 +883,183 @@ async function traceConcept(src, opts) {
         t2 = 0; while (inkAt(xm, c.by0 - 1 - t2) && t2 < bh) t2++; ey0 -= cap(t2, bh);
         t2 = 0; while (inkAt(xm, c.by1 + 1 + t2) && t2 < bh) t2++; ey1 += cap(t2, bh);
       }
-      wins.push({ cx: (ex0 + ex1) / 2, cy: (ey0 + ey1) / 2, bw: ex1 - ex0 + 1, bh: ey1 - ey0 + 1 });
+      wins.push({ cx: (ex0 + ex1) / 2, cy: (ey0 + ey1) / 2, bw: ex1 - ex0 + 1, bh: ey1 - ey0 + 1,
+        area: c.area,
+        // ★사각형다움 — 선 두께를 되살리기 '전' 상자로 잰다. 진짜 유리칸은 1.0 에 가깝고,
+        //   비스듬한 선(유리 반사 표현)이 갈라 놓은 조각은 삼각형이라 0.5 언저리다.
+        fill: c.area / (bw * bh) });
     }
     // ★'2개 이상'을 요구했더니 큰 창 하나짜리 동이 통째로 버려졌다(실측: 3동 중 1동 누락).
     //   창을 못 읽으면 균일 격자로 후퇴할 뿐이라 놓치는 쪽이 손해가 크다 — 1개도 받는다.
-    if (wins.length < 1 || wins.length > 40) return null;
-    // 겹치는 후보 병합 — ①과 ②가 같은 창을 두 번 잡는다
-    wins.sort((a, b) => b.bw * b.bh - a.bw * a.bh);
-    const keep = [];
-    for (const c of wins) {
-      if (keep.some(k => Math.abs(k.cx - c.cx) < (k.bw + c.bw) * 0.35 &&
-                         Math.abs(k.cy - c.cy) < (k.bh + c.bh) * 0.35)) continue;
-      keep.push(c);
+    if (wins.length < 1 || wins.length > 160) return null;
+    const keep = wins;
+    // ── ★유리 칸을 하나의 창으로 묶는다 ──
+    // 창에 표시(중간 멀리언·창살)를 그리면 칸마다 '갇힌 흰 구멍'이 하나씩 생겨 창 하나가
+    // 여러 개로 세어진다(실측: 격자창 1개→9개, 미닫이 1개→2개, 오르내리 1개→2개).
+    // 칸들이 '얇은 선 하나를 사이에 두고 변을 맞대면' 같은 창이다. 묶고 나면 칸의 배열
+    // (cols×rows)이 그대로 창 종류의 근거가 된다 — 버그 수정과 종류 판독이 같은 작업이다.
+    const par = keep.map((_, i2) => i2);
+    const find = (i2) => { while (par[i2] !== i2) { par[i2] = par[par[i2]]; i2 = par[i2]; } return i2; };
+    const box = (c) => [c.cx - c.bw / 2, c.cy - c.bh / 2, c.cx + c.bw / 2, c.cy + c.bh / 2];
+    for (let i2 = 0; i2 < keep.length; i2++) for (let j2 = i2 + 1; j2 < keep.length; j2++) {
+      const A = box(keep[i2]), B = box(keep[j2]);
+      const mnW = Math.min(keep[i2].bw, keep[j2].bw), mnH = Math.min(keep[i2].bh, keep[j2].bh);
+      // 멀리언 허용 두께 — 칸 크기에 비해 얇아야 한다. 창끼리의 간격은 보통 이보다 훨씬 넓다.
+      const MUL = Math.max(3, Math.min(mnW, mnH) * 0.45);
+      const sameRow = Math.abs(A[1] - B[1]) <= mnH * 0.3 && Math.abs(A[3] - B[3]) <= mnH * 0.3;
+      const sameCol = Math.abs(A[0] - B[0]) <= mnW * 0.3 && Math.abs(A[2] - B[2]) <= mnW * 0.3;
+      const gapX = A[0] < B[0] ? B[0] - A[2] : A[0] - B[2];
+      const gapY = A[1] < B[1] ? B[1] - A[3] : A[1] - B[3];
+      // ★많이 겹치면 같은 창의 조각이다 — ①흰 구멍과 ②색칠을 둘 다 잡은 경우,
+      //   그리고 X 표시가 만든 삼각형들처럼 서로 파고든 조각들이 여기에 해당한다.
+      //   예전엔 겹치는 후보를 '버렸는데', 그러면 X 창이 삼각형 하나 크기로 줄어든다.
+      const ovX = Math.min(A[2], B[2]) - Math.max(A[0], B[0]);
+      const ovY = Math.min(A[3], B[3]) - Math.max(A[1], B[1]);
+      const ovA = (ovX > 0 && ovY > 0) ? ovX * ovY : 0;
+      const heavy = ovA >= Math.min((A[2] - A[0]) * (A[3] - A[1]), (B[2] - B[0]) * (B[3] - B[1])) * 0.4;
+      // 선 두께를 되살리며 칸끼리 겹칠 수 있으므로 음수 간격도 멀리언 두께까지 허용한다.
+      if (heavy || (sameRow && gapX >= -MUL && gapX <= MUL) || (sameCol && gapY >= -MUL && gapY <= MUL)) {
+        const ra = find(i2), rb = find(j2); if (ra !== rb) par[rb] = ra;
+      }
     }
-    if (!keep.length) return null;
+    // ── ★칸 안의 개폐 표시(사선) 재기 ──
+    // 여닫이·들창·하부회전은 칸을 나누지 않는다 — 대신 칸 안에 점선 삼각형을 그린다.
+    // 꼭짓점(apex)이 어디냐가 종류를 가른다. 후보 도형마다 '잉크가 그 선들에 얼마나
+    // 가까이 놓였나'를 재서 가장 잘 설명하는 것을 고른다. 점선이라 잉크가 끊겨 있어도
+    // 거리 기반 점수는 흔들리지 않는다.
+    const MARKS = {
+      apexL: [[1, 0, 0, 0.5], [1, 1, 0, 0.5]],       // 꼭짓점이 왼쪽
+      apexR: [[0, 0, 1, 0.5], [0, 1, 1, 0.5]],
+      apexT: [[0, 1, 0.5, 0], [1, 1, 0.5, 0]],       // 꼭짓점이 위
+      apexB: [[0, 0, 0.5, 1], [1, 0, 0.5, 1]],
+      cross: [[0, 0, 1, 1], [1, 0, 0, 1]],           // X — 두 대각선
+    };
+    const segDist = (px, py, a, b, c2, d2) => {
+      const vx = c2 - a, vy = d2 - b, L2 = vx * vx + vy * vy;
+      let t3 = L2 > 0 ? ((px - a) * vx + (py - b) * vy) / L2 : 0;
+      t3 = Math.max(0, Math.min(1, t3));
+      const dx2 = px - (a + vx * t3), dy2 = py - (b + vy * t3);
+      return Math.hypot(dx2, dy2);
+    };
+    // 칸 안(테두리 제외)의 잉크로 표시를 판정한다. 근거가 약하면 null.
+    const markOf = (bx0, by0, bx1, by1) => {
+      const iw = bx1 - bx0 + 1, ih = by1 - by0 + 1;
+      if (iw < 14 || ih < 14) return null;               // 이 크기 밑에선 사선이 분해되지 않는다
+      const mx = Math.max(2, Math.round(iw * 0.16)), my = Math.max(2, Math.round(ih * 0.16));
+      const ax0 = bx0 + mx, ay0 = by0 + my, ax1 = bx1 - mx, ay1 = by1 - my;
+      const aw = ax1 - ax0, ah = ay1 - ay0;
+      if (aw < 8 || ah < 8) return null;
+      // ★잉크는 '테두리를 뺀 안쪽'에서 모으되, 좌표는 '칸 전체' 기준으로 정규화한다.
+      //   안쪽 상자로 정규화하면 칸 전체를 가로지르는 사선이 후보 도형과 어긋나 전부
+      //   unknown 이 된다(실측: 여닫이·들창·하부회전 4종 모두 판정 실패).
+      const fw2 = Math.max(1, bx1 - bx0), fh2 = Math.max(1, by1 - by0);
+      const pts = [];
+      let tot = 0;
+      for (let y = ay0; y <= ay1; y++) for (let x = ax0; x <= ax1; x++) {
+        tot++;
+        if (bldg[(y + y0) * w + (x + x0)]) pts.push([(x - bx0) / fw2, (y - by0) / fh2]);
+      }
+      void aw; void ah;
+      if (!tot) return null;
+      const ratio = pts.length / tot;
+      if (ratio < 0.012) return { kind: 'none', ratio: +ratio.toFixed(4) };   // 아무 표시 없음
+      if (ratio > 0.5) return null;                       // 통째로 칠해진 칸 — 표시가 아니다
+      const TOL = 0.09;                                   // 정규화 좌표 기준 허용 거리
+      const scores = [];
+      for (const k of Object.keys(MARKS)) {
+        // ① 설명률 — 칸 안의 잉크가 그 도형 위에 놓였는가
+        let near = 0, sum = 0;
+        for (const p of pts) {
+          let d3 = 1e9;
+          for (const sg of MARKS[k]) d3 = Math.min(d3, segDist(p[0], p[1], sg[0], sg[1], sg[2], sg[3]));
+          sum += d3; if (d3 <= TOL) near++;
+        }
+        // ② ★두 팔이 '모두' 그려져 있는가 — 개폐 표시는 선 하나가 아니라 V(또는 X)다.
+        //    이 검사가 없으면 유리 반사선 하나가 들창(apexT)으로 읽힌다(실측).
+        //    선을 따라 표본점을 찍고, 그 근처에 잉크가 있는 비율을 팔마다 따로 잰다.
+        let armMin = 1;
+        for (const sg of MARKS[k]) {
+          const N = 24;
+          let hitN = 0;
+          for (let t4 = 0; t4 <= N; t4++) {
+            const f2 = t4 / N;
+            const qx = sg[0] + (sg[2] - sg[0]) * f2, qy = sg[1] + (sg[3] - sg[1]) * f2;
+            let ok2 = false;
+            for (const p of pts) if (Math.abs(p[0] - qx) <= TOL && Math.abs(p[1] - qy) <= TOL) { ok2 = true; break; }
+            if (ok2) hitN++;
+          }
+          armMin = Math.min(armMin, hitN / (N + 1));
+        }
+        scores.push({ k, hit: near / pts.length, arm: armMin, avg: sum / pts.length });
+      }
+      scores.sort((a2, b2) => (b2.hit + b2.arm) - (a2.hit + a2.arm) || a2.avg - b2.avg);
+      const best = scores[0], second = scores[1];
+      // 근거 게이트 — 잉크가 그 도형으로 설명되고(hit), 두 팔이 모두 실제로 그려져 있고(arm),
+      // 2등과 뚜렷이 차이나야 채택한다. 하나라도 모자라면 '모른다'로 물러난다.
+      if (best.hit < 0.75 || best.arm < 0.55
+          || (best.hit + best.arm) - (second.hit + second.arm) < 0.15)
+        return { kind: 'unknown', ratio: +ratio.toFixed(4) };
+      return { kind: best.k, ratio: +ratio.toFixed(4), hit: +best.hit.toFixed(2),
+        arm: +best.arm.toFixed(2), margin: +((best.hit + best.arm) - (second.hit + second.arm)).toFixed(2) };
+    };
+    const grp = new Map();
+    keep.forEach((c, i2) => { const r2 = find(i2); if (!grp.has(r2)) grp.set(r2, []); grp.get(r2).push(c); });
+    const merged = [];
+    for (const panes of grp.values()) {
+      let bx0 = 1e9, by0 = 1e9, bx1 = -1e9, by1 = -1e9;
+      panes.forEach(c => { const B = box(c);
+        if (B[0] < bx0) bx0 = B[0]; if (B[1] < by0) by0 = B[1];
+        if (B[2] > bx1) bx1 = B[2]; if (B[3] > by1) by1 = B[3]; });
+      // ── 묶은 '창' 단위로 모양을 판정한다 ──
+      const mW = bx1 - bx0 + 1, mH = by1 - by0 + 1;
+      const aspM = mW / mH;
+      if (aspM < 0.18 || aspM > 5.5) continue;             // 선 조각이 뭉친 것 배제
+      const arM = (mW * mH) / faceA;
+      if (arM < 0.0015 || arM > 0.35) continue;
+      // 조각들이 그 사각형을 실제로 채워야 창이다 (흩어진 잡티가 우연히 뭉친 것 배제)
+      if (panes.reduce((a2, c) => a2 + c.area, 0) / (mW * mH) < 0.5) continue;
+      const nClust = (vals, tol) => { const sv = vals.slice().sort((a, b) => a - b);
+        let n2 = 1; for (let k = 1; k < sv.length; k++) if (sv[k] - sv[k - 1] > tol) n2++; return n2; };
+      // ★칸 배열은 '직사각형 조각'으로만 센다.
+      //   비스듬한 선이 만든 삼각형 조각까지 칸으로 세면 유리 반사선 한 줄이 미닫이(2x1)로,
+      //   X 표시가 격자(3x3)로 읽힌다(실측). 멀리언·창살은 축에 맞는 직선이므로 칸은 사각형이다.
+      const rect = panes.filter(c => c.fill >= 0.72);
+      const div = rect.length >= 2;
+      const cols = div ? nClust(rect.map(c => c.cx), Math.max(4, (bx1 - bx0) * 0.12)) : 1;
+      const rows = div ? nClust(rect.map(c => c.cy), Math.max(4, (by1 - by0) * 0.12)) : 1;
+      merged.push({
+        cx: x0 + (bx0 + bx1) / 2, cy: y0 + (by0 + by1) / 2,
+        bw: bx1 - bx0 + 1, bh: by1 - by0 + 1,
+        cols, rows, panes: div ? rect.length : 1,
+        // 칸이 안 나뉘었을 때만 안쪽 사선을 본다 (나뉘었으면 배열 자체가 근거다)
+        mark: (cols === 1 && rows === 1)
+          ? markOf(Math.round(bx0), Math.round(by0), Math.round(bx1), Math.round(by1)) : null,
+      });
+    }
+    if (!merged.length || merged.length > 40) return null;
     // 픽셀 좌표 그대로 돌려준다 — 정규화(기울기 되돌리기 포함)는 호출부 한 곳에서 한다.
-    return keep.map(c => ({ cx: x0 + c.cx, cy: y0 + c.cy, bw: c.bw, bh: c.bh }));
+    return merged;
+  };
+  // ── ★칸 배열·개폐 표시 → 창 종류 ──
+  // 값은 cad.js 의 OPENING_TYPES.window 카탈로그를 그대로 쓴다
+  // (fix 붙박이 · wswing 여닫이 · wslide 미서기 · hung 오르내리 · shutter · mesh).
+  // ★확신도를 함께 낸다. 손그림은 개폐 방식을 아예 안 그리는 경우가 더 많아서
+  //   '분할선이 없다'는 붙박이의 증거가 아니라 '안 그렸다'의 증거다. 그걸 붙박이로
+  //   자신 있게 내보내면 거짓말이 된다 — conf 0.15 로 낸다.
+  // ※들창(위 경첩)·하부회전(아래 경첩)은 카탈로그에 없고, 손그림 해상도에서 상/하 구분이
+  //   불안정하다는 판단이라 여닫이(wswing)로 합친다.
+  // ※경첩 좌/우는 재긴 하지만 내보내지 않는다 — 꼭짓점이 경첩쪽인지 손잡이쪽인지가
+  //   사람마다 반대라 규약을 단정할 수 없다.
+  const kindOf = (cols, rows, mark) => {
+    if (cols >= 2 && rows >= 2) return ['fix', 0.5];        // 격자(다중 유리) — 붙박이로 본다
+    if (cols === 2 && rows === 1) return ['wslide', 0.6];   // 2짝 — 미서기/프렌치/2분할 붙박이가 겹친다
+    if (rows === 2 && cols === 1) return ['hung', 0.6];
+    if (cols >= 3 || rows >= 3) return ['fix', 0.4];        // 여러 칸 — 창살 붙박이 쪽
+    if (mark === 'apexL' || mark === 'apexR' || mark === 'apexT' || mark === 'apexB')
+      return ['wswing', 0.8];
+    if (mark === 'cross') return ['fix', 0.5];
+    if (mark === 'none') return ['fix', 0.15];              // 표시가 없다 = 안 그렸다
+    return ['fix', 0];                                      // 모른다
   };
   for (let i = 0; i < massList.length; i++) {
     const rawL = Math.max(0, Math.round(bounds[i])), rawR = Math.min(w - 1, Math.round(bounds[i + 1]));
@@ -961,6 +1123,9 @@ async function traceConcept(src, opts) {
         v: +Math.min(0.97, Math.max(0.03, (baseY - q.cy) / eh)).toFixed(3),
         wFrac: +Math.min(0.6, Math.max(0.03, q.bw / bwB)).toFixed(3),
         hFrac: +Math.min(0.8, Math.max(0.04, q.bh / eh)).toFixed(3),
+        cols: q.cols, rows: q.rows, panes: q.panes, mark: q.mark ? q.mark.kind : null,
+        kind: kindOf(q.cols, q.rows, q.mark ? q.mark.kind : null)[0],
+        kindConf: kindOf(q.cols, q.rows, q.mark ? q.mark.kind : null)[1],
       };
     }).sort((a, b) => (a.v - b.v) || (a.u - b.u));
   }

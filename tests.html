@@ -3669,6 +3669,107 @@ function tests(){
                 eqi(wD.filter(e6 => e6.bim.ot === 'window').length, 1, '  나머지는 창');
                 C.state.entities.length = bW;
               }).then(() => {
+                // ── ★창 '종류' 판독 ──
+                // 창에 표시(멀리언·창살·개폐 사선)를 그리면 유리 칸마다 갇힌 흰 구멍이 하나씩
+                // 생겨 창 하나가 여러 개로 세어지고 있었다(격자창 1개→9개, 미닫이 1개→2개).
+                // 칸을 묶는 것이 그 버그의 수정이자 동시에 종류 판독이다 — 칸 배열이 곧 근거다.
+                const mkT = (t) => {
+                  const cv = AD.createElement('canvas'); cv.width = 520; cv.height = 460;
+                  const g = cv.getContext('2d');
+                  g.fillStyle = '#fff'; g.fillRect(0, 0, 520, 460);
+                  g.strokeStyle = '#222'; g.lineWidth = 2; g.lineJoin = 'round'; g.lineCap = 'round';
+                  const bY = 380, a = 100, b = 420, eh = 220, rz = 60;
+                  g.beginPath(); g.moveTo(a, bY); g.lineTo(a, bY - eh);
+                  g.lineTo((a + b) / 2, bY - eh - rz); g.lineTo(b, bY - eh); g.lineTo(b, bY);
+                  g.closePath(); g.stroke();
+                  const cx = (a + b) / 2, cy = bY - 0.55 * eh, ww = 0.34 * 320, hh = 0.42 * 220;
+                  const L = cx - ww / 2, R = cx + ww / 2, T = cy - hh / 2, B = cy + hh / 2;
+                  g.strokeRect(L, T, ww, hh);
+                  g.lineWidth = 1.4;
+                  if (t === 'slide') { g.beginPath(); g.moveTo(cx, T); g.lineTo(cx, B); g.stroke(); }
+                  if (t === 'hung') { g.beginPath(); g.moveTo(L, cy); g.lineTo(R, cy); g.stroke(); }
+                  if (t === 'casement') { g.setLineDash([4, 3]); g.beginPath();
+                    g.moveTo(R, T); g.lineTo(L, cy); g.lineTo(R, B); g.stroke(); g.setLineDash([]); }
+                  if (t === 'awning') { g.setLineDash([4, 3]); g.beginPath();
+                    g.moveTo(L, B); g.lineTo(cx, T); g.lineTo(R, B); g.stroke(); g.setLineDash([]); }
+                  if (t === 'grid') { for (let i = 1; i < 3; i++) {
+                    g.beginPath(); g.moveTo(L + ww * i / 3, T); g.lineTo(L + ww * i / 3, B); g.stroke();
+                    g.beginPath(); g.moveTo(L, T + hh * i / 3); g.lineTo(R, T + hh * i / 3); g.stroke(); } }
+                  // 오검출 반례 — 유리 반사선. 개폐 표시가 아니다.
+                  if (t === 'refl1') { g.beginPath(); g.moveTo(L + ww * 0.15, B); g.lineTo(L + ww * 0.55, T); g.stroke(); }
+                  if (t === 'refl2') { g.beginPath(); g.moveTo(L + ww * 0.15, B); g.lineTo(L + ww * 0.55, T);
+                    g.moveTo(L + ww * 0.45, B); g.lineTo(L + ww * 0.85, T); g.stroke(); }
+                  if (t === 'reflFull') { g.beginPath(); g.moveTo(L, B); g.lineTo(R, T); g.stroke(); }
+                  return cv.toDataURL('image/png');
+                };
+                const readT = (t) => VZ.traceConcept(mkT(t)).then(r => {
+                  const ws = (r.massList && r.massList[0] && r.massList[0].wins) || [];
+                  return { n: ws.length, k: ws.length === 1 ? ws[0].kind : null,
+                    c: ws.length === 1 ? ws[0].kindConf : null,
+                    g: ws.length === 1 ? ws[0].cols + 'x' + ws[0].rows : null };
+                });
+                return readT('fix').then(rf => {
+                  eqi(rf.n, 1, '★창 종류 판독 — 표시 없는 창은 창 1개');
+                  eqi(rf.k, 'fix', '  붙박이(fix)로 낸다');
+                  ok(rf.c <= 0.2, '★  단, 확신하지 않는다 (' + rf.c + ') — 손그림은 개폐 방식을 아예 안 그린다');
+                  return readT('slide');
+                }).then(rs => {
+                  eqi(rs.n, 1, '★세로로 나뉜 창이 창 1개 (예전엔 2개로 세었다)');
+                  eqi(rs.g, '2x1', '  칸 배열 2x1');
+                  eqi(rs.k, 'wslide', '  미서기창(wslide)');
+                  return readT('hung');
+                }).then(rh => {
+                  eqi(rh.g, '1x2', '★가로로 나뉜 창 — 칸 배열 1x2');
+                  eqi(rh.k, 'hung', '  오르내리창(hung)');
+                  return readT('grid');
+                }).then(rg => {
+                  eqi(rg.n, 1, '★격자(창살) 창이 창 1개 (예전엔 9개로 세었다)');
+                  eqi(rg.g, '3x3', '  칸 배열 3x3');
+                  eqi(rg.k, 'fix', '  창살 붙박이로 본다');
+                  return readT('casement');
+                }).then(rc => {
+                  eqi(rc.k, 'wswing', '★개폐 사선(V)이 있으면 여닫이창(wswing)');
+                  ok(rc.c >= 0.7, '  이건 확신한다 (' + rc.c + ') — 표시를 실제로 읽었다');
+                  return readT('awning');
+                }).then(ra => {
+                  eqi(ra.k, 'wswing', '  위 경첩(들창)도 여닫이로 — 카탈로그에 없고 상/하 구분이 불안정하다');
+                  return Promise.all([readT('refl1'), readT('refl2'), readT('reflFull')]);
+                }).then(rr => {
+                  // ★가장 큰 오검출 위험 — 스케치의 유리 반사선은 대각선이라 개폐 사선과 닮았다.
+                  //   V(두 팔)가 다 그려져 있어야 개폐 표시로 인정한다.
+                  ok(rr.every(x => x.n === 1), '★유리 반사선을 그려도 창은 1개 (칸으로 세지 않는다)');
+                  ok(rr.every(x => x.k === 'fix' && x.c === 0),
+                    '★유리 반사선을 개폐 표시로 오인하지 않는다 (' + rr.map(x => x.k + '/' + x.c).join(', ') + ')');
+                });
+              }).then(() => {
+                // ── ★판독한 종류가 실제 개구부에 실리는가 ──
+                const bT = C.state.entities.length;
+                A.buildComplex({ count: 1, floors: 1, w: 12000, d: 12000, roof: 'gable',
+                  arrange: 'arc', attached: true, glass: false, lean: 0,
+                  massList: [{ wFrac: 1, hFrac: 1, wins: [
+                    { u: 0.25, v: 0.5, wFrac: 0.18, hFrac: 0.3, kind: 'wslide', kindConf: 0.6 },
+                    { u: 0.55, v: 0.5, wFrac: 0.18, hFrac: 0.3, kind: 'hung', kindConf: 0.6 },
+                    { u: 0.82, v: 0.5, wFrac: 0.14, hFrac: 0.3, kind: 'wswing', kindConf: 0.8 }] }] });
+                const eT = C.state.entities.slice(bT);
+                const opT = eT.filter(e7 => e7.bim && e7.bim.kind === 'opening');
+                const wtT = opT.filter(e7 => e7.bim.ot === 'window').map(e7 => e7.bim.wt).sort();
+                eqi(wtT.join(','), 'hung,wslide,wswing', '★판독한 창 종류가 개구부 wt 로 실린다');
+                ok(opT.filter(e7 => e7.bim.ot === 'window').every(e7 => e7.bim.wtConf != null),
+                  '  확신도도 함께 실린다 (나중에 되물을 근거)');
+                // ★버그 수정 — 'single' 은 OPENING_TYPES.door 에 없는 값이라 2D 에서 문이
+                //   붙박이창 이중선으로 그려지고 있었다.
+                const known = { door: C.OPENING_TYPES.door.map(x => x[0]),
+                  window: C.OPENING_TYPES.window.map(x => x[0]) };
+                ok(opT.every(e7 => known[e7.bim.ot].indexOf(e7.bim.wt) >= 0),
+                  '★모든 개구부 wt 가 카탈로그에 있는 값이다 (문에 창 기호가 그려지던 버그)');
+                // 3D 에서 종류가 실제로 달라 보이는가 — 미서기는 세로 중간대가 하나 더 붙는다
+                const solT = C.bimSolids();
+                const nOf = (wt) => { const e7 = opT.find(x => x.bim.wt === wt);
+                  return e7 ? solT.filter(s7 => s7.eid === e7.id).length : 0; };
+                ok(nOf('wslide') > nOf('wswing'),
+                  '★3D 부재 수가 종류마다 다르다 — 미서기 ' + nOf('wslide') + ' vs 여닫이 ' + nOf('wswing'));
+                C.state.entities.length = bT;
+              }).then(() => {
                 // ★라우팅 근거 지표 — 전역 임계값 추측이 실물에서 두 번 뒤집힌 뒤 도입한 증거들.
                 //   도면은 무채색·축정렬·이중선, 손그림은 사선 지배 → 이 표가 오판을 막는다.
                 return VZ.traceImage(cv2.toDataURL('image/png'), { widthMM: 8000 }).then(rp => {

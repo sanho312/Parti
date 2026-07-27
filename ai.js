@@ -1132,7 +1132,14 @@
           massList: (!exp.count || exp.count === c.masses) ? c.massList : null,
           attached: c.attached, lean: c.lean || 0,
         };
-        const winN = (spec.massList || []).reduce((a, m) => a + ((m && m.wins) ? m.wins.length : 0), 0);
+        const allWins = (spec.massList || []).reduce((a, m) => a.concat((m && m.wins) || []), []);
+        const winN = allWins.length;
+        // 판독한 창 종류 요약 — 확신이 있는 것만 이름을 밝힌다.
+        // (표시를 안 그린 창은 붙박이 기본값일 뿐 '읽어서 확신한 값'이 아니다)
+        const KO = { fix: '붙박이', wswing: '여닫이', wslide: '미서기', hung: '오르내리' };
+        const tally = {};
+        allWins.forEach(q => { if ((q.kindConf || 0) >= 0.4) tally[q.kind] = (tally[q.kind] || 0) + 1; });
+        const kindTxt = Object.keys(tally).map(k => (KO[k] || k) + ' ' + tally[k]).join('·');
         const r = window.PARTI_ARCH.buildComplex(spec);
         if (!r) continue;
         cpxN++; lastConcept = spec;
@@ -1144,6 +1151,7 @@
           + (Math.abs(c.lean || 0) > 0.05 ? ` · 기울기 ${(Math.atan(c.lean) * 180 / Math.PI).toFixed(0)}도` : '')
           + (c.depthRatio ? ` · 측면 음영으로 잰 깊이 ${(spec.d / 1000).toFixed(1)}m` : '')
           + (winN ? ` · 그림에서 창 ${winN}개 자리 그대로` : '')
+          + (kindTxt ? ` · 종류 ${kindTxt}` : '')
           + `, 동 폭 ${r.widths.map(v => (v / 1000).toFixed(0)).join('/')}m)`);
       }
       let builtFromPlan = null;

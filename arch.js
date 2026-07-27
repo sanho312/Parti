@@ -359,7 +359,9 @@ function buildComplex(spec) {
       if (k === dIdx) {                              // 출입문 칸: 1층은 문, 위층은 유리
         const e = br.addEntity({ type: 'LINE', layer: '개구부',
           x1: Math.round(P1[0]), y1: Math.round(P1[1]), x2: Math.round(P2[0]), y2: Math.round(P2[1]) });
-        e.bim = { kind: 'opening', ot: 'door', wt: 'single', h: 2100, sill: 0, t: STD.wallExt };
+        // ★'single' 은 OPENING_TYPES.door 에 없는 값이라 2D 평면에서 붙박이창 이중선으로
+        //   폴백돼 '문인데 창 기호'가 그려지고 있었다. 카탈로그 값 'swing' 으로 바로잡는다.
+        e.bim = { kind: 'opening', ot: 'door', wt: 'swing', h: 2100, sill: 0, t: STD.wallExt };
         counts.door++;
         for (let f = 1; f < nf; f++) {
           const g2 = br.addEntity({ type: 'LINE', layer: '개구부',
@@ -422,8 +424,13 @@ function buildComplex(spec) {
       const P2 = [FL[0] + ux * (s + cw / 2), FL[1] + uy * (s + cw / 2)];
       const e = br.addEntity({ type: 'LINE', layer: '개구부',
         x1: Math.round(P1[0]), y1: Math.round(P1[1]), x2: Math.round(P2[0]), y2: Math.round(P2[1]) });
-      if (isDoor) { e.bim = { kind: 'opening', ot: 'door', wt: 'single', h: 2100, sill: 0, t: STD.wallExt }; counts.door++; }
-      else { e.bim = { kind: 'opening', ot: 'window', wt: 'fix', h: Math.round(wh), sill, t: STD.wallExt }; counts.window++; }
+      if (isDoor) { e.bim = { kind: 'opening', ot: 'door', wt: 'swing', h: 2100, sill: 0, t: STD.wallExt }; counts.door++; }
+      else {
+        // ★판독한 창 종류를 그대로 싣는다. 확신이 낮으면(안 그린 그림) 붙박이 기본값이다.
+        e.bim = { kind: 'opening', ot: 'window', wt: q.kind || 'fix', h: Math.round(wh), sill, t: STD.wallExt };
+        if (q.kindConf != null) e.bim.wtConf = q.kindConf;
+        counts.window++;
+      }
       made++;
     });
     // 바닥에 닿은 개구부가 하나도 없으면 현관이 없는 건물이 된다 — 빈 자리에 문을 하나 넣는다.
@@ -442,7 +449,7 @@ function buildComplex(spec) {
         const P2 = [FL[0] + ux * (bs + DW / 2), FL[1] + uy * (bs + DW / 2)];
         const e = br.addEntity({ type: 'LINE', layer: '개구부',
           x1: Math.round(P1[0]), y1: Math.round(P1[1]), x2: Math.round(P2[0]), y2: Math.round(P2[1]) });
-        e.bim = { kind: 'opening', ot: 'door', wt: 'single', h: 2100, sill: 0, t: STD.wallExt };
+        e.bim = { kind: 'opening', ot: 'door', wt: 'swing', h: 2100, sill: 0, t: STD.wallExt };
         counts.door++; made++;
       }
     }
