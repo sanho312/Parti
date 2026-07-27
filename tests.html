@@ -4081,6 +4081,40 @@ function tests(){
                   e0.type === 'LINE' ? Math.max(e0.y1, e0.y2) : (e0.y || 0)));
                 ok(highOf(t2) < lowOf(t1), '★표가 여러 개면 아래로 이어 놓는다 (서로 덮지 않는다)');
                 C.state.entities.length = bA;
+                // ── ★단면·입면 자동 생성 ──
+                // 단면은 '아무 데나 자른 것'이 아니라 '보여줄 것을 자른 것'이어야 한다.
+                // 실·복도·계단이 객체로 남아 있으므로 그것들을 지나는 자리를 모델에서 고른다.
+                const bV = C.state.entities.length;
+                A.buildComplex({ count: 3, floors: 2, w: 9000, d: 11000, roof: 'gable',
+                  arrange: 'arc', attached: true, glass: false, lean: 0 });
+                const secL = C.autoSecLines();
+                ok(secL.length >= 3, '★단면 자동 — 횡단면·종단면·입면 자리를 모델에서 고른다 ('
+                  + secL.map(l0 => l0.name).join(', ') + ')');
+                // 횡단면은 복도를 실제로 지나야 한다 — 계단·층고가 그 선에 있다
+                const corrV = C.state.entities.slice(bV).filter(e0 => e0.bim
+                  && e0.bim.kind === 'room' && e0.bim.name === '복도' && e0.bim.floor === 1);
+                const inV = (p, x, y) => { let c0 = false;
+                  for (let i0 = 0, j0 = p.length - 1; i0 < p.length; j0 = i0++)
+                    if (((p[i0][1] > y) !== (p[j0][1] > y)) &&
+                        (x < (p[j0][0] - p[i0][0]) * (y - p[i0][1]) / (p[j0][1] - p[i0][1]) + p[i0][0]))
+                      c0 = !c0;
+                  return c0; };
+                const cross = secL.find(l0 => /횡단면/.test(l0.name));
+                let hitC = 0;
+                for (let t0 = 0; t0 <= 60; t0++) {
+                  const x0 = cross.p1.x + cross.u.x * cross.L * t0 / 60;
+                  const y0 = cross.p1.y + cross.u.y * cross.L * t0 / 60;
+                  if (corrV.some(c0 => inV(c0.points, x0, y0))) hitC++;
+                }
+                ok(hitC >= 10, '★횡단면 절단선이 복도를 지난다 (' + hitC + '/61 구간)');
+                // 실제 생성 — 새 탭으로 만들고 원본 도면으로 복귀해야 한다
+                const nB = C.state.entities.length;
+                const madeV = C.cmdAutoSection('');
+                ok(madeV && madeV.length >= 3, '★단면 2장 + 입면 1장을 새 도면 탭으로 생성 ('
+                  + (madeV || []).length + ')');
+                eqi(C.state.entities.length, nB,
+                  '★생성 후 원본 도면으로 복귀한다 (다음 작업이 원본에서 이어진다)');
+                C.state.entities.length = bV;
               }).then(() => {
                 // ── ★내부 실 구획 ──
                 // 결과물이 외피뿐이라 안이 통째로 비어 있었다. 부채꼴 쐐기는 (각도, 반지름)

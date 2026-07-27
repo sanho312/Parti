@@ -2937,6 +2937,102 @@ function areaCSV(rows) {
   out += '# 이 값은 모델에서 잰 근사치이며, 인허가용 면적 산정(발코니·주차·필로티 산입 규칙)을 대체하지 않습니다.\n';
   return out;
 }
+// ── 단면·입면 자동 생성 ──
+// ★단면은 '아무 데나 자른 것'이 아니라 '보여줄 것을 자른 것'이어야 한다.
+//   실·복도·계단이 객체로 남아 있으므로, 그것들을 지나는 자리를 모델에서 직접 고른다.
+//     · 횡단면 = 복도를 따라 — 계단과 층고, 복도 폭이 한 장에 나온다
+//     · 종단면 = 동들을 가로질러 — 박공 줄과 세대분리벽이 나온다
+//     · 입면   = 마당 쪽 정면
+function autoSecLines() {
+  const rooms = state.entities.filter(e => e.bim && e.bim.kind === 'room'
+    && (e.bim.floor || 1) === 1 && e.points);
+  const slabs = state.entities.filter(e => e.bim && e.bim.kind === 'slab'
+    && e.bim.t === 150 && (e.bim.top || 0) === 0 && e.points);
+  const out = [];
+  const ctr = (pts) => pts.reduce((a, p) => [a[0] + p[0] / pts.length, a[1] + p[1] / pts.length], [0, 0]);
+  // ① 횡단면 — 복도를 따라. 복도 폴리곤의 긴 축이 곧 절단 방향이다.
+  const corrs = rooms.filter(e => /복도/.test(e.bim.name || ''));
+  if (corrs.length) {
+    const c = corrs[Math.floor(corrs.length / 2)];            // 가운데 동의 복도
+    const P = c.points;
+    let best = 0, bl = -1;
+    for (let i = 0; i < P.length; i++) {
+      const q = P[(i + 1) % P.length];
+      const L = Math.hypot(q[0] - P[i][0], q[1] - P[i][1]);
+      if (L > bl) { bl = L; best = i; }
+    }
+    const a = P[best], b = P[(best + 1) % P.length];
+    const ux = (b[0] - a[0]) / bl, uy = (b[1] - a[1]) / bl;
+    const m = ctr(P), EXT = 6000;                              // 앞뒤로 넉넉히 빼서 처마까지 담는다
+    out.push({ name: '횡단면(복도)', p1: { x: m[0] - ux * (bl / 2 + EXT), y: m[1] - uy * (bl / 2 + EXT) },
+      u: { x: ux, y: uy }, L: bl + EXT * 2, elev: false });
+  }
+  // ② 종단면 — 동들의 무게중심을 잇는 선. 한 동뿐이면 가로로 자른다.
+  if (slabs.length >= 2) {
+    const cs = slabs.map(s => ctr(s.points));
+    const A = cs[0], B2 = cs[cs.length - 1];
+    const L = Math.hypot(B2[0] - A[0], B2[1] - A[1]) || 1;
+    const ux = (B2[0] - A[0]) / L, uy = (B2[1] - A[1]) / L;
+    const EXT = 8000;
+    out.push({ name: '종단면(동 배열)', p1: { x: A[0] - ux * EXT, y: A[1] - uy * EXT },
+      u: { x: ux, y: uy }, L: L + EXT * 2, elev: false });
+  }
+  // ③ 입면 — 마당(앞) 쪽. 바닥판 앞변들의 평균 방향으로 자른다.
+  if (slabs.length) {
+    let sx = 0, sy = 0, n = 0, mx = 0, my = 0;
+    for (const s of slabs) {                                   // 바닥판 첫 변 = 앞면(FL→FR)
+      const P = s.points;
+      const d = Math.hypot(P[1][0] - P[0][0], P[1][1] - P[0][1]) || 1;
+      sx += (P[1][0] - P[0][0]) / d; sy += (P[1][1] - P[0][1]) / d;
+      mx += (P[0][0] + P[1][0]) / 2 / slabs.length;
+      my += (P[0][1] + P[1][1]) / 2 / slabs.length;
+      n++;
+    }
+    const d2 = Math.hypot(sx, sy) || 1;
+    const ux = sx / d2, uy = sy / d2;
+    let span = 0;
+    for (const s of slabs) for (const p of s.points)
+      span = Math.max(span, Math.abs((p[0] - mx) * ux + (p[1] - my) * uy));
+    const EXT = 4000;
+    out.push({ name: '입면(마당 쪽)', p1: { x: mx - ux * (span + EXT), y: my - uy * (span + EXT) },
+      u: { x: ux, y: uy }, L: (span + EXT) * 2, elev: true });
+    void n;
+  }
+  return out;
+}
+function cmdAutoSection(arg) {
+  const a = String(arg || '').trim();
+  let lines = autoSecLines();
+  if (!lines.length) { logLine('  자를 것이 없습니다 — 건물을 먼저 만들어 주세요.', 'info'); return; }
+  if (/횡|corridor/i.test(a)) lines = lines.filter(l => /횡단면/.test(l.name));
+  else if (/종|long/i.test(a)) lines = lines.filter(l => /종단면/.test(l.name));
+  else if (/입면|elev/i.test(a)) lines = lines.filter(l => l.elev);
+  else if (/단면|section/i.test(a)) lines = lines.filter(l => !l.elev);
+  const home = curDoc;
+  const made = [];
+  for (const l of lines) {
+    // 바라볼 방향 — 모델 무게중심 쪽. 반대로 잡으면 뒤통수를 그린다.
+    let nrm = { x: -l.u.y, y: l.u.x };
+    const bb = state.entities.reduce((acc, e) => {
+      const xs = e.type === 'LINE' ? [e.x1, e.x2] : e.points ? e.points.map(p => p[0]) : [e.x || 0];
+      const ys = e.type === 'LINE' ? [e.y1, e.y2] : e.points ? e.points.map(p => p[1]) : [e.y || 0];
+      xs.forEach(v => { acc.x0 = Math.min(acc.x0, v); acc.x1 = Math.max(acc.x1, v); });
+      ys.forEach(v => { acc.y0 = Math.min(acc.y0, v); acc.y1 = Math.max(acc.y1, v); });
+      return acc;
+    }, { x0: 1e18, y0: 1e18, x1: -1e18, y1: -1e18 });
+    const cx = (bb.x0 + bb.x1) / 2, cy = (bb.y0 + bb.y1) / 2;
+    if ((cx - l.p1.x) * nrm.x + (cy - l.p1.y) * nrm.y < 0) nrm = { x: l.u.y, y: -l.u.x };
+    genSectionView(l.p1, l.u, nrm, l.L, 20000, l.elev);
+    const now = curDoc;
+    if (now !== home) { made.push(l.name + ' → ' + (currentFileName || '새 도면')); switchDoc(home); }
+  }
+  if (!made.length) { logLine('  생성된 요소가 없습니다 — 절단선이 모델과 만나는지 확인하세요.', 'warn'); return; }
+  for (const m of made) logLine('  ' + m, 'info');
+  logLine('  단면·입면 ' + made.length + '장을 새 도면 탭으로 만들었습니다 (하단 탭에서 열람). '
+    + '원본 도면으로 돌아와 있습니다.', 'ok');
+  return made;
+}
+
 function cmdAreaTable(arg) {
   const a = String(arg || '').trim();
   const site = (a.match(/(?:대지|site)?\s*(\d+(?:\.\d+)?)/) || [])[1];
@@ -12110,7 +12206,7 @@ const INSTANT_CMDS = {
   railing: cmdRailingTag,
   setaslight: cmdSetAsLight,
   owsave: cmdOwSave, owlist: cmdOwList, owdel: () => cmdOwDel(prompt('삭제할 창호 기호 이름 (@ 없이):') || ''),   // 커스텀 창호 기호
-  owsched: cmdOwSchedule, areatable: cmdAreaTable,
+  owsched: cmdOwSchedule, areatable: cmdAreaTable, autosection: cmdAutoSection,
   raytrace: cmdRaytrace,
   rendered: cmdRendered,
   material: cmdMaterial,
@@ -12578,6 +12674,7 @@ const CMD_ALIASES = {
   창호저장: 'owsave', 창호목록: 'owlist', 창호삭제: 'owdel',
   owsched: 'owsched', schedule: 'owsched', 창호일람표: 'owsched', 일람표: 'owsched', 창호표: 'owsched',
   areatable: 'areatable', 면적표: 'areatable', 건축개요: 'areatable', 개요표: 'areatable',
+  autosection: 'autosection', 단면자동: 'autosection', 자동단면: 'autosection', 단면일괄: 'autosection',
   unsetlight: 'unsetlight', 광원해제: 'unsetlight',
   raytrace: 'raytrace', rt: 'raytrace', raytraced: 'raytrace', 레이트레이싱: 'raytrace', 렌더: 'raytrace',
   rendered: 'rendered', 렌더링: 'rendered', 렌더링뷰: 'rendered', 렌더뷰: 'rendered',
@@ -16153,6 +16250,7 @@ window.__CADTEST__ = {
   rview, rviewFrame, rviewBuildScene, rviewSyncSun, rviewSig, cmdRendered,
   owSchedRows, owSchedCSV, owSchedDraw, cmdOwSchedule, owTypeKo,
   areaData, areaRows, areaCSV, cmdAreaTable, drawTable, polyAreaM2,
+  autoSecLines, cmdAutoSection,
   MAT_PRESETS, MAT_ALIAS, matOf, matKey, matHex, matBoxUV, matGeo, matBuild, matTextures, matDrawTex, cmdMaterial, rtGeoSig, bimSolidColor, secHatchFor, computePatternSegs, owWt, OPENING_TYPES, owSaveDef, owPlaced, layerAutoBim, applyLayerRoleTo, addEntity, renderLayers,
   runCommandInput, feedCmdArg,
   skyCloud, sunDirectIlluminanceClear, skyBlend, SKY_OVERCAST_E, SKY_OVERCAST_RGB,
