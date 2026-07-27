@@ -3455,6 +3455,33 @@ function tests(){
                 return VZ.traceConcept(cvR.toDataURL('image/png')).then(cr9 => {
                   eqi(cr9.arrange, 'circle', '★링 배치 — 마당 아래에도 건물이 있으면 중정으로');
                   ok(cr9.meta.enclosed, '  둘러쌈 판정');
+                }).then(() => {
+                  // ★링 배치 동 수 — 가로 투영은 앞뒤 겹침으로 항상 적게 센다.
+                  //   윤곽을 채운 뒤 연결 성분으로 세면 겹침과 무관하다.
+                  const mkRing = (n0) => {
+                    const cvN = AD.createElement('canvas'); cvN.width = 760; cvN.height = 440;
+                    const gN = cvN.getContext('2d');
+                    gN.fillStyle = '#f0ebe0'; gN.fillRect(0, 0, 760, 440);
+                    const cx0 = 380, cy0 = 225, R0 = 130;
+                    gN.fillStyle = 'rgba(126,186,88,0.85)'; gN.beginPath();
+                    gN.ellipse(cx0, cy0, R0, R0 * 0.5, 0, 0, 7); gN.fill();
+                    for (let i0 = 0; i0 < n0; i0++) {
+                      const a0 = -Math.PI / 2 + i0 * 2 * Math.PI / n0;
+                      const bx = cx0 + Math.cos(a0) * (R0 + 90), by = cy0 + Math.sin(a0) * (R0 * 0.5 + 70);
+                      gN.fillStyle = '#fcfaf5'; gN.beginPath();
+                      gN.moveTo(bx - 52, by); gN.lineTo(bx - 52, by - 63); gN.lineTo(bx, by - 115);
+                      gN.lineTo(bx + 52, by - 63); gN.lineTo(bx + 52, by); gN.closePath(); gN.fill();
+                      gN.strokeStyle = '#2b2b29'; gN.lineWidth = 1.6; gN.stroke();
+                      gN.fillStyle = 'rgba(120,163,208,0.8)'; gN.fillRect(bx - 31, by - 57, 63, 46);
+                    }
+                    return cvN.toDataURL('image/png');
+                  };
+                  return [4, 5, 6].reduce((p0, n0) => p0.then(acc =>
+                    VZ.traceConcept(mkRing(n0)).then(cn => acc.concat([[n0, cn.masses]]))),
+                    Promise.resolve([])).then(rows => {
+                    ok(rows.every(r0 => r0[0] === r0[1]),
+                      '★링 배치 동 수 (' + rows.map(r0 => r0[0] + '→' + r0[1]).join(', ') + ')');
+                  });
                 });
               }).then(() => {
                 // ★스케치북 한 페이지에 그림이 여러 장 — 본 그림 하나만 골라야 한다.

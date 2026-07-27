@@ -758,8 +758,63 @@ async function traceConcept(src, opts) {
     if (bldg[y * w + x]) { bAll++; if (y > gcy + 8) below++; }
   const enclosed = hasCourt && bAll > 0 && below / bAll > 0.15;   // 마당 아래에도 건물이 상당량
   const courtFront = hasCourt && !enclosed;
+
+  // ── 링(중정) 배치의 동 수: '윤곽을 채운 뒤 연결 성분'으로 센다 ──
+  // ★가로 투영(실루엣)은 마당 앞·뒤 동이 같은 열에 겹쳐 하나로 뭉친다(5동이 4동).
+  //   각도 히스토그램도 시도했으나 동이 각도상 가까우면 붙거나 갈라져 못 쓴다(1/5 정확).
+  //   해법: 테두리에서 배경을 흘려 채워(flood fill) 닿지 않는 곳 = '닫힌 윤곽 안'.
+  //   그러면 흰 내부까지 포함한 실루엣이 되고, 떨어진 동은 각각 하나의 덩어리가 된다.
+  let ringMasses = 0;
+  if (enclosed) {
+    const sw = Math.max(8, w >> 1), sh2 = Math.max(8, h >> 1);
+    const ink = new Uint8Array(sw * sh2);
+    for (let y = by0; y <= by1; y++) { const yy = (y >> 1) * sw;
+      for (let x = 0; x < w; x++) if (bldg[y * w + x]) ink[yy + (x >> 1)] = 1; }
+    // 배경 흘려 채우기 — 테두리에서 시작, 잉크는 통과 못 한다
+    const out2 = new Uint8Array(sw * sh2), st2 = new Int32Array(sw * sh2);
+    let top2 = 0;
+    for (let x = 0; x < sw; x++) { for (const y of [0, sh2 - 1]) { const p = y * sw + x;
+      if (!ink[p] && !out2[p]) { out2[p] = 1; st2[top2++] = p; } } }
+    for (let y = 0; y < sh2; y++) { for (const x of [0, sw - 1]) { const p = y * sw + x;
+      if (!ink[p] && !out2[p]) { out2[p] = 1; st2[top2++] = p; } } }
+    while (top2) {
+      const q = st2[--top2], qx = q % sw, qy = (q / sw) | 0;
+      if (qx > 0 && !ink[q - 1] && !out2[q - 1]) { out2[q - 1] = 1; st2[top2++] = q - 1; }
+      if (qx < sw - 1 && !ink[q + 1] && !out2[q + 1]) { out2[q + 1] = 1; st2[top2++] = q + 1; }
+      if (qy > 0 && !ink[q - sw] && !out2[q - sw]) { out2[q - sw] = 1; st2[top2++] = q - sw; }
+      if (qy < sh2 - 1 && !ink[q + sw] && !out2[q + sw]) { out2[q + sw] = 1; st2[top2++] = q + sw; }
+    }
+    const solid = new Uint8Array(sw * sh2);
+    for (let p = 0; p < solid.length; p++) solid[p] = (ink[p] || !out2[p]) ? 1 : 0;
+    // 연결 성분 — 면적이 충분한 덩어리만
+    const seen2 = new Uint8Array(sw * sh2);
+    const minA2 = sw * sh2 * 0.006;
+    let cnt2 = 0;
+    for (let p = 0; p < solid.length; p++) {
+      if (!solid[p] || seen2[p]) continue;
+      let t3 = 0, area2 = 0; st2[t3++] = p; seen2[p] = 1;
+      while (t3) {
+        const q = st2[--t3]; area2++;
+        const qx = q % sw, qy = (q / sw) | 0;
+        if (qx > 0 && solid[q - 1] && !seen2[q - 1]) { seen2[q - 1] = 1; st2[t3++] = q - 1; }
+        if (qx < sw - 1 && solid[q + 1] && !seen2[q + 1]) { seen2[q + 1] = 1; st2[t3++] = q + 1; }
+        if (qy > 0 && solid[q - sw] && !seen2[q - sw]) { seen2[q - sw] = 1; st2[t3++] = q - sw; }
+        if (qy < sh2 - 1 && solid[q + sw] && !seen2[q + sw]) { seen2[q + sw] = 1; st2[t3++] = q + sw; }
+      }
+      if (area2 >= minA2) cnt2++;
+    }
+    if (cnt2 >= 2 && cnt2 <= 12) ringMasses = cnt2;
+  }
+
+  // 링 배치면 각도 계수를 믿는다 — 실루엣은 앞뒤 겹침 때문에 항상 적게 센다
+  let masses2 = masses, massList2 = massList;
+  if (ringMasses && ringMasses !== masses) {
+    const per = 1 / ringMasses;
+    massList2 = Array.from({ length: ringMasses }, () => ({ wFrac: per, hFrac: 1, lean: +leanAvg.toFixed(3) }));
+    masses2 = ringMasses;
+  }
   return {
-    masses, massList, attached, floors, lean: +leanAvg.toFixed(3), depthRatio, depthConf,
+    masses: masses2, massList: massList2, attached, floors, lean: +leanAvg.toFixed(3), depthRatio, depthConf,
     // 고원 비율이 크면 평지붕. 뾰족한 봉우리라야 박공이다.
     roof: (plateau < 0.42 && maxH > 0 && promAvg / maxH > 0.08) ? 'gable' : 'flat',
     // 앞마당이면 '부채꼴로 늘어서고 마당은 그 앞' — 마당을 빙 두르는 링이 아니다.
@@ -768,7 +823,7 @@ async function traceConcept(src, opts) {
     peaks: peaks.map(p => Math.round(p.i)),
     meta: { w, h, maxH: Math.round(maxH), promAvg: +promAvg.toFixed(1), inkThr,
       greenRatio: +greenR.toFixed(3), blueRatio: +blueR.toFixed(3),
-      courtyard: hasCourt, courtFront, enclosed, attached, bTop, bBot, baseY,
+      courtyard: hasCourt, courtFront, enclosed, ringMasses, attached, bTop, bBot, baseY,
       plateau: +plateau.toFixed(2), eaveRatio: +eaveRatio.toFixed(2), comps,
       blocks: blocks.length, block: [by0, by1], blockDbg, sideL, sideR, dbgSide, xa, xb, fa, fb, gcy: Math.round(gcy) },
   };
