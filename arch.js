@@ -48,6 +48,9 @@ const PROGRAMS = {
   // ★1층용 — 상가(근린생활). 아랫층과 윗층이 같은 구성인 건물은 실제로 드물다.
   shop:     { ko: '상가',   rooms: [{ n: '화장실', fix: 4.0 }, { n: '창고', fix: 4.0 }, { n: '점포1', w: 0.5 }, { n: '점포2', w: 0.5 }] },
 };
+// 프리셋 → 건축물 용도. ★면적표를 용도별로 적으려면 실이 제 용도를 알고 있어야 한다 —
+//   이름으로 되짚으면 '복도'·'화장실' 같은 공용실이 어느 용도인지 알 수가 없다.
+const USE_OF = { shop: '근린생활시설', office: '업무시설', studio: '작업실' };
 // 한국어/자연어 → 프리셋 키
 function programOf(text) {
   const t = String(text || '');
@@ -462,7 +465,7 @@ function buildInterior(br, o, counts, roomSeq, ctx) {
         const rp = br.addEntity({ type: 'LWPOLYLINE', layer: '실', closed: true,
           points: RP2.map(p => [Math.round(p[0]), Math.round(p[1])]) });
         rp.bim = { kind: 'room', name: c.room.name, areaM2: +(a2 / 1e6).toFixed(2),
-          top: f * o.floorH, floor: fl, no };
+          top: f * o.floorH, floor: fl, no, use: USE_OF[prog] || '주거' };
       }
       // ── 실명·면적 표기 ──
       // 이름만 찍으면 도면에서 크기를 읽을 수 없다. 번호·이름 한 줄, 면적 한 줄로 적어
@@ -1208,6 +1211,6 @@ function buildPolyMass(points, spec) {
   return { n: points.length, h: o.h };
 }
 
-return { STD, roomType, PROGRAMS, programOf, floorGroups, planLayout, buildPlan, buildMassing, buildComplex,
+return { STD, roomType, PROGRAMS, USE_OF, programOf, floorGroups, planLayout, buildPlan, buildMassing, buildComplex,
   SHAPES, shapeOf, buildShape, buildPolyMass };
 })();

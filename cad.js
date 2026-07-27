@@ -2909,6 +2909,22 @@ function areaData() {
     if (!byRoom.has(k)) byRoom.set(k, { n: 0, a: 0 });
     const v = byRoom.get(k); v.n++; v.a += r.bim.areaM2 || polyAreaM2(r.points);
   }
+  // ── 용도별 ──
+  // ★층마다 용도가 다른데 합계만 내면 인허가 서류를 못 쓴다. 실이 제 용도를 달고 있으므로
+  //   거기서 바로 모은다(이름으로 되짚으면 '복도'·'화장실' 이 어느 용도인지 알 수 없다).
+  const byUse = new Map();
+  for (const r of rooms) {
+    const u = r.bim.use || '주거';
+    byUse.set(u, (byUse.get(u) || 0) + (r.bim.areaM2 || polyAreaM2(r.points)));
+  }
+  // 발코니 — 두께 180 의 위층 바닥판. ★연면적에 넣지 않는다(서비스 면적).
+  const balc = state.entities.filter(e => e.bim && e.bim.kind === 'slab' && e.bim.t === 180
+    && (e.bim.top || 0) > 0 && e.points).reduce((a, e) => a + polyAreaM2(e.points), 0);
+  // 필로티 — 실이 하나도 없는 층. ★바닥면적에 산입하지 않으므로 '제외'로 따로 적는다.
+  //   (최상층이 필로티인 경우는 층수를 실에서 세므로 알 수 없다 — 실무에 없는 형태다)
+  const maxF = rooms.reduce((m, r) => Math.max(m, r.bim.floor || 1), 0);
+  const pil = [];
+  for (let f = 1; f <= maxF; f++) if (!byFloor.has(f)) pil.push(f);
   // 최고 높이 — 벽 꼭대기와 지붕 용마루 중 큰 값
   let hi = 0;
   for (const e of state.entities) {
@@ -2921,6 +2937,8 @@ function areaData() {
     floors: byFloor.size, height: Math.round(hi), bays: slabs.length,
     byFloor: [...byFloor.entries()].sort((a, b) => a[0] - b[0]),
     byRoom: [...byRoom.entries()].sort((a, b) => b[1].a - a[1].a),
+    byUse: [...byUse.entries()].sort((a, b) => b[1] - a[1]),
+    balcony: +balc.toFixed(2), piloti: pil,
     rooms: numbered.map(r => ({ no: r.bim.no, name: r.bim.name,
       floor: r.bim.floor || 1, area: r.bim.areaM2 || polyAreaM2(r.points) })) };
 }
@@ -2939,6 +2957,15 @@ function areaRows(siteM2) {
     out.push(['지표', '건폐율', (d.foot / siteM2 * 100).toFixed(1), '%']);
     out.push(['지표', '용적률', (d.gross / siteM2 * 100).toFixed(1), '%']);
   }
+  // ★용도별 — 층마다 용도가 다른데 합계만 내면 인허가 서류를 못 쓴다.
+  //   합이 연면적과 맞아야 표가 성립한다(용도별 합 = 연면적).
+  for (const [u, a] of (d.byUse || [])) out.push(['용도별', u, num(a.toFixed(2)), '㎡']);
+  // ★발코니는 연면적에 넣지 않는다(서비스 면적) — 넣고 안 넣고를 표에 밝힌다.
+  if (d.balcony) out.push(['면적', '발코니 (연면적 제외)', num(d.balcony.toFixed(2)), '㎡']);
+  // ★필로티는 바닥면적에 산입하지 않는다 — 층은 있는데 면적이 없는 이유를 적어 둔다.
+  if (d.piloti && d.piloti.length)
+    out.push(['면적', '필로티 ' + d.piloti.join('·') + '층 (바닥면적 제외)',
+      num((d.foot * d.piloti.length).toFixed(2)), '㎡']);
   for (const [f, a] of d.byFloor) out.push(['층별', f + '층 바닥면적', num(a.toFixed(2)), '㎡']);
   // 실별 — 도면에 적힌 번호 그대로. 번호가 없는 모델은 이름별 합계로 낸다.
   if (d.rooms && d.rooms.length)
