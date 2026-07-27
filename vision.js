@@ -1140,6 +1140,75 @@ async function traceConcept(src, opts) {
     //   잔디가 면 통계에 섞이면 벽이 잔디가 된다. 초록 건물보다 잘못 읽을 위험이 훨씬 크다.
     return null;
   };
+  // ── ★질감 패턴으로 재료 읽기 ──
+  // 색을 안 칠한 연필 스케치는 색 판독이 물러난다. 그때 남는 단서가 '무늬'다.
+  // 앞서 한 번 실패하고 되돌렸다. 그때 배운 두 가지를 이번엔 처음부터 적용한다:
+  //   ① 자기유사도(reg)만 보면 안 된다 — 평평하거나 잡음인 프로파일이 '어떤 주기로도'
+  //      0.9 이상을 낸다(실측: 가로줄만 그렸는데 세로도 0.96 → 전부 격자로 읽혔다).
+  //      주기 p 의 유사도에서 어긋난 주기(1.5p·0.6p)의 유사도를 빼야 진짜 주기만 남는다.
+  //   ② mm 척도를 '층수×층고'로 잡으면 안 된다 — 층수 추정이 1을 2로 읽는 순간 벽돌 켜
+  //      75mm 가 138mm(사이딩)로 바뀐다. 이미 정확히 검출하는 '창 높이'를 자로 쓴다.
+  const faceTex = (x0, x1, eh, mmPerPx, wins) => {
+    const y0 = Math.max(0, Math.round(baseY - eh)), y1 = Math.min(h - 1, Math.round(baseY));
+    const W2 = x1 - x0 + 1, H2 = y1 - y0 + 1;
+    if (W2 < 30 || H2 < 30 || !(mmPerPx > 0)) return null;
+    const blocked = (x, y) => (wins || []).some(q =>
+      x > q.cx - q.bw / 2 - 2 && x < q.cx + q.bw / 2 + 2 &&
+      y > q.cy - q.bh / 2 - 2 && y < q.cy + q.bh / 2 + 2);
+    const row = new Float32Array(H2), col = new Float32Array(W2);
+    const rowN = new Float32Array(H2), colN = new Float32Array(W2);
+    let ink = 0, tot = 0;
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+      const top = Math.max(y0, Math.round(baseY - prof[x]));
+      if (y < top || blocked(x, y)) continue;
+      tot++; rowN[y - y0]++; colN[x - x0]++;
+      if (bldg[y * w + x]) { ink++; row[y - y0]++; col[x - x0]++; }
+    }
+    if (tot < 2000) return null;
+    // 면적당 잉크로 정규화 — 날것의 개수를 쓰면 박공 실루엣 모양이 무늬로 둔갑한다
+    for (let i2 = 0; i2 < H2; i2++) row[i2] = rowN[i2] > 4 ? row[i2] / rowN[i2] : 0;
+    for (let i2 = 0; i2 < W2; i2++) col[i2] = colN[i2] > 4 ? col[i2] / colN[i2] : 0;
+    const dens = ink / tot;
+    if (dens < 0.02 || dens > 0.6) return null;
+    const reg = (arr, p) => {
+      if (!(p > 2) || p >= arr.length) return 0;
+      let s2 = 0, c2 = 0;
+      for (let i2 = 0; i2 + p < arr.length; i2++) { s2 += Math.min(arr[i2], arr[i2 + p]); c2 += Math.max(arr[i2], arr[i2 + p]); }
+      return c2 > 0 ? s2 / c2 : 0;
+    };
+    // ★상대 자기상관 — 어긋난 주기보다 얼마나 더 닮았는가. 잡음은 어디서나 같아 0 이 된다.
+    const relReg = (arr, p) => {
+      if (!(p > 2)) return 0;
+      const off = Math.max(reg(arr, Math.round(p * 1.5)), reg(arr, Math.max(3, Math.round(p * 0.6))));
+      return reg(arr, p) - off;
+    };
+    const fund = (arr, p) => {                      // 배음 보정 — 자기상관은 배수에 걸리기 쉽다
+      let q = p;
+      for (let k = 0; k < 3 && q >= 6; k++) {
+        const half = Math.round(q / 2);
+        if (half >= 3 && relReg(arr, half) >= relReg(arr, q) * 0.9) q = half; else break;
+      }
+      return q;
+    };
+    const ph = fund(row, periodOf(row, 3, H2 / 3));
+    const pv = fund(col, periodOf(col, 3, W2 / 3));
+    const rh = relReg(row, ph), rv = relReg(col, pv);
+    const mmH = ph > 0 ? ph * mmPerPx : 0, mmV = pv > 0 ? pv * mmPerPx : 0;
+    const TH = 0.14;                                 // 상대 자기상관 문턱
+    if (rh >= TH && rh > rv + 0.06) {
+      if (mmH >= 50 && mmH <= 120) return { mat: 'brick', conf: 0.55, note: '켜 ' + Math.round(mmH) + 'mm' };
+      if (mmH > 120 && mmH <= 340) return { mat: 'wood', conf: 0.5, note: '사이딩 ' + Math.round(mmH) + 'mm' };
+      return null;                                   // 주기는 있는데 치수가 재료답지 않다
+    }
+    // ※무늬로 내는 재료는 벽돌 켜와 목재 사이딩 둘뿐이다.
+    //   · 콘크리트 점묘: '주기가 없다'로 판정해야 하는데, 너무 고운 줄무늬(켜가 2px)도
+    //     주기를 못 찾아 똑같이 보인다 — 실측에서 벽돌이 콘크리트로 둔갑했다. 대비로
+    //     가르려 했으나 그 크기에선 안티에일리어싱으로 대비마저 뭉개져 척도에 따라
+    //     오락가락했다(S1 미검출, S2·S3 절반). 뺀다.
+    //   · 타일 격자: 두 축 모두에서 상대 자기상관을 안정적으로 얻지 못했다. 뺀다.
+    //   확신 없는 재료를 내보내느니 안 내보낸다 — 색 판독이 기본값으로 남는다.
+    return null;
+  };
   const faceMat = (x0, x1, eh) => {
     if (!paperHSL) return null;
     const y0 = Math.max(0, Math.round(baseY - eh)), y1 = Math.min(h - 1, Math.round(baseY));
@@ -1239,6 +1308,19 @@ async function traceConcept(src, opts) {
     const fm = faceMat(Math.round(x0 / WK), Math.round(x1 / WK), eh / WK);
     if (fm) { massList[i].mat = fm.mat; massList[i].matConf = fm.conf; massList[i].matHSL = fm.hsl; }
     const ws = winsOf(x0, x1, eh);
+    // ★색으로 못 읽었을 때만 무늬로 읽는다 — 칠했다는 건 의도이므로 색이 더 확실하다.
+    //   자(尺)는 '창 높이'다. 실제 창은 1200~1800mm 라 ±25% 안에 들고, 층수 추정처럼
+    //   2배로 틀리지 않는다. 창을 못 찾았으면 무늬 판독을 하지 않는다 — 자가 없으면
+    //   주기를 재도 의미가 없다.
+    if (!fm && ws && ws.length) {
+      const hs2 = ws.map(q => q.bh / WK).sort((a2, b2) => a2 - b2);
+      const winPx = hs2[hs2.length >> 1];
+      if (winPx > 6) {
+        const ft = faceTex(Math.round(x0 / WK), Math.round(x1 / WK), eh / WK, 1400 / winPx,
+          ws.map(q => ({ cx: q.cx / WK, cy: q.cy / WK, bw: q.bw / WK, bh: q.bh / WK })));
+        if (ft) { massList[i].mat = ft.mat; massList[i].matConf = ft.conf; massList[i].matTex = ft.note; }
+      }
+    }
     if (!ws) continue;
     // ── 밑변 좌표계로 옮겨 정규화 ──
     // ★매스 경계(bounds)는 '지붕 골'에서 잰 값이라 기울기만큼 옆으로 밀려 있다. 그대로 쓰면

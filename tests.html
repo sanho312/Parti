@@ -3968,6 +3968,56 @@ function tests(){
                   }).then(rb => {
                     ok((rb.massList || []).every(m9 => !m9.mat),
                       '★안 칠한 그림에는 재료를 내지 않는다 — 흰 벽과 종이는 구분할 수 없다');
+                    // ── ★무늬로 재료 읽기 (색이 없을 때) ──
+                    // 두 가지가 관건이었다(한 번 실패하고 되돌린 뒤 다시 함):
+                    //  ① 자기유사도만 보면 잡음도 통과한다 → 어긋난 주기와의 '차이'를 본다
+                    //  ② mm 척도를 층수로 잡으면 1↔2층 오차가 재료를 바꾼다 → '창 높이'를 자로
+                    const mkT2 = (kind, S) => {
+                      const cv = AD.createElement('canvas');
+                      cv.width = 760 * S; cv.height = 460 * S;
+                      const g = cv.getContext('2d');
+                      g.fillStyle = '#f6f2ea'; g.fillRect(0, 0, cv.width, cv.height);
+                      const bY = 360 * S, x0 = 90 * S, mw = 190 * S, eh = 170 * S, rz = 55 * S;
+                      const winH = 38 * S, mmPerPx = 1400 / winH;
+                      for (let i0 = 0; i0 < 3; i0++) {
+                        const a0 = x0 + i0 * mw, b0 = a0 + mw;
+                        const path = () => { g.beginPath(); g.moveTo(a0, bY); g.lineTo(a0, bY - eh);
+                          g.lineTo((a0 + b0) / 2, bY - eh - rz); g.lineTo(b0, bY - eh);
+                          g.lineTo(b0, bY); g.closePath(); };
+                        g.save(); path(); g.clip();
+                        g.strokeStyle = '#6b655c'; g.lineWidth = Math.max(1, S * 0.8);
+                        if (kind !== 'none') { const p0 = (kind === 'brick' ? 75 : 220) / mmPerPx;
+                          for (let y0b = bY; y0b > bY - eh - rz; y0b -= p0) {
+                            g.beginPath(); g.moveTo(a0, y0b); g.lineTo(b0, y0b); g.stroke(); } }
+                        g.restore();
+                        g.strokeStyle = '#2b2b29'; g.lineWidth = 2 * S; path(); g.stroke();
+                        g.fillStyle = '#fdfbf6';
+                        g.fillRect(a0 + 35 * S, bY - 120 * S, 42 * S, winH);
+                        g.fillRect(a0 + 110 * S, bY - 120 * S, 42 * S, winH);
+                        g.strokeRect(a0 + 35 * S, bY - 120 * S, 42 * S, winH);
+                        g.strokeRect(a0 + 110 * S, bY - 120 * S, 42 * S, winH);
+                      }
+                      g.fillStyle = 'rgba(110,160,70,0.85)';
+                      g.beginPath(); g.ellipse(x0 + 285 * S, bY + 55 * S, 260 * S, 45 * S, 0, 0, 7); g.fill();
+                      return cv.toDataURL('image/png');
+                    };
+                    return VZ.traceConcept(mkT2('wood', 1), { maxSide: 760 }).then(tw => {
+                      const m0 = (tw.massList || [])[0] || {};
+                      eqi(m0.mat, 'wood', '★무늬 판독 — 가로 줄무늬 220mm 를 목재 사이딩으로');
+                      const mm0 = parseFloat(String(m0.matTex || '').replace(/[^0-9.]/g, ''));
+                      ok(mm0 > 180 && mm0 < 270,
+                        '★주기를 실제 치수로 잰다 — ' + Math.round(mm0) + 'mm (그린 값 220mm)');
+                      return VZ.traceConcept(mkT2('brick', 2), { maxSide: 1520 });
+                    }).then(tb => {
+                      const m1 = (tb.massList || [])[0] || {};
+                      eqi(m1.mat, 'brick', '★고운 줄무늬 75mm 는 벽돌 켜로');
+                      const mm1 = parseFloat(String(m1.matTex || '').replace(/[^0-9.]/g, ''));
+                      ok(mm1 >= 50 && mm1 <= 120, '  켜 ' + Math.round(mm1) + 'mm (벽돌 범위)');
+                      return VZ.traceConcept(mkT2('none', 1), { maxSide: 760 });
+                    }).then(tn => {
+                      ok((tn.massList || []).every(m2 => !m2.matTex),
+                        '★무늬가 없으면 무늬 재료를 내지 않는다');
+                    });
                     // ★DXF 왕복에서 재질이 사라지던 결함 — WCX 확장에 mat/matx 를 담아 고쳤다.
                     //   (판독한 재료를 내보냈다 불러오면 통째로 없어졌다)
                     const bX = C.state.entities.length;
