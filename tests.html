@@ -4145,6 +4145,44 @@ function tests(){
                 ok(allNo.some(n0 => n0 >= 200), '  2층은 200번대');
                 C.state.entities.length = bV;
               }).then(() => {
+                // ── ★치수선 자동 ──
+                // 도면은 치수가 없으면 그림이다. 실·바닥판이 객체이므로 '무엇을 재야 하는지'를
+                // 모델에서 알 수 있다. 바깥 단은 동 전체, 안쪽 단은 실 구획.
+                // ★부분 치수의 합이 전체 치수와 맞아야 도면이 성립한다.
+                const bD2 = C.state.entities.length;
+                A.buildComplex({ count: 3, floors: 1, w: 9000, d: 11000, roof: 'gable',
+                  arrange: 'arc', attached: true, glass: false, lean: 0 });
+                const nPre = C.state.entities.length;
+                const rd = C.cmdAutoDim('');
+                ok(rd && rd.dims >= 9, '★치수 자동 — ' + (rd ? rd.dims : 0) + '개 기입 (동 '
+                  + (rd ? rd.bays : 0) + '개, 전체 + 실 구획)');
+                const dimE = C.state.entities.slice(nPre).filter(e0 => e0.layer === '치수');
+                ok(dimE.length > 20, '  치수선·화살표·문자로 그려진다 (' + dimE.length + '개 요소)');
+                // 부분 치수 합 = 전체 치수
+                const sl0 = C.state.entities.slice(bD2, nPre)
+                  .find(e0 => e0.bim && e0.bim.kind === 'slab' && e0.layer === '바닥');
+                const wBay = Math.hypot(sl0.points[1][0] - sl0.points[0][0],
+                  sl0.points[1][1] - sl0.points[0][1]);
+                const vals = dimE.filter(e0 => e0.type === 'TEXT')
+                  .map(e0 => parseFloat(String(e0.text).replace(/,/g, ''))).filter(v => v > 0);
+                const parts = vals.filter(v => v > 400 && v < wBay - 200);
+                ok(parts.length >= 3, '  실 구획 부분 치수가 있다 (' + parts.length + '개)');
+                const sum3 = parts.slice(0, 3).reduce((a0, v) => a0 + v, 0);
+                ok(Math.abs(sum3 - wBay) < 30,
+                  '★부분 치수 합이 전체 폭과 맞는다 (' + Math.round(sum3) + ' vs '
+                    + Math.round(wBay) + ')');
+                // 치수는 모델 바깥에 — 도면을 덮으면 못 읽는다
+                const mb = C.entsBBox(C.state.entities.slice(bD2, nPre));
+                const db = C.entsBBox(dimE);
+                ok(db.x0 < mb.x0 || db.x1 > mb.x1 || db.y0 < mb.y0 || db.y1 > mb.y1,
+                  '★치수선이 모델 바깥으로 빠진다 (도면을 덮지 않는다)');
+                // 전체만 옵션
+                C.state.entities.length = nPre;
+                const rd2 = C.cmdAutoDim('전체만');
+                ok(rd2.dims < rd.dims, '  "전체만" 이면 실 구획 치수를 넣지 않는다 ('
+                  + rd2.dims + ' < ' + rd.dims + ')');
+                C.state.entities.length = bD2;
+              }).then(() => {
                 // ── ★도면 한 장으로 묶기 ──
                 // 평면·단면·입면·표가 따로 놀면 납품이 안 된다. 도면틀과 표제란을 두고 한 장에.
                 // ★시트는 '종이 mm' 로 그린다 — 모델(mm)을 1/축척 으로 줄여 얹어야 축척이 뜻을 갖는다.

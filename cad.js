@@ -2944,6 +2944,87 @@ function areaCSV(rows) {
   out += '# 이 값은 모델에서 잰 근사치이며, 인허가용 면적 산정(발코니·주차·필로티 산입 규칙)을 대체하지 않습니다.\n';
   return out;
 }
+// ── 치수선 자동 ──
+// ★도면은 치수가 없으면 그림이다. 실·바닥판이 객체로 남아 있으므로 '무엇을 재야 하는지'를
+//   모델에서 알 수 있다. 사람이 재는 순서 그대로 두 단으로 넣는다:
+//     · 바깥 단 = 동 전체 폭·깊이 (전체 치수)
+//     · 안쪽 단 = 실 구획 (부분 치수) — 합이 전체와 맞아야 도면이 성립한다
+function autoDimPlan(opt) {
+  const o = Object.assign({ rooms: true }, opt || {});
+  const slabs = state.entities.filter(e => e.bim && e.bim.kind === 'slab'
+    && e.bim.t === 150 && (e.bim.top || 0) === 0 && e.points && e.points.length >= 4);
+  if (!slabs.length) return null;
+  ensureLayer('치수', '#5dff8f');
+  const rooms = state.entities.filter(e => e.bim && e.bim.kind === 'room'
+    && (e.bim.floor || 1) === 1 && e.points);
+  // 모델 중심 — 치수선을 바깥쪽으로 빼기 위한 기준
+  const all = slabs.flatMap(s => s.points);
+  const cx = all.reduce((a, p) => a + p[0], 0) / all.length;
+  const cy = all.reduce((a, p) => a + p[1], 0) / all.length;
+  const made = [];
+  const put = (p1, p2, off) => {
+    const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
+    const dx = mx - cx, dy = my - cy, d = Math.hypot(dx, dy) || 1;
+    const pos = { x: mx + dx / d * off, y: my + dy / d * off };   // 바깥으로
+    const ents = computeDimension(p1, p2, pos);
+    for (const e of ents) addEntity(e);
+    made.push(Math.round(Math.hypot(p2.x - p1.x, p2.y - p1.y)));
+  };
+  const OFF1 = 2500, OFF2 = 5200;                                  // 안쪽 단 · 바깥 단
+  for (const s of slabs) {
+    const P = s.points;                                            // FL, FR, BR, BL
+    const FL = { x: P[0][0], y: P[0][1] }, FR = { x: P[1][0], y: P[1][1] };
+    const BR = { x: P[2][0], y: P[2][1] }, BL = { x: P[3][0], y: P[3][1] };
+    put(FL, FR, OFF2);                                             // 동 폭 (앞면)
+    put(FR, BR, OFF2);                                             // 동 깊이 (측면)
+    if (!o.rooms) continue;
+    // 실 구획 — 이 동에 속한 실들을 앞면 방향으로 투영해 경계값을 뽑는다.
+    // ★실 폴리곤 좌표를 그대로 쓰지 않고 '앞면 축 위의 위치'로 환산해야 부채꼴에서도 맞는다.
+    const ux = (FR.x - FL.x), uy = (FR.y - FL.y);
+    const L = Math.hypot(ux, uy) || 1;
+    const nx = ux / L, ny = uy / L;
+    const inSlab = (x, y) => {                                     // 점이 이 동 안인가
+      let c2 = false;
+      for (let i = 0, j = P.length - 1; i < P.length; j = i++)
+        if (((P[i][1] > y) !== (P[j][1] > y)) &&
+            (x < (P[j][0] - P[i][0]) * (y - P[i][1]) / (P[j][1] - P[i][1]) + P[i][0])) c2 = !c2;
+      return c2;
+    };
+    const mine = rooms.filter(r => {
+      const rx = r.points.reduce((a, p) => a + p[0] / r.points.length, 0);
+      const ry = r.points.reduce((a, p) => a + p[1] / r.points.length, 0);
+      return inSlab(rx, ry);
+    });
+    if (mine.length < 2) continue;
+    const cuts = new Set([0, L]);
+    for (const r of mine) for (const p of r.points) {
+      const t = (p[0] - FL.x) * nx + (p[1] - FL.y) * ny;
+      if (t > 200 && t < L - 200) cuts.add(Math.round(t / 10) * 10);
+    }
+    const sorted = [...cuts].sort((a, b) => a - b).filter((v, i, arr) => i === 0 || v - arr[i - 1] > 400);
+    for (let i = 1; i < sorted.length; i++) {
+      const a = sorted[i - 1], b = sorted[i];
+      put({ x: FL.x + nx * a, y: FL.y + ny * a }, { x: FL.x + nx * b, y: FL.y + ny * b }, OFF1);
+    }
+  }
+  return { dims: made.length, bays: slabs.length,
+    total: made.filter(v => v > 3000).length };
+}
+function cmdAutoDim(arg) {
+  const a = String(arg || '').trim();
+  // 잴 것이 있는지 먼저 보고 undo 스냅샷을 남긴다 — 아무것도 안 했는데 undo 단계를 늘리지 않는다
+  const slabN = state.entities.filter(e => e.bim && e.bim.kind === 'slab'
+    && e.bim.t === 150 && (e.bim.top || 0) === 0 && e.points).length;
+  if (!slabN) { logLine('  잴 것이 없습니다 — 건물을 먼저 만들어 주세요.', 'info'); return; }
+  pushUndo();
+  const r = autoDimPlan({ rooms: !/전체만|overall/i.test(a) });
+  if (!r) return;
+  draw(); updateStat();
+  logLine('  치수 ' + r.dims + '개를 기입했습니다 (동 ' + r.bays + '개 — 바깥 단은 전체, 안쪽 단은 실 구획). '
+    + '전체 치수만 원하면 "치수자동 전체만"', 'ok');
+  return r;
+}
+
 // ── 도면 한 장으로 묶기 (시트) ──
 // ★평면·단면·입면·표가 따로 놀면 납품이 안 된다. 도면틀과 표제란을 두고 한 장에 배치한다.
 //   시트는 '종이 mm' 로 그린다 — 모델(mm)을 1/축척 으로 줄여 얹는다. 그래야 축척이 뜻을 갖는다.
@@ -12346,6 +12427,7 @@ const INSTANT_CMDS = {
   setaslight: cmdSetAsLight,
   owsave: cmdOwSave, owlist: cmdOwList, owdel: () => cmdOwDel(prompt('삭제할 창호 기호 이름 (@ 없이):') || ''),   // 커스텀 창호 기호
   owsched: cmdOwSchedule, areatable: cmdAreaTable, autosection: cmdAutoSection, sheet: cmdSheet,
+  autodim: cmdAutoDim,
   raytrace: cmdRaytrace,
   rendered: cmdRendered,
   material: cmdMaterial,
@@ -12815,6 +12897,7 @@ const CMD_ALIASES = {
   areatable: 'areatable', 면적표: 'areatable', 건축개요: 'areatable', 개요표: 'areatable',
   autosection: 'autosection', 단면자동: 'autosection', 자동단면: 'autosection', 단면일괄: 'autosection',
   sheet: 'sheet', 도면묶기: 'sheet', 시트: 'sheet', 도면판: 'sheet', 한장: 'sheet',
+  autodim: 'autodim', 치수자동: 'autodim', 자동치수: 'autodim', 치수기입: 'autodim',
   unsetlight: 'unsetlight', 광원해제: 'unsetlight',
   raytrace: 'raytrace', rt: 'raytrace', raytraced: 'raytrace', 레이트레이싱: 'raytrace', 렌더: 'raytrace',
   rendered: 'rendered', 렌더링: 'rendered', 렌더링뷰: 'rendered', 렌더뷰: 'rendered',
@@ -16391,6 +16474,7 @@ window.__CADTEST__ = {
   owSchedRows, owSchedCSV, owSchedDraw, cmdOwSchedule, owTypeKo,
   areaData, areaRows, areaCSV, cmdAreaTable, drawTable, polyAreaM2,
   autoSecLines, cmdAutoSection, sheetBuild, cmdSheet, sheetSources, entsBBox, SHEET_SIZES,
+  autoDimPlan, cmdAutoDim,
   MAT_PRESETS, MAT_ALIAS, matOf, matKey, matHex, matBoxUV, matGeo, matBuild, matTextures, matDrawTex, cmdMaterial, rtGeoSig, bimSolidColor, secHatchFor, computePatternSegs, owWt, OPENING_TYPES, owSaveDef, owPlaced, layerAutoBim, applyLayerRoleTo, addEntity, renderLayers,
   runCommandInput, feedCmdArg,
   skyCloud, sunDirectIlluminanceClear, skyBlend, SKY_OVERCAST_E, SKY_OVERCAST_RGB,
