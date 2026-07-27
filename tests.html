@@ -6002,6 +6002,52 @@ function tests(){
     } else ok(true, '(3D 훅 없음)');
     reset();
   }
+
+  // ---------- 2026-07-27 층 전환 단추 ----------
+  group('층 전환 단추 — 명령과 같은 상태를 본다 · 층이 하나면 나타나지 않는다');
+  {
+    const AW = document.getElementById('app').contentWindow, AD = AW.document;
+    reset();
+    if (C.close3D) C.close3D();                    // 3D 가 떠 있으면 단추를 숨긴다(설계)
+    const el = AD.getElementById('floorBar');
+    ok(!!el, '★층 전환 단추가 캔버스 위에 있다');
+    // 층이 하나면 띄우지 않는다 — 쓸 데 없는 단추로 화면을 채우지 않는다
+    C.renderFloorBar();
+    eqi(el.style.display, 'none', '★빈 도면·1층 도면에서는 나타나지 않는다');
+    const A2 = AW.PARTI_ARCH;
+    A2.buildComplex({ count: 2, floors: 3, w: 9000, d: 11000, roof: 'gable',
+      arrange: 'arc', attached: true, glass: false, lean: 0 });
+    C.renderFloorBar();
+    eqi(el.style.display, 'flex', '★3층 건물을 만들면 나타난다');
+    const btns = [...el.querySelectorAll('.fbBtn')].map(b => b.textContent);
+    eqi(btns.join(' '), '지붕 3F 2F 1F 전체', '★위에서부터 지붕 → 3F → 2F → 1F → 전체');
+    const onOf = () => [...el.querySelectorAll('.fbBtn')]
+      .filter(b => b.classList.contains('on')).map(b => b.textContent).join(',');
+    eqi(onOf(), '전체', '  처음에는 전체가 켜져 있다');
+    // 단추 → 상태
+    [...el.querySelectorAll('.fbBtn')].find(b => b.textContent === '2F').click();
+    eqi(C.state.planFloor, 2, '★2F 단추 = 2층만 보기');
+    eqi(onOf(), '2F', '  누른 단추가 켜진다');
+    ok(C.state.entities.filter(e0 => C.onLv(e0)).length < C.state.entities.length,
+      '  실제로 가려진다');
+    // ★명령으로 바꿔도 단추가 따라와야 한다 — 단추가 제 상태를 따로 들면 둘이 어긋난다
+    C.cmdFloorView('지붕');
+    eqi(onOf(), '지붕', '★명령("층보기 지붕")으로 바꿔도 단추가 따라온다');
+    [...el.querySelectorAll('.fbBtn')].find(b => b.textContent === '전체').click();
+    eqi(C.state.planFloor, null, '★전체 단추 = 되돌리기');
+    eqi(C.state.entities.filter(e0 => C.onLv(e0)).length, C.state.entities.length,
+      '  전부 다시 보인다');
+    // 3D 를 열면 숨긴다 (평면 전용 필터라 3D 에서는 뜻이 없다)
+    if (C.open3D) {
+      C.open3D(); C.renderFloorBar();
+      eqi(el.style.display, 'none', '★3D 뷰에서는 숨긴다 (평면 전용)');
+      C.close3D(); C.renderFloorBar();
+      eqi(el.style.display, 'flex', '  평면으로 돌아오면 다시 나타난다');
+    }
+    reset();
+    C.renderFloorBar();
+    eqi(el.style.display, 'none', '  도면을 비우면 사라진다');
+  }
 }
 
 document.getElementById('rerun').addEventListener('click', () => { if(T) runAll(); });

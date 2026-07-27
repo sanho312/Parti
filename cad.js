@@ -119,8 +119,9 @@ function snapshot() {
 let apiRev = 0; // 변경 카운터 (클라우드 자동저장의 dirty 판단용)
 // 편집 커밋 알림 — 실시간 동기(cloud.js)가 폴링 없이 '변경 즉시' 방송하도록 훅 제공
 function bumpRev() { apiRev++; if (window.WEBCAD_API && WEBCAD_API.onEdit) { try { WEBCAD_API.onEdit(); } catch (e) {} } }
-function pushUndo() { undoStack.push(snapshot()); if (undoStack.length > 100) undoStack.shift(); redoStack.length = 0; bumpRev(); if (typeof autosave === 'function') autosave(); }
+function pushUndo() { fvN = -1; undoStack.push(snapshot()); if (undoStack.length > 100) undoStack.shift(); redoStack.length = 0; bumpRev(); if (typeof autosave === 'function') autosave(); }
 function restore(snap) {
+  fvN = -1;
   bumpRev(); // undo/redo도 모델 변경으로 집계 (3D 라이브 갱신·클라우드 미저장 표시)
   const d = JSON.parse(snap);
   state.entities = d.entities; state.layers = d.layers;
@@ -3148,18 +3149,49 @@ function planFloorSplit(ents) {
 //   그건 '그린 시점'의 층이라 생성기가 만든 건물은 전 층이 통째로 0층이다.
 // 태그는 도면 개수·id 가 바뀔 때만 다시 계산한다(onLv 는 그리기·선택·스냅에서 매번 불린다).
 // ★문자열 서명을 만들지 않는다 — onLv 는 매 프레임 도형 수만큼 불린다(수천 번).
-//   숫자 세 개 비교로 끝낸다.
-let fvMap = null, fvN = -1, fvId = -1, fvF;
+//   숫자 두 개 비교로 끝낸다. 태그는 '고른 층'과 무관하므로 층을 바꿔도 다시 계산하지 않는다.
+let fvMap = null, fvN = -1, fvId = -1, fvMax = 0, fvRoof = false;
+function fvCalc() {
+  if (fvN === state.entities.length && fvId === state.nextId) return;
+  const t = planFloorTag(state.entities);
+  fvMap = new Map();
+  state.entities.forEach((x, i) => fvMap.set(x.id, t.tag[i]));
+  fvN = state.entities.length; fvId = state.nextId;
+  fvMax = t.fh ? t.maxF : 0; fvRoof = t.tag.some(q => q === -1);
+}
 function floorTagOf(e) {
-  if (fvN !== state.entities.length || fvId !== state.nextId || fvF !== state.planFloor) {
-    const t = planFloorTag(state.entities);
-    fvMap = new Map();
-    state.entities.forEach((x, i) => fvMap.set(x.id, t.tag[i]));
-    fvN = state.entities.length; fvId = state.nextId; fvF = state.planFloor;
-  }
+  fvCalc();
   const q = fvMap.get(e.id);
   return q === undefined ? 0 : q;
 }
+function floorInfo() { fvCalc(); return { max: fvMax, roof: fvRoof }; }
+// 층 전환 단추 — 캔버스 오른쪽. ★명령('층보기 2')과 같은 상태(state.planFloor)를 본다.
+//   단추가 제 상태를 따로 들면 명령으로 층을 바꿨을 때 단추가 딴 층을 가리킨다.
+function renderFloorBar() {
+  const el = document.getElementById('floorBar');
+  if (!el) return;
+  const fi = floorInfo();
+  const many = fi.max >= 2 || (fi.max >= 1 && fi.roof);
+  if (!many || (typeof is3DActive === 'function' && is3DActive())) {
+    el.style.display = 'none'; el.innerHTML = ''; return;   // 층이 하나면 띄우지 않는다
+  }
+  const items = [];
+  if (fi.roof) items.push([-1, '지붕']);
+  for (let f = fi.max; f >= 1; f--) items.push([f, f + 'F']);
+  items.push([0, '전체']);
+  const cur = state.planFloor == null ? 0 : state.planFloor;
+  const html = items.map(([v, t]) =>
+    '<button class="fbBtn' + (v === cur ? ' on' : '') + '" data-f="' + v + '" '
+    + 'title="' + (v === 0 ? '모든 층을 함께 봅니다' : t + ' 평면만 봅니다') + '">' + t + '</button>').join('');
+  if (el.innerHTML !== html) el.innerHTML = html;
+  el.style.display = 'flex';
+}
+document.addEventListener('click', (ev) => {
+  const b = ev.target && ev.target.closest && ev.target.closest('#floorBar .fbBtn');
+  if (!b) return;
+  const v = parseInt(b.dataset.f, 10);
+  cmdFloorView(v === 0 ? '전체' : v === -1 ? '지붕' : String(v));
+});
 function cmdFloorView(arg) {
   const a = String(arg || '').trim();
   const T = planFloorTag(state.entities);
@@ -14510,6 +14542,7 @@ function deleteSelection() {
 function typeKo(t) { return ({ LINE: '선', LWPOLYLINE: '폴리라인', CIRCLE: '원', ARC: '호', TEXT: '문자', HATCH: '해치', INSERT: '블록', IMAGE: '밑그림 이미지' })[t] || t; }
 function updateStat() {
   pruneLights(); // 개체가 지워지면 연결된 광원도 사라진다 (undo는 state.lights를 통째로 복원)
+  if (typeof renderFloorBar === 'function') renderFloorBar();   // 층이 생기면 층 단추도 나타난다
   statEl.textContent = `도형 ${state.entities.length}개 · 레이어 ${state.layers.length}개`
     + (state.lights.length ? ` · 광원 ${state.lights.length}개` : '');
 }
@@ -16810,7 +16843,7 @@ window.__CADTEST__ = {
   areaData, areaRows, areaCSV, cmdAreaTable, drawTable, polyAreaM2,
   autoSecLines, cmdAutoSection, sheetBuild, cmdSheet, sheetSources, entsBBox, SHEET_SIZES,
   sheetPlan, sheetDraw, sheetLayout, sheetIndexDraw, sheetSetBuild, cmdSheetSet, SHEET_SERIES, buildPDFSet, pdfWrap,
-  planFloorSplit, planFloorTag, cmdFloorView, onLv,
+  planFloorSplit, planFloorTag, cmdFloorView, onLv, floorInfo, renderFloorBar,
   switchDoc, curDocIdx: () => curDoc, docCount: () => docs.length,
   autoDimPlan, cmdAutoDim, buildPDF, PAPER_SIZES,
   MAT_PRESETS, MAT_ALIAS, matOf, matKey, matHex, matBoxUV, matGeo, matBuild, matTextures, matDrawTex, cmdMaterial, rtGeoSig, bimSolidColor, secHatchFor, computePatternSegs, owWt, OPENING_TYPES, owSaveDef, owPlaced, layerAutoBim, applyLayerRoleTo, addEntity, renderLayers,

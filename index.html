@@ -261,6 +261,16 @@ try { if (localStorage.getItem('webcad_theme') === 'light') document.documentEle
   /* Canvas */
   #canvasWrap{position:relative;flex:1 1 auto;min-width:0;background:var(--canvas-bg);}
   canvas{display:block;width:100%;height:100%;cursor:crosshair;touch-action:none;}
+  /* 층 전환 단추 — 캔버스 오른쪽에 떠 있음. 층이 둘 이상인 도면에서만 나타난다.
+     ★명령('층보기 2')과 같은 상태를 본다 — 단추가 따로 상태를 들고 있으면 둘이 어긋난다. */
+  #floorBar{position:absolute;right:12px;top:50%;transform:translateY(-50%);z-index:18;
+    display:none;flex-direction:column;gap:3px;padding:4px;border-radius:var(--radius);
+    background:var(--topbar-bg,rgba(13,20,38,0.66));-webkit-backdrop-filter:var(--glass);backdrop-filter:var(--glass);
+    box-shadow:var(--shadow-pop),var(--spec);}
+  .fbBtn{min-width:46px;padding:6px 9px;font-size:12px;font-weight:560;color:var(--muted);
+    background:transparent;border:none;border-radius:8px;cursor:pointer;transition:background .15s,color .15s;}
+  .fbBtn:hover{background:rgba(255,255,255,0.07);color:var(--text);}
+  .fbBtn.on{background:var(--glass-fill-hi);color:var(--text);box-shadow:var(--spec);}
   #coords{position:absolute;left:12px;bottom:12px;font-size:12px;color:var(--muted);
     font-family:var(--mono);background:var(--topbar-bg,rgba(13,20,38,0.66));-webkit-backdrop-filter:var(--glass);backdrop-filter:var(--glass);
     padding:4px 10px;border-radius:var(--radius);pointer-events:none;}
@@ -600,6 +610,8 @@ try { if (localStorage.getItem('webcad_theme') === 'light') document.documentEle
       <canvas id="cv"></canvas>
       <!-- 문서 탭: 캔버스 좌하단에 떠 있음 (다중 작업, + 로 새 탭이 오른쪽에 추가) -->
       <div id="docTabs"></div>
+      <!-- 층 전환: 여러 층 도면에서만 나타난다 (cad.js renderFloorBar) -->
+      <div id="floorBar"></div>
       <div id="hint">선택 도구입니다. 도형을 클릭하거나 빈 영역을 드래그하세요.</div>
       <!-- 캔버스 좌하단 좌표: 하단 상태바(#stCoords)와 중복 → 화면에서 숨김. 단 이 요소가 상태바 좌표의 원본(cad.js가 텍스트를 여기 씀)이라 DOM은 유지 -->
       <div id="coords" style="display:none">X: 0.00  Y: 0.00</div>
@@ -950,7 +962,7 @@ try { if (localStorage.getItem('webcad_theme') === 'light') document.documentEle
   </div>
 </div>
 
-<script src="cad.js?v=20260727x"></script>
+<script src="cad.js?v=20260727y"></script>
 <script src="prep.js?v=8"></script>
 <script src="arch.js?v=39"></script>
 <script src="vision.js?v=55"></script>
