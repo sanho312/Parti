@@ -456,25 +456,74 @@ async function traceConcept(src, opts) {
     prof[x] = s / c;
   }
   let maxH = 0; for (let x = 0; x < w; x++) if (prof[x] > maxH) maxH = prof[x];
-  const peaks = prominentPeaks(prof, Math.max(6, Math.round(w / 22)), Math.max(3, maxH * 0.055));
+  const lowThr0 = maxH * 0.15;
+  let xa = 0, xb = w - 1;
+  while (xa < w - 1 && prof[xa] < lowThr0) xa++;
+  while (xb > xa && prof[xb] < lowThr0) xb--;
+
+  // ── 측면(奧行き面) 검출 → 깊이 ──
+  // ★첫 시도(채움률)는 앞면과 측면을 구분하지 않아 잡음만 쟀다. 투시에서 깊이가 화면에
+  //   드러나는 것은 오직 '측면의 폭'이다. 측면은 앞면과 밝기가 다르므로(음영·해칭)
+  //   실루엣 '내부' 밝기의 단차로 경계를 찾는다.
+  //   ★잉크 마스크로 재면 안 된다 — 흰 앞면은 잉크가 아니라서 열 평균이 성립하지 않는다(실측).
+  //   ★검출을 '동 세기'보다 먼저 한다 — 안 그러면 측면이 별개 봉우리로 잡혀 동 수가 는다(실측).
+  let depthRatio = null, depthConf = 0, sideL = 0, sideR = 0, dbgSide = null;
+  {
+    const colM = new Float32Array(w), colC = new Float32Array(w);
+    for (let x = xa; x <= xb; x++) {
+      if (prof[x] < lowThr0) continue;
+      const y0s = Math.max(0, Math.round(baseY - prof[x]));
+      for (let y = y0s; y <= Math.min(h - 1, baseY); y++) {
+        const p = y * w + x;
+        if (blueA[p] || greenA[p]) continue;         // 유리·조경은 재료가 달라 제외
+        // ★종이(배경)를 빼야 한다 — prof 는 평활화돼 건물 밖으로 번지므로, 안 빼면
+        //   끝단 열이 종이 밝기로 잡혀 측면 런이 즉시 끊긴다(실측: sideR 이 0).
+        if (Math.abs(lum[p] - mode) <= 6) continue;
+        colM[x] += lum[p]; colC[x]++;
+      }
+    }
+    const valid = [];
+    for (let x = xa; x <= xb; x++) if (colC[x] > maxH * 0.12) valid.push(x);
+    if (valid.length > 24) {
+      const mean = (x) => colM[x] / colC[x];
+      const sorted = valid.map(mean).sort((p, q) => p - q);
+      const med = sorted[sorted.length >> 1];
+      const devs = valid.map(x => Math.abs(mean(x) - med)).sort((p, q) => p - q);
+      const devHi = devs[Math.floor(devs.length * 0.92)];
+      dbgSide = { valid: valid.length, med: +med.toFixed(1), devHi: +devHi.toFixed(1) };
+      // ★상대 임계만 쓰면 측면이 없을 때 devHi 가 잡음 수준으로 내려앉아 아무 열이나
+      //   '측면'이 된다(실측: 측면 0인데 깊이 0.47). 절대 대비 하한(18)을 함께 건다.
+      if (devHi > 14) {
+        const isSide = (x) => Math.abs(mean(x) - med) >= Math.max(18, devHi * 0.5);
+        for (let k = valid.length - 1; k >= 0 && isSide(valid[k]); k--) sideR++;
+        for (let k = 0; k < valid.length && isSide(valid[k]); k++) sideL++;
+        dbgSide.tail = valid.slice(-6).map(x => [x, +mean(x).toFixed(0), isSide(x)]);
+        dbgSide.head = valid.slice(0, 6).map(x => [x, +mean(x).toFixed(0), isSide(x)]);
+        dbgSide.thr = +(devHi * 0.5).toFixed(1);
+        if (sideL === valid.length) { sideL = 0; sideR = 0; }   // 전부 '측면'이면 판정 무의미
+      }
+    }
+  }
+  // 측면 구간을 뺀 '앞면만'의 구간에서 동을 센다
+  const fa = Math.min(xb, xa + sideL), fb = Math.max(fa, xb - sideR);
+  const profF = new Float32Array(w);
+  for (let x = fa; x <= fb; x++) profF[x] = prof[x];
+  const peaks = prominentPeaks(profF, Math.max(6, Math.round(w / 22)), Math.max(3, maxH * 0.055));
   const promAvg = peaks.length ? peaks.reduce((a, p) => a + p.prom, 0) / peaks.length : 0;
   const greenR = green / total, blueR = blue / total;
 
   // ── 동별 폭·높이와 인접 여부 ──
   // 한 덩어리에 같은 크기를 쓰면 스케치와 전혀 다른 그림이 된다(실사용 보고).
   // 봉우리 사이의 골로 동 경계를 나눠 폭 비율을, 봉우리 높이로 높이 비율을 얻는다.
-  let xa = 0, xb = w - 1;
-  const lowThr = maxH * 0.15;
-  while (xa < w - 1 && prof[xa] < lowThr) xa++;
-  while (xb > xa && prof[xb] < lowThr) xb--;
+  const lowThr = lowThr0;
   const valleys = [];
   for (let i = 1; i < peaks.length; i++) {
     let vi = peaks[i - 1].i, vv = Infinity;
     for (let x = peaks[i - 1].i; x <= peaks[i].i; x++) if (prof[x] < vv) { vv = prof[x]; vi = x; }
     valleys.push({ i: vi, v: vv, lo: Math.min(peaks[i - 1].v, peaks[i].v) });
   }
-  let bounds = [xa].concat(valleys.map(v => v.i), [xb]);
-  const spanW = Math.max(1, xb - xa);
+  let bounds = [fa].concat(valleys.map(v => v.i), [fb]);
+  const spanW = Math.max(1, fb - fa);
   let massList = peaks.map((p, i) => ({
     wFrac: Math.max(0.02, (bounds[i + 1] - bounds[i]) / spanW),
     hFrac: maxH > 0 ? +(p.v / maxH).toFixed(3) : 1,
@@ -532,6 +581,16 @@ async function traceConcept(src, opts) {
   // ※comps 로 동 수를 덮어쓰지 않는다 — 실측 결과 유리면과 윤곽선이 따로 세어져(동당 2개)
   //   오히려 부풀렸다. 진단값으로만 남기고, 동 수는 실루엣 봉우리·유리 군집으로 판단한다.
   const masses = Math.max(1, Math.min(12, massList.length));
+  // 측면 폭 → 깊이 배수. 투시각을 모르므로 2점 투시 30~45° 관용값(깊이/측면폭 ≈ 1.6)을 쓴다.
+  // 값이 없으면(음영이 없거나 측면이 안 보이면) null — 잘못된 값을 내보내지 않는다.
+  {
+    const side = Math.max(sideL, sideR);
+    const oneFront = spanW / Math.max(1, masses);
+    if (side >= Math.max(6, oneFront * 0.1) && oneFront > 4) {
+      depthRatio = +Math.max(0.4, Math.min(3.0, (side / oneFront) * 1.6)).toFixed(2);
+      depthConf = +Math.min(1, side / oneFront).toFixed(2);
+    }
+  }
   // ── 지붕형: 봉우리가 '뾰족한가(박공)' vs '평평한가(평지붕)' ──
   // ★돌출도만 보면 상자들 사이 단차도 큰 돌출로 잡혀 평지붕이 박공이 된다(실측).
   //   봉우리 근처가 고원(plateau)처럼 평평하면 평지붕이다.
@@ -675,11 +734,7 @@ async function traceConcept(src, opts) {
     dSum += fill; dN++;
   }
   void dSum; void dN;
-  // ★깊이는 여기서 추정하지 않는다 — 채움률은 깊이를 재지 못한다(실측).
-  //   측면이 넓은 동은 그 측면이 '별개 봉우리'로 잡혀 동 수가 늘고, 채움률은 오히려 떨어졌다
-  //   (오른쪽을 깊게 그린 시험: 5동→6동, 깊이 배수 1.7 기대 → 0.6 측정).
-  //   단일 투시에서 깊이를 알려면 면 분할(앞면/측면 음영 구분)이나 소실점 추정이 필요하다.
-  //   fill 은 진단값으로만 남기고, 깊이는 사용자가 문장으로 지정하게 한다("깊이 8,12,20m").
+
   // 붙어 있는가 — 골이 충분히 높으면 한 덩어리로 이어진 동들이다
   const attachedN = valleys.filter(v => v.lo > 0 && v.v / v.lo >= 0.35).length;
   const attached = valleys.length ? attachedN >= valleys.length / 2 : false;
@@ -700,7 +755,7 @@ async function traceConcept(src, opts) {
   const enclosed = hasCourt && bAll > 0 && below / bAll > 0.15;   // 마당 아래에도 건물이 상당량
   const courtFront = hasCourt && !enclosed;
   return {
-    masses, massList, attached, floors, lean: +leanAvg.toFixed(3),
+    masses, massList, attached, floors, lean: +leanAvg.toFixed(3), depthRatio, depthConf,
     // 고원 비율이 크면 평지붕. 뾰족한 봉우리라야 박공이다.
     roof: (plateau < 0.42 && maxH > 0 && promAvg / maxH > 0.08) ? 'gable' : 'flat',
     // 앞마당이면 '부채꼴로 늘어서고 마당은 그 앞' — 마당을 빙 두르는 링이 아니다.
@@ -711,7 +766,7 @@ async function traceConcept(src, opts) {
       greenRatio: +greenR.toFixed(3), blueRatio: +blueR.toFixed(3),
       courtyard: hasCourt, courtFront, enclosed, attached, bTop, bBot, baseY,
       plateau: +plateau.toFixed(2), eaveRatio: +eaveRatio.toFixed(2), comps,
-      blocks: blocks.length, block: [by0, by1], blockDbg, gcy: Math.round(gcy) },
+      blocks: blocks.length, block: [by0, by1], blockDbg, sideL, sideR, dbgSide, xa, xb, fa, fb, gcy: Math.round(gcy) },
   };
 }
 

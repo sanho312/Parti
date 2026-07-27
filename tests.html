@@ -3376,8 +3376,51 @@ function tests(){
                   ok(ct9.massList.every(m9 => m9.lean != null), '  동별 기울기도 함께');
                 // ★깊이는 자동으로 읽지 않는다 — 채움률로 재려다 잡음만 재서 철회했다.
                 //   잘못된 값을 자신 있게 내보내느니 사용자가 문장으로 지정하게 한다.
-                ok(ct9.massList.every(m9 => m9.depthK === undefined), '★깊이는 추정하지 않는다 (잡음 지표 철회)');
-                ok(ct9.massList.every(m9 => typeof m9.fill === 'number'), '  채움률은 진단값으로만 남긴다');
+                // ★깊이 자동 판독 — 측면(음영이 다른 면)의 폭으로 잰다.
+                //   첫 시도(채움률)는 앞면·측면을 구분 못해 실패했다. 두 번째는 성공:
+                //   측면비를 알고 그린 그림에서 오차 4% 이내로 되찾고, 없으면 값을 안 낸다.
+                const mkSide = (sf, shade) => {
+                  const cw = 880, ch = 420;
+                  const cvS = AD.createElement('canvas'); cvS.width = cw; cvS.height = ch;
+                  const gS = cvS.getContext('2d');
+                  gS.fillStyle = '#f0ebe0'; gS.fillRect(0, 0, cw, ch);
+                  const base = 290, eh = 110, wsS = [100, 110, 105, 100, 110];
+                  let xS = 45; const sideW = Math.round(wsS[0] * sf);
+                  for (let i0 = 0; i0 < 5; i0++) {
+                    const wd0 = wsS[i0], ap0 = base - eh - 60;
+                    gS.fillStyle = '#fdfbf6'; gS.beginPath();
+                    gS.moveTo(xS, base); gS.lineTo(xS, base - eh); gS.lineTo(xS + wd0 * 0.42, ap0);
+                    gS.lineTo(xS + wd0, base - eh); gS.lineTo(xS + wd0, base); gS.closePath(); gS.fill();
+                    gS.strokeStyle = '#2b2b29'; gS.lineWidth = 1.7; gS.stroke();
+                    gS.fillStyle = 'rgba(96,150,205,0.85)'; gS.fillRect(xS + 14, base - eh + 12, wd0 - 30, eh - 26);
+                    xS += wd0;
+                  }
+                  if (sideW > 0) {
+                    gS.fillStyle = shade ? '#c8c2b4' : '#fdfbf6';
+                    gS.beginPath(); gS.moveTo(xS, base); gS.lineTo(xS, base - eh);
+                    gS.lineTo(xS + sideW, base - eh - 14); gS.lineTo(xS + sideW, base - 14);
+                    gS.closePath(); gS.fill();
+                    gS.strokeStyle = '#2b2b29'; gS.lineWidth = 1.7; gS.stroke();
+                  }
+                  gS.fillStyle = 'rgba(126,186,88,0.85)'; gS.beginPath();
+                  gS.ellipse(360, 360, 150, 34, 0, 0, 7); gS.fill();
+                  return cvS.toDataURL('image/png');
+                };
+                return VZ.traceConcept(mkSide(0.6, true)).then(d1 => {
+                  ok(d1.depthRatio != null && Math.abs(d1.depthRatio - 0.96) / 0.96 < 0.15,
+                    '★깊이 판독 — 측면 폭으로 깊이 배수 (기대 0.96 / 판독 ' + d1.depthRatio + ')');
+                  eqi(d1.masses, 5, '  측면을 별개 동으로 세지 않는다');
+                  return VZ.traceConcept(mkSide(1.5, true));
+                }).then(d2 => {
+                  ok(d2.depthRatio != null && Math.abs(d2.depthRatio - 2.4) / 2.4 < 0.15,
+                    '  깊은 경우도 (기대 2.4 / 판독 ' + d2.depthRatio + ')');
+                  return VZ.traceConcept(mkSide(0, true));
+                }).then(d3 => {
+                  eqi(d3.depthRatio, null, '★측면이 없으면 깊이를 내지 않는다 (오검출 방지)');
+                  return VZ.traceConcept(mkSide(1.0, false));
+                }).then(d4 => {
+                  eqi(d4.depthRatio, null, '  음영이 없으면 깊이를 내지 않는다');
+                });
                 });
               }).then(() => {
                 // ★평지붕 군을 박공으로 오판하지 않는가 — 봉우리 근처가 고원이면 평지붕

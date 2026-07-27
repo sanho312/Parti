@@ -1113,6 +1113,8 @@
           count: exp.count || c.masses, floors: exp.floors || c.floors || 1,
           w: exp.w || 8000, d: exp.d || 12000,
           roof: exp.roof || c.roof, arrange: exp.arrange || c.arrange,
+          // 측면 음영으로 잰 깊이가 있으면 반영 (없으면 기본 12m)
+          d: exp.d || (c.depthRatio ? Math.round(8000 * c.depthRatio / 100) * 100 : 12000),
           glass: exp.glass != null ? exp.glass : c.glass, floorH: fh,
           // 동별 폭·높이 비율과 인접 여부까지 전달 — 균일 배치는 스케치와 전혀 다른 그림이 된다
           massList: (!exp.count || exp.count === c.masses) ? c.massList : null,
@@ -1127,6 +1129,7 @@
           + (spec.glass ? ' · 마당 쪽 전면 유리' : '')
           + `  (봉우리 ${c.masses}개${c.attached ? ' · 서로 붙은 덩어리' : ''}${c.meta.courtyard ? ' · 마당 초록 검출' : ''}`
           + (Math.abs(c.lean || 0) > 0.05 ? ` · 기울기 ${(Math.atan(c.lean) * 180 / Math.PI).toFixed(0)}도` : '')
+          + (c.depthRatio ? ` · 측면 음영으로 잰 깊이 ${(spec.d / 1000).toFixed(1)}m` : '')
           + `, 동 폭 ${r.widths.map(v => (v / 1000).toFixed(0)).join('/')}m)`);
       }
       let builtFromPlan = null;
