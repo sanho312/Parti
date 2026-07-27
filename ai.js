@@ -992,7 +992,19 @@
   function parseComplexSpec(t) {
     const o = {};
     const n = numOf(t, /(\d+)\s*동/); if (n) o.count = n;
-    const f = numOf(t, /(\d+)\s*층/); if (f) o.floors = f;
+    // ── 층별 구성 — "1층은 상가", "2층 사무실" ──
+    // ★이 구절의 '1층'은 층수가 아니다. 먼저 떼어 내지 않으면 "5동 4층, 1층은 상가" 에서
+    //   층수를 1로 읽는다(가장 먼저 나온 숫자+층을 집는 규칙이라).
+    const fpm = {};
+    let t2 = t;
+    const reF = /(\d+)\s*층\s*(?:은|는|을|를|에|:)?\s*(상가|점포|근린생활|근생|리테일|필로티|피로티|사무실|오피스|원룸|투룸|쓰리룸|작업실|공방)/g;
+    let mF;
+    while ((mF = reF.exec(t))) {
+      const pg = window.PARTI_ARCH && window.PARTI_ARCH.programOf(mF[2]);
+      if (pg) { fpm[+mF[1]] = pg; t2 = t2.replace(mF[0], ' '); }
+    }
+    if (Object.keys(fpm).length) o.floorProgram = fpm;
+    const f = numOf(t2, /(\d+)\s*층/); if (f) o.floors = f;
     const w = numOf(t, /(\d+(?:\.\d+)?)\s*[x×]\s*\d+(?:\.\d+)?\s*m/);
     const d = numOf(t, /\d+(?:\.\d+)?\s*[x×]\s*(\d+(?:\.\d+)?)\s*m/);
     if (w) o.w = w * 1000; if (d) o.d = d * 1000;
@@ -1025,7 +1037,7 @@
     if ((!imgs || !imgs.length) && window.PARTI_ARCH) {
       const exp = parseComplexSpec(t);
       const has = exp.count || exp.floors || exp.w || exp.d || exp.roof || exp.arrange
-        || exp.glass != null || (exp.depths && exp.depths.length);
+        || exp.glass != null || (exp.depths && exp.depths.length) || exp.floorProgram;
       if (lastConcept && (exp.count || (has && /다시|바꿔|변경|수정|말고/.test(t)))) {
         const spec = Object.assign({}, lastConcept, exp);
         const r = window.PARTI_ARCH.buildComplex(spec);
@@ -1272,7 +1284,7 @@
     if (window.PARTI_ARCH && /(\d+)\s*동/.test(t) && /배치|세워|만들|박공|지어/.test(t)) {
       const e2 = parseComplexSpec(t);
       const spec = { count: e2.count || 5, floors: e2.floors || 1, w: e2.w || 8000, d: e2.d || 12000, depths: e2.depths || null,
-        roof: e2.roof || 'gable', arrange: e2.arrange || 'circle',
+        roof: e2.roof || 'gable', arrange: e2.arrange || 'circle', floorProgram: e2.floorProgram || null,
         glass: e2.glass != null ? e2.glass : true, floorH: numOf(t, /층고\s*(\d{3,5})/) || 3000 };
       const r = window.PARTI_ARCH.buildComplex(spec);
       if (!r) return '배치를 만들지 못했습니다.';

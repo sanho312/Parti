@@ -45,6 +45,8 @@ const PROGRAMS = {
   threeroom:{ ko: '쓰리룸', rooms: [{ n: '현관', fix: 2.6 }, { n: '욕실', fix: 4.5 }, { n: '욕실2', fix: 3.6 }, { n: '주방', w: 0.18 }, { n: '침실', w: 0.19 }, { n: '침실2', w: 0.19 }, { n: '거실', w: 0.44 }] },
   office:   { ko: '사무실', rooms: [{ n: '현관', fix: 3.0 }, { n: '화장실', fix: 4.0 }, { n: '회의실', w: 0.3 }, { n: '업무공간', w: 0.7 }] },
   studio:   { ko: '작업실', rooms: [{ n: '현관', fix: 2.0 }, { n: '욕실', fix: 4.0 }, { n: '창고', w: 0.18 }, { n: '작업실', w: 0.82 }] },
+  // ★1층용 — 상가(근린생활). 아랫층과 윗층이 같은 구성인 건물은 실제로 드물다.
+  shop:     { ko: '상가',   rooms: [{ n: '화장실', fix: 4.0 }, { n: '창고', fix: 4.0 }, { n: '점포1', w: 0.5 }, { n: '점포2', w: 0.5 }] },
 };
 // 한국어/자연어 → 프리셋 키
 function programOf(text) {
@@ -55,7 +57,25 @@ function programOf(text) {
   if (/사무|오피스|office/i.test(t)) return 'office';
   if (/작업실|스튜디오|공방/.test(t)) return 'studio';
   if (/원룸|스튜디오형|one-?room|studio/i.test(t)) return 'oneroom';
+  if (/상가|점포|근생|근린생활|리테일|retail|shop/i.test(t)) return 'shop';
+  if (/필로티|피로티|piloti|기둥만|비워/i.test(t)) return 'piloti';
   return null;
+}
+// ── 층별 구성 ──
+// ★1층과 윗층이 같은 건물은 실제로 드물다(1층은 상가·필로티, 윗층은 주거).
+//   구성이 같은 연속 층을 묶어 한 번씩만 구획한다 — 구획기는 층을 모르고 '한 판'만 만든다.
+function floorGroups(o) {
+  const N = Math.max(1, o.floors || 1);
+  const fp = Object.assign({}, o.floorProgram || {});
+  if (o.ground && fp[1] == null) fp[1] = o.ground;
+  const out = [];
+  for (let fl = 1; fl <= N; fl++) {
+    const pg = fp[fl] != null ? fp[fl] : (fp[String(fl)] != null ? fp[String(fl)] : null);
+    const last = out[out.length - 1];
+    if (last && last.program === pg) last.floors.push(fl);
+    else out.push({ program: pg, floors: [fl] });
+  }
+  return out;
 }
 
 // ---------- 재귀 이분할 배치 (guillotine) ----------
@@ -281,9 +301,15 @@ function buildInterior(br, o, counts, roomSeq, ctx) {
   const FL = ctx.FL, FR = ctx.FR, BR = ctx.BR, BL = ctx.BL;
   const arcW = ctx.W, Di = ctx.D, chord = ctx.chord, wSh = ctx.wSh || null;
   const curMat = ctx.mat || null;
+  // ★어느 층에 이 구획을 놓을지 받는다. 예전엔 '전 층'에 같은 판을 찍었다 —
+  //   그래서 1층 상가·윗층 주거 같은 실제 건물을 만들 수가 없었다.
+  const FLOORS = (ctx.floors && ctx.floors.length) ? ctx.floors
+    : Array.from({ length: Math.max(1, o.floors || 1) }, (_, k) => k + 1);
+  // 올라갈 계단이 필요한 층 — 최상층은 없다. 필로티처럼 건너뛴 층 몫도 여기로 넘어온다.
+  const STF = ctx.stairFloors || FLOORS.filter(fl => fl < (o.floors || 1));
   if (o.rooms !== false && Di >= 3000 && chord >= 3000) {
         const areaM2 = arcW * Di / 1e6;
-    const prog = o.program || (areaM2 < 26 ? 'oneroom' : areaM2 < 40 ? 'oneHalf'
+    const prog = ctx.program || o.program || (areaM2 < 26 ? 'oneroom' : areaM2 < 40 ? 'oneHalf'
       : areaM2 < 60 ? 'tworoom' : 'threeroom');
     const P = PROGRAMS[prog] || PROGRAMS.oneroom;
     const fixed = P.rooms.filter(r2 => r2.fix), flex = P.rooms.filter(r2 => !r2.fix);
@@ -404,7 +430,8 @@ function buildInterior(br, o, counts, roomSeq, ctx) {
         const A2 = PXY(ax, ay), B2 = PXY(bx, by);
         const len2 = Math.hypot(B2[0] - A2[0], B2[1] - A2[1]);
         if (len2 < 600) continue;
-        for (let f = 0; f < Math.max(1, o.floors); f++) {
+        for (const fl2 of FLOORS) {
+          const f = fl2 - 1;
           const iw = br.addEntity({ type: 'LINE', layer: '벽',
             x1: Math.round(A2[0]), y1: Math.round(A2[1]),
             x2: Math.round(B2[0]), y2: Math.round(B2[1]) });
@@ -427,8 +454,8 @@ function buildInterior(br, o, counts, roomSeq, ctx) {
         acc + (p[0] * RP2[(k + 1) % 4][1] - RP2[(k + 1) % 4][0] * p[1]), 0)) / 2;   // 실측 폴리곤 면적
       // ★실번호 — 층 백단위 + 순번(101, 102 …). 도면 표기와 면적표가 이 번호로 이어진다.
       const nos = [];
-      for (let f = 0; f < Math.max(1, o.floors); f++) {
-        const fl = f + 1;
+      for (const fl of FLOORS) {
+        const f = fl - 1;
         const seq = (roomSeq.get(fl) || 0) + 1; roomSeq.set(fl, seq);
         const no = fl * 100 + seq;
         nos.push(no);
@@ -470,7 +497,8 @@ function buildInterior(br, o, counts, roomSeq, ctx) {
       const L2 = mw.len, ux2 = (mw.B[0] - mw.A[0]) / L2, uy2 = (mw.B[1] - mw.A[1]) / L2;
       const dw2 = Math.min(STD.doorW, L2 * 0.6);
       const mx2 = (mw.A[0] + mw.B[0]) / 2, my2 = (mw.A[1] + mw.B[1]) / 2;
-      for (let f = 0; f < Math.max(1, o.floors); f++) {
+      for (const fl2 of FLOORS) {
+          const f = fl2 - 1;
         const dpe = br.addEntity({ type: 'LINE', layer: '개구부',
           x1: Math.round(mx2 - ux2 * dw2 / 2), y1: Math.round(my2 - uy2 * dw2 / 2),
           x2: Math.round(mx2 + ux2 * dw2 / 2), y2: Math.round(my2 + uy2 * dw2 / 2) });
@@ -507,7 +535,8 @@ function buildInterior(br, o, counts, roomSeq, ctx) {
         const ww2 = Math.min(bath ? STD.bathWinW : STD.winW, best.len * 0.5);
         if (ww2 < 500) continue;
         const s3 = best.len / 2;
-        for (let f = 0; f < Math.max(1, o.floors); f++) {
+        for (const fl2 of FLOORS) {
+          const f = fl2 - 1;
           const e3 = br.addEntity({ type: 'LINE', layer: '개구부',
             x1: Math.round(best.A[0] + ux2 * (s3 - ww2 / 2)),
             y1: Math.round(best.A[1] + uy2 * (s3 - ww2 / 2)),
@@ -526,10 +555,11 @@ function buildInterior(br, o, counts, roomSeq, ctx) {
     // 2층 이상인데 계단이 없으면 위층에 올라갈 수 없다. 복도 한쪽 끝에 직선 계단을 놓는다.
     // 경로 선(시작=아랫단, 끝=윗단)에 bim.kind='stair' 를 달면 평면 심볼과 3D 를 cad.js 가
     // 같은 기하로 만들어 준다.
-    if (useCorr && o.floors >= 2) {
+    if (useCorr && STF.length) {
       const RISER = 180, run = Math.max(2400, Math.min(Di * 0.55, (o.floorH / RISER) * 280));
       const sy = xc0 + CORR / 2;                          // 복도 한가운데 (앞뒤로 오른다)
-      for (let f = 0; f + 1 < o.floors; f++) {
+      for (const flS of STF) {
+        const f = flS - 1;
         const S1 = PXY(sy, Di * 0.06), S2 = PXY(sy, Di * 0.06 + run);
         const st = br.addEntity({ type: 'LINE', layer: '벽',
           x1: Math.round(S1[0]), y1: Math.round(S1[1]),
@@ -608,6 +638,21 @@ function buildComplex(spec) {
   // 판독한 재료를 담아 둘 자리 — 동마다 다를 수 있으므로 벽을 만들 때 실어 준다.
   // ★재질은 e.mat 에 붙는다(bim.mat 아님). 붙는 즉시 3D 색이 그 재질을 따라간다.
   let curMat = null;
+  // ── 층별 구성 ──
+  // ★구성이 같은 연속 층끼리 묶어 한 번씩 구획한다. 필로티 층은 아예 부르지 않는다 —
+  //   실을 만들지 않는 게 곧 필로티다(면적도 잡히지 않는다).
+  //   ★건너뛴 층의 '올라갈 계단'은 잃어버리면 안 되므로 다음 그룹에 넘겨 준다.
+  const FG = floorGroups(o);
+  const runInterior = (ctx) => {
+    let pend = [];
+    for (const g of FG) {
+      const up = g.floors.filter(fl => fl < Math.max(1, o.floors));
+      if (g.program === 'piloti') { pend = pend.concat(up); continue; }
+      buildInterior(br, o, counts, roomSeq, Object.assign({}, ctx,
+        { floors: g.floors, program: g.program, stairFloors: pend.concat(up) }));
+      pend = [];
+    }
+  };
   const wall = (p, q, t2, h2, sh2) => {
     const e = br.addEntity({ type: 'LINE', layer: '벽',
       x1: Math.round(p[0]), y1: Math.round(p[1]), x2: Math.round(q[0]), y2: Math.round(q[1]) });
@@ -839,8 +884,7 @@ function buildComplex(spec) {
         fa.bim = { kind: 'wall', h: 260, t: 120, base: Hi - 60 };
       }
       // ── 내부 실 구획 ── (부채꼴 쐐기: 각도축을 호길이로 환산해 넘긴다)
-      buildInterior(br, o, counts, roomSeq, {
-        FL, FR, BR, BL, W: Math.abs(aL - aR) * ((r0 + r1i) / 2), D: Ds[i], chord, wSh,
+      runInterior({ FL, FR, BR, BL, W: Math.abs(aL - aR) * ((r0 + r1i) / 2), D: Ds[i], chord, wSh,
         mat: curMat, sideExtL: (i === 0 || gap > 0), sideExtR: (i === n - 1 || gap > 0) });
       const cM = PT((aL + aR) / 2, (r0 + r1i) / 2);
       br.addEntity({ type: 'TEXT', layer: '문자', x: Math.round(cM[0]), y: Math.round(cM[1]), height: 400, text: (i + 1) + '동' });
@@ -921,7 +965,7 @@ function buildComplex(spec) {
       //   만들어서, 일렬로 놓으면 껍데기만 나오고 면적표·층별 평면도가 통째로 비었다.
       //   직사각형이라 매개변수 공간이 그대로 세계 좌표다(쐐기 보정이 필요 없다).
       //   동끼리 떨어져 있으므로 좌·우 측벽도 외벽이다 = 창을 뚫어도 된다.
-      buildInterior(br, o, counts, roomSeq, { FL: P[0], FR: P[1], BR: P[2], BL: P[3],
+      runInterior({ FL: P[0], FR: P[1], BR: P[2], BL: P[3],
         W: Ws[i], D: Ds[i], chord: Ws[i], wSh: null, mat: curMat,
         sideExtL: true, sideExtR: true });
       br.addEntity({ type: 'TEXT', layer: '문자', x: Math.round(C[0]), y: Math.round(C[1]), height: 400, text: (i + 1) + '동' });
@@ -1127,6 +1171,6 @@ function buildPolyMass(points, spec) {
   return { n: points.length, h: o.h };
 }
 
-return { STD, roomType, PROGRAMS, programOf, planLayout, buildPlan, buildMassing, buildComplex,
+return { STD, roomType, PROGRAMS, programOf, floorGroups, planLayout, buildPlan, buildMassing, buildComplex,
   SHAPES, shapeOf, buildShape, buildPolyMass };
 })();
