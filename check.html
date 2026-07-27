@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Parti — 손그림 검사지</title>
+<style>
+  :root{--bg:#0b1020;--panel:#141c33;--line:#26304d;--text:#e8ecf6;--muted:#9aa6c2;
+    --ok:#57d38c;--warn:#e8b04b;--bad:#ff6961;--acc:#6ea8ff;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font:14px/1.55 -apple-system,"Segoe UI",system-ui,sans-serif;}
+  header{padding:18px 22px 12px;border-bottom:1px solid var(--line);}
+  h1{margin:0 0 4px;font-size:17px;font-weight:640;}
+  header p{margin:0;color:var(--muted);font-size:12.5px;max-width:78ch;}
+  main{display:flex;gap:18px;padding:18px 22px;align-items:flex-start;flex-wrap:wrap;}
+  #drop{flex:0 0 340px;min-height:220px;border:1.5px dashed var(--line);border-radius:12px;
+    display:flex;align-items:center;justify-content:center;flex-direction:column;gap:8px;
+    color:var(--muted);cursor:pointer;padding:16px;text-align:center;transition:border-color .15s,background .15s;}
+  #drop:hover,#drop.on{border-color:var(--acc);background:rgba(110,168,255,.06);}
+  #drop img{max-width:100%;max-height:320px;border-radius:8px;}
+  #out{flex:1 1 420px;min-width:340px;}
+  table{border-collapse:collapse;width:100%;margin:0 0 14px;}
+  caption{text-align:left;font-weight:620;padding:10px 0 6px;font-size:13px;color:var(--acc);}
+  th,td{border-bottom:1px solid var(--line);padding:5px 8px;text-align:left;vertical-align:top;}
+  th{color:var(--muted);font-weight:520;width:36%;}
+  td.v{font-variant-numeric:tabular-nums;}
+  .ok{color:var(--ok)} .warn{color:var(--warn)} .bad{color:var(--bad)} .mut{color:var(--muted)}
+  #note{margin:6px 22px 24px;color:var(--muted);font-size:12.5px;max-width:88ch;}
+  iframe{position:fixed;left:-9999px;width:1280px;height:860px;border:0;}
+  button{font:inherit;background:var(--panel);color:var(--text);border:1px solid var(--line);
+    border-radius:8px;padding:7px 14px;cursor:pointer;}
+  button:hover{border-color:var(--acc);}
+  #busy{color:var(--acc);padding:0 22px;}
+</style>
+</head>
+<body>
+<header>
+  <h1>손그림 검사지</h1>
+  <p>진짜 손그림 한 장을 넣으면 <b>판독 → 생성 → 치수·표 → 단면 → 도면 세트</b>까지 실제로 돌려 보고,
+     각 단계가 무엇을 읽었고 무엇을 만들었는지 숫자로 적어 줍니다.
+     그림은 브라우저 안에서만 열리며 어디에도 올라가지 않습니다.</p>
+</header>
+<main>
+  <label id="drop">
+    <input type="file" accept="image/*" hidden id="file">
+    <div id="ph">그림을 끌어다 놓거나 눌러서 고르세요<br><span class="mut">사진·스캔·아이패드 캡처 모두 됩니다</span></div>
+  </label>
+  <div id="out"><p class="mut">아직 넣은 그림이 없습니다.</p></div>
+</main>
+<div id="busy"></div>
+<p id="note">
+  ★이 검사지는 회귀 시험(tests.html)이 아닙니다. 회귀는 합성 그림으로 도는 것이고, 여기서는
+  <b>진짜 손그림</b>이 어디서 무너지는지 보기 위한 것입니다 — 값이 틀렸다고 빨간불이 뜨지 않습니다.
+  틀린 값을 눈으로 확인하고 무엇을 고칠지 정하는 데 씁니다.
+</p>
+<iframe id="app" src="index.html"></iframe>
+<script>
+const $ = (id) => document.getElementById(id);
+const out = $('out'), busy = $('busy');
+let AW = null;
+
+$('app').addEventListener('load', () => { setTimeout(() => { AW = $('app').contentWindow; }, 400); });
+
+const drop = $('drop'), file = $('file');
+drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('on'); });
+drop.addEventListener('dragleave', () => drop.classList.remove('on'));
+drop.addEventListener('drop', (e) => {
+  e.preventDefault(); drop.classList.remove('on');
+  const f = e.dataTransfer.files && e.dataTransfer.files[0];
+  if (f) load(f);
+});
+file.addEventListener('change', () => { if (file.files[0]) load(file.files[0]); });
+
+function load(f) {
+  const rd = new FileReader();
+  rd.onload = () => {
+    $('ph').innerHTML = '';
+    const im = new Image(); im.src = rd.result;
+    $('ph').appendChild(im);
+    run(rd.result, f.name);
+  };
+  rd.readAsDataURL(f);
+}
+
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+function table(title, rows) {
+  return '<table><caption>' + esc(title) + '</caption>'
+    + rows.map(r => '<tr><th>' + esc(r[0]) + '</th><td class="v ' + (r[2] || '') + '">'
+      + esc(r[1]) + '</td></tr>').join('') + '</table>';
+}
+
+async function run(dataUrl, name) {
+  if (!AW || !AW.PARTI_VISION) { out.innerHTML = '<p class="bad">앱이 아직 안 떴습니다 — 잠시 뒤 다시 넣어 주세요.</p>'; return; }
+  busy.textContent = '읽는 중…';
+  out.innerHTML = '';
+  const V = AW.PARTI_VISION, C = AW.__CADTEST__, A = AW.PARTI_ARCH;
+  const html = [];
+  try {
+    // ① 무슨 그림인가
+    const cls = await V.classifyImage(dataUrl);
+    html.push(table('① 그림 종류', [
+      ['파일', name],
+      ['판정', cls.kind === 'sketch' ? '손그림/스케치' : cls.kind === 'plan' ? '평면도' : cls.kind === 'photo' ? '사진' : cls.kind],
+      ['잉크 비율', (cls.inkRatio * 100).toFixed(1) + '%'],
+      ['흰 바탕 비율', (cls.whiteRatio * 100).toFixed(1) + '%'],
+    ]));
+    // ② 무엇을 읽었나
+    const cp = await V.traceConcept(dataUrl);
+    const wins = (cp.massList || []).reduce((a, m) => a + ((m.wins || []).length), 0);
+    const KIN = { fix: '붙박이', wswing: '여닫이', wslide: '미서기', hung: '오르내리',
+      shutter: '셔터', mesh: '방충', swing: '외여닫이', dswing: '쌍여닫이', fold: '접이' };
+    const kinds = {};
+    for (const m of (cp.massList || [])) for (const w of (m.wins || []))
+      kinds[w.kind] = (kinds[w.kind] || 0) + 1;
+    const mats = (cp.massList || []).filter(m => m.mat).map(m => m.mat + (m.matTex ? '(' + m.matTex + ')' : ''));
+    html.push(table('② 판독 — 그림에서 읽은 것', [
+      ['동 수', cp.masses + '동'],
+      ['층수', cp.floors + '층'],
+      ['지붕', cp.roof === 'gable' ? '박공' : '평지붕'],
+      ['배치', cp.arrange === 'arc' ? '부채꼴(앞마당)' : cp.arrange === 'circle' ? '마당 두르기' : '일렬'],
+      ['붙어 있나', cp.attached ? '연립(붙음)' : '떨어짐'],
+      ['기울기', (cp.lean * 57.3).toFixed(1) + '°'],
+      ['깊이 비율', String(cp.depthRatio || '-')],
+      ['유리(커튼월)', cp.glass ? '있음' : '없음'],
+      ['창', wins + '개' + (Object.keys(kinds).length
+        ? ' — ' + Object.keys(kinds).map(k => (KIN[k] || k) + ' ' + kinds[k]).join(' · ') : '')],
+      ['재료', mats.length ? mats.join(' · ') : '없음(색 안 칠함)'],
+      ['동 폭 비율', (cp.massList || []).map(m => (m.wFrac * 100).toFixed(0) + '%').join(' / ') || '-',
+        'mut'],
+      ['높이 비율', (cp.massList || []).map(m => (m.hFrac * 100).toFixed(0) + '%').join(' / ') || '-', 'mut'],
+    ]));
+    // ③ 한 문장으로 전부 — 실제로 돌린다
+    busy.textContent = '세우는 중…';
+    const n0 = C.state.entities.length;
+    const AI = AW.__WEBCAD_AI_TEST__ || AW.PARTI_AI;
+    const rep = AI && (AI.localReply || AI.reply);
+    let reply = '(코워커 훅 없음)';
+    if (rep) reply = await rep('이 이미지로 A2 도면 세트로 나눠서 만들어줘', [{ dataUrl }]);
+    // ★세트를 만들고 나면 지금 탭은 '시트'다 — 거기서 재면 실도 면적도 0 으로 나온다.
+    //   도면틀이 없는 첫 문서(작업 도면)로 돌아가서 잰다.
+    for (let i = 0; i < C.docCount(); i++) {
+      C.switchDoc(i, true);
+      if (!C.state.entities.some(e => e.layer === '도면틀')
+        && C.state.entities.some(e => e.bim && e.bim.kind === 'wall')) break;
+    }
+    const es = C.state.entities;
+    const kn = (k) => es.filter(e => e.bim && e.bim.kind === k);
+    const d = C.areaData();
+    html.push(table('③ 생성 — 실제로 만들어진 것', [
+      ['도형', es.length + '개'],
+      ['외피 벽 / 내벽', kn('wall').filter(e => e.bim.t !== 100).length + ' / ' + kn('wall').filter(e => e.bim.t === 100).length + '매'],
+      ['실', kn('room').length + '개'],
+      ['창 / 문', kn('opening').filter(e => e.bim.ot === 'window').length + ' / '
+        + kn('opening').filter(e => e.bim.ot === 'door').length + '개'],
+      ['계단 / 발코니', kn('stair').length + ' / ' + es.filter(e => e.layer === '발코니' && e.bim && e.bim.kind === 'slab').length + '개'],
+      ['건축면적', d.foot.toFixed(1) + '㎡'],
+      ['연면적', d.gross.toFixed(1) + '㎡'],
+      ['용도별', (d.byUse || []).map(u => u[0] + ' ' + u[1].toFixed(0)).join(' · ') || '-'],
+      ['최고 높이', (d.height / 1000).toFixed(1) + 'm'],
+    ]));
+    // ④ 도면 세트
+    const nos = (String(reply).match(/A-\d{3}/g) || []);
+    html.push(table('④ 도면 — 코워커가 낸 답', [
+      ['도면 세트', nos.length ? nos.join(' · ') : '(안 만들어짐)', nos.length ? 'ok' : 'bad'],
+      ['문서 탭', C.docCount() + '개'],
+      ['답', String(reply).replace(/\s+/g, ' ').slice(0, 400)],
+    ]));
+    html.push('<button id="go">앱을 열어 눈으로 확인</button>');
+    out.innerHTML = html.join('');
+    $('go').addEventListener('click', () => {
+      const w = window.open('index.html', '_blank');
+      if (!w) alert('팝업이 막혔습니다 — index.html 을 직접 열어 주세요.');
+    });
+  } catch (e) {
+    out.innerHTML = html.join('') + '<p class="bad">멈춤: ' + esc(e && e.message || e) + '</p>';
+  }
+  busy.textContent = '';
+}
+</script>
+</body>
+</html>
