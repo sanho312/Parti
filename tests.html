@@ -4590,6 +4590,14 @@ function tests(){
               ok(!/도면 일습/.test(r),
                 '★일습을 요청하지 않으면 하지 않는다 (매번 무겁게 돌지 않는다)');
               C.state.entities.length = b3;
+              // ★용지·PDF 도 문장에서 읽는다 — "A3 로", "PDF 로 뽑아줘"
+              return LR('이 이미지로 A3 도면 한 장 PDF로 뽑아줘', [{ dataUrl: mkSketch() }]);
+            })
+            .then(r => {
+              ok(/A3/.test(r), '★문장에서 용지를 읽는다 (A3)');
+              ok(/PDF/.test(r), '★문장에서 PDF 요청을 읽어 내보내기까지 끝낸다');
+              ok(/1:1 인쇄/.test(r), '  인쇄 축척이 도면과 맞는다는 것을 밝힌다');
+              C.state.entities.length = b3;
             })
             // ★사용자 실패 시나리오: 스케치 1장 + 자연어 한 문장만으로 실제 생성되어야 한다
             .then(() => LR('이 이미지를 기반으로 건물의 도면과 모델링을 생성해줘.', [{ dataUrl: mkSketch() }]))

@@ -1186,12 +1186,17 @@
         run(() => br.cmdOwSchedule && br.cmdOwSchedule(''), '창호일람표');
         run(() => br.cmdAreaTable && br.cmdAreaTable(''), '면적표');
         run(() => br.cmdAutoSection && br.cmdAutoSection(''), '단면·입면');
+        // 용지·PDF 는 문장에서 읽는다 — "A3 로", "PDF 로 뽑아줘"
+        const paper = ((t.match(/(?:^|[^A-Za-z0-9])(A[0-4])(?![0-9])/i) || [])[1] || '');
+        const wantPdf = /pdf|피디에프|인쇄|출력|뽑아/i.test(t);
+        const sArg = [paper.toUpperCase(), wantPdf ? 'pdf' : ''].filter(Boolean).join(' ');
         let sheet = null;
-        try { sheet = br.cmdSheet && br.cmdSheet(''); if (sheet) steps.push('도면 한 장'); }
+        try { sheet = br.cmdSheet && br.cmdSheet(sArg); if (sheet) steps.push(wantPdf ? '도면 한 장 + PDF' : '도면 한 장'); }
         catch (e) { steps.push('도면 한 장(실패)'); }
         if (steps.length) {
           lines.push('· 도면 일습 → ' + steps.join(' → ')
-            + (sheet ? `  (${sheet.size} · 축척 1:${sheet.denom} · 뷰 ${sheet.views.length}개 — 지금 그 탭입니다)` : ''));
+            + (sheet ? `  (${sheet.size} · 축척 1:${sheet.denom} · 뷰 ${sheet.views.length}개`
+              + (wantPdf ? ' · PDF 내려받음 — 1:1 인쇄하면 도면의 축척이 실제로 맞습니다' : ' — 지금 그 탭입니다') + ')' : ''));
         }
       }
       let builtFromPlan = null;
