@@ -4148,7 +4148,8 @@ function renderScene(isActive) {
         if (!v3.srfHi.has(s.eid)) continue;
         const zt = s.zt || s.poly.map(() => s.z1);
         const zb = s.zb || s.poly.map(() => s.z0);
-        const top = s.poly.map((p, i) => proj3D(p[0], p[1], zt[i]));
+        const Qh = (s.ptop && s.ptop.length === s.poly.length) ? s.ptop : s.poly;
+        const top = Qh.map((p, i) => proj3D(p[0], p[1], zt[i]));
         const bot = s.poly.map((p, i) => proj3D(p[0], p[1], zb[i]));
         // 강조 대상: 원기둥 옆면=클릭 변 사각, 아랫면 모드=아랫면, 기본=윗면
         const hi = (sd && sd.i != null && sd.i < s.poly.length) ? [bot[sd.i], bot[sd.j], top[sd.j], top[sd.i]] : (fb ? bot : top);
@@ -5286,11 +5287,13 @@ function snap3D(px, py, w, exclude) {
     for (const s of (v3.solids || [])) {
       if (exclude && exclude.has(s.eid)) continue; // 돌출 중인 대상의 솔리드 제외(자기 top에 흡착 방지)
       const zt = s.zt || s.poly.map(() => s.z1);
+      const Qs = (s.ptop && s.ptop.length === s.poly.length) ? s.ptop : s.poly;
       for (let i = 0; i < s.poly.length; i++) {
-        for (const zz of [s.z0, zt[i]]) {
-          const sp = proj3D(s.poly[i][0], s.poly[i][1], zz);
+        // 기울어진 매스는 윗 꼭짓점이 바닥과 다른 자리에 있다 — 각자 제 좌표로 흡착
+        for (const [PP, zz] of [[s.poly[i], s.z0], [Qs[i], zt[i]]]) {
+          const sp = proj3D(PP[0], PP[1], zz);
           const d = Math.hypot(sp[0] - px, sp[1] - py);
-          if (d < bestD) { bestD = d; best = { x: s.poly[i][0], y: s.poly[i][1], z: zz, kind: 'endpoint' }; }
+          if (d < bestD) { bestD = d; best = { x: PP[0], y: PP[1], z: zz, kind: 'endpoint' }; }
         }
       }
     }
@@ -5554,21 +5557,40 @@ function genSectionView(p1, u, nrm, lineLen, depth, isElev) {
     zmin = Math.min(zmin, s.z0); zmax = Math.max(zmax, sZ1);
     if (!isElev && dmin < -1e-6 && dmax > 1e-6) {
       // 절단됨: 선과 풋프린트의 교차 구간 → 사각형
+      // ★기울어진 매스(ptop)는 높이에 따라 단면 위치가 달라진다 — 바닥만 잘라 수직으로
+      //   세우면 3D 와 어긋난다. 윗면 다각형도 같이 잘라 상·하단 구간을 각각 쓴다.
+      //   (전단은 z 에 대해 선형이므로 두 구간을 이으면 정확한 단면이 된다)
+      const topClip = s.ptop ? lineClipPoly(p1, u, s.ptop) : null;
       for (const [s0, s1] of lineClipPoly(p1, u, s.poly)) {
         const hp = s.glass ? null : secHatchFor(s.eid); // ★새 탭 전환 전에 결정 — 이후엔 state 가 새 문서다
+        let tS0 = null, tS1 = null;
+        if (topClip && topClip.length) {                 // 같은 절단선의 윗면 구간(가장 가까운 것)
+          let best = topClip[0], bd = Infinity;
+          for (const iv of topClip) {
+            const d2 = Math.abs((iv[0] + iv[1]) / 2 - (s0 + s1) / 2);
+            if (d2 < bd) { bd = d2; best = iv; }
+          }
+          tS0 = best[0]; tS1 = best[1];
+        }
         if (s.zt) {
           // 경사 상단: 절단선 위 두 점의 상단 높이 → 사다리꼴
           const A = { x: p1.x + u.x * s0, y: p1.y + u.y * s0 }, B = { x: p1.x + u.x * s1, y: p1.y + u.y * s1 };
-          cuts.push({ s0, s1, z0: s.z0, z1: null, zA: solidTopZ(s, A.x, A.y), zB: solidTopZ(s, B.x, B.y), glass: s.glass, hp });
-        } else cuts.push({ s0, s1, z0: s.z0, z1: s.z1, glass: s.glass, hp });
-        smin = Math.min(smin, s0); smax = Math.max(smax, s1);
+          cuts.push({ s0, s1, z0: s.z0, z1: null, zA: solidTopZ(s, A.x, A.y), zB: solidTopZ(s, B.x, B.y), glass: s.glass, hp, tS0, tS1 });
+        } else cuts.push({ s0, s1, z0: s.z0, z1: s.z1, glass: s.glass, hp, tS0, tS1 });
+        smin = Math.min(smin, Math.min(s0, tS0 == null ? s0 : tS0));
+        smax = Math.max(smax, Math.max(s1, tS1 == null ? s1 : tS1));
       }
     } else if (dmin > 1e-6 && dmin <= depth) {
       // 앞쪽(바라보는 방향)에 있음 → 투영
-      const ps0 = Math.min(...svals), ps1 = Math.max(...svals);
+      // 투영 폭도 바닥·윗면을 모두 감싸야 한다 (기울어진 매스는 윗면이 옆으로 나간다)
+      const sAll = s.ptop
+        ? svals.concat(s.ptop.map(v => (v[0] - p1.x) * u.x + (v[1] - p1.y) * u.y)) : svals;
+      const ps0 = Math.min.apply(null, sAll), ps1 = Math.max.apply(null, sAll);
       if (s.zt) {
         // 경사 지붕 프로파일: 꼭짓점 (s, zt) 상부 외곽선
-        const vps = s.poly.map((v, i) => [svals[i], s.zt[i]]).sort((a, b) => a[0] - b[0]);
+        // ★윗면이 밀린 매스는 상단 꼭짓점의 s 도 밀린 자리에서 재야 입면이 3D 와 맞는다
+        const sTop = s.ptop ? s.ptop.map(v => (v[0] - p1.x) * u.x + (v[1] - p1.y) * u.y) : svals;
+        const vps = s.poly.map((v, i) => [sTop[i], s.zt[i]]).sort((a, b) => a[0] - b[0]);
         const env = []; // s별 최대 z (상부 포락선)
         for (const [sv, zv] of vps) {
           const last = env[env.length - 1];
@@ -5673,9 +5695,11 @@ function genSectionView(p1, u, nrm, lineLen, depth, isElev) {
   }
   // 절단(외곽 + 해치)
   for (const c of cuts) {
+    // 상단 구간(tS0/tS1)이 따로 있으면 기울어진 매스 — 윗변을 그 자리에 놓는다
+    const uS0 = (c.tS0 == null) ? c.s0 : c.tS0, uS1 = (c.tS1 == null) ? c.s1 : c.tS1;
     const pts = c.z1 == null
-      ? [[c.s0, c.z0], [c.s1, c.z0], [c.s1, c.zB], [c.s0, c.zA]]
-      : [[c.s0, c.z0], [c.s1, c.z0], [c.s1, c.z1], [c.s0, c.z1]];
+      ? [[c.s0, c.z0], [c.s1, c.z0], [uS1, c.zB], [uS0, c.zA]]
+      : [[c.s0, c.z0], [c.s1, c.z0], [uS1, c.z1], [uS0, c.z1]];
     addEntity({ type: 'LWPOLYLINE', layer: '절단', closed: true, points: pts, lineweight: 50 });
     if (!c.glass && c.hp) { // 재료표시: 레이어/재질에서 결정된 패턴 + 재료에 맞는 간격
       const w2 = c.s1 - c.s0;
@@ -7906,14 +7930,15 @@ function shadowOccluders() {
     const P = s.poly, n = P.length; if (!P || n < 3) continue;
     col = rgbTriplet(s.color || '#b9b2a6');
     const zt = s.zt || P.map(() => s.z1), zb = s.zb || P.map(() => s.z0);
+    const Q = (s.ptop && s.ptop.length === n) ? s.ptop : P;   // 어긋난 윗면
     for (let i = 1; i < n - 1; i++) { // 윗면·바닥면
-      push([P[0][0], P[0][1], zt[0]], [P[i][0], P[i][1], zt[i]], [P[i + 1][0], P[i + 1][1], zt[i + 1]]);
+      push([Q[0][0], Q[0][1], zt[0]], [Q[i][0], Q[i][1], zt[i]], [Q[i + 1][0], Q[i + 1][1], zt[i + 1]]);
       push([P[0][0], P[0][1], zb[0]], [P[i][0], P[i][1], zb[i]], [P[i + 1][0], P[i + 1][1], zb[i + 1]]);
     }
     for (let i = 0; i < n; i++) { // 옆면
       const j = (i + 1) % n;
       const a = [P[i][0], P[i][1], zb[i]], b = [P[j][0], P[j][1], zb[j]];
-      const c = [P[j][0], P[j][1], zt[j]], d = [P[i][0], P[i][1], zt[i]];
+      const c = [Q[j][0], Q[j][1], zt[j]], d = [Q[i][0], Q[i][1], zt[i]];
       push(a, b, c); push(a, c, d);
     }
   }
@@ -9661,11 +9686,12 @@ function rviewBuildScene(T) {
     for (const s of (v3.solids || [])) {
       const P = s.poly; if (!P || P.length < 3) continue;
       const zt = s.zt || P.map(() => s.z1), zb = s.zb || P.map(() => s.z0);
+      const Q = (s.ptop && s.ptop.length === P.length) ? s.ptop : P;
       for (let i = 0; i < P.length; i++) {
         const j = (i + 1) % P.length;
-        seg(P[i][0], P[i][1], zt[i], P[j][0], P[j][1], zt[j]);   // 윗면 링
+        seg(Q[i][0], Q[i][1], zt[i], Q[j][0], Q[j][1], zt[j]);   // 윗면 링
         seg(P[i][0], P[i][1], zb[i], P[j][0], P[j][1], zb[j]);   // 아랫면 링
-        seg(P[i][0], P[i][1], zb[i], P[i][0], P[i][1], zt[i]);   // 수직 모서리
+        seg(P[i][0], P[i][1], zb[i], Q[i][0], Q[i][1], zt[i]);   // 모서리(기울면 사선)
       }
     }
     for (const e of state.entities) {

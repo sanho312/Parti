@@ -3160,6 +3160,26 @@ function tests(){
         const oSol = solW.filter(s0 => oIds.has(s0.eid));
         ok(oSol.length > 0 && oSol.every(s0 => s0.ptop), '★개구부(커튼월)도 같은 기울기 면 위에 (' + oSol.length + ')');
         C.state.entities.length = bWl;
+        // ★단면도 기울기를 따라간다 — 바닥만 잘라 수직으로 세우면 3D 와 어긋난다
+        {
+          const keep = C.state.entities.slice();
+          C.reset();
+          A0.buildShape({ shape: 'box', w: 10000, d: 8000, h: 6000, ox: 0, oy: 0 });
+          const mE = C.state.entities.filter(x0 => x0.bim && x0.bim.kind === 'mass');
+          if (mE[0]) mE[0].bim.shear = [3000, 0];
+          C.genSectionView({ x: -20000, y: 0 }, { x: 1, y: 0 }, { x: 0, y: 1 }, 40000, 20000, false);
+          const cutP = C.state.entities.filter(x0 => x0.layer === '절단' && x0.type === 'LWPOLYLINE');
+          ok(cutP.length === 1, '★기울어진 매스도 단면이 하나 나온다');
+          if (cutP.length) {
+            const P9 = cutP[0].points.map(p9 => [Math.round(p9[0]), Math.round(p9[1])]);
+            const bot = P9.filter(p9 => p9[1] < 100).map(p9 => p9[0]).sort((a9, b9) => a9 - b9);
+            const top = P9.filter(p9 => p9[1] > 5900).map(p9 => p9[0]).sort((a9, b9) => a9 - b9);
+            ok(top.length === 2 && bot.length === 2 && Math.abs((top[0] - bot[0]) - 3000) < 60,
+              '★단면 윗변이 전단량만큼 밀린다 (' + (top.length === 2 && bot.length === 2 ? (top[0] - bot[0]) : '?') + 'mm)');
+          }
+          C.reset();
+          C.state.entities.push.apply(C.state.entities, keep);
+        }
         // 기울기 0 이면 벽도 예전 그대로
         const bWl0 = C.state.entities.length;
         A0.buildComplex({ count: 5, floors: 1, w: 8000, d: 12000, roof: 'gable', arrange: 'arc', attached: true, lean: 0 });
