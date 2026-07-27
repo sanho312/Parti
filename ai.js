@@ -1066,7 +1066,7 @@
       const forcePlan = /평면도|도면 (그대로|따라)|트레이스/.test(t);
       const fh = numOf(t, /층고\s*(\d{3,5})/) || 3000;
       const exp = parseComplexSpec(t);        // 문장의 명시 지시 — 자동 판독보다 우선한다
-      const lines = []; let planN = 0, massN = 0, cpxN = 0, cursorX = 0;
+      const lines = []; let planN = 0, massN = 0, cpxN = 0, cursorX = 0, nearPlanSaid = false;
       const allStrokes = [];
       for (const img of imgs) {
         const cls = await V.classifyImage(img.dataUrl);
@@ -1079,13 +1079,25 @@
         const orthoish = (cls.diagRatio || 0) < 0.35;
         if (!forceMass) {
           const r = await V.traceImage(img.dataUrl, { widthMM: wmm });
-          const isPlan = forcePlan || (r.strokes.length && cls.chromaRatio < 0.05 && orthoish
-            && r.meta.coverage >= 0.5 && r.meta.paired >= 2);
+          const vd = planVerdict(r, cls, forcePlan);
+          const isPlan = vd.isPlan;
           if (isPlan) {
             for (const s of r.strokes) { for (const p of s.pts) p[0] += cursorX; allStrokes.push(s); }
             cursorX += r.meta.widthMM + 4000; planN++;
             lines.push(`· 도면 → 벽 ${r.meta.walls} · 참고선 ${r.meta.guides} · 문 후보 ${r.meta.doors} (가로 ${(r.meta.widthMM / 1000).toFixed(1)}m 가정)`);
             continue;
+          }
+          // ★도면인데 관문에 걸린 경우를 조용히 넘기지 않는다.
+          //   실제 1:50 평면도(가구·해칭·표제란·색 채움이 있는)를 넣어 보니 이중선 쌍은 53개나
+          //   찾았는데 '잉크 설명률'이 0.43 이라 도면으로 채택되지 않고 매싱으로 갔다
+          //   ("1동 박공"으로 읽혔다). 임계를 낮추면 UI 목업 같은 직교 그림까지 도면이 되므로
+          //   자동 채택은 그대로 두고, 대신 '왜 안 됐는지'와 '어떻게 강제하는지'를 알려 준다.
+          if (vd.nearPlan && !nearPlanSaid) {
+            nearPlanSaid = true;
+            lines.push('· ⚠ 도면일 수 있습니다 — 이중선 쌍 ' + r.meta.paired + '개를 찾았지만'
+              + ' 잉크 설명률 ' + r.meta.coverage + (cls.chromaRatio >= 0.05 ? ' · 채색 ' + cls.chromaRatio : '')
+              + ' 라서 도면으로 자동 채택하지 않았습니다.'
+              + ' 도면 그대로 읽으려면 **"도면 그대로"** 라고 덧붙여 주세요.');
           }
         }
         // 도면이 아니다 → 정면 사진처럼 창 격자가 또렷하면 파사드 매싱.
@@ -1322,7 +1334,23 @@
   else init();
 
   // 테스트 훅
-  window.__WEBCAD_AI_TEST__ = { execTool, send, attachImage, localReply, parseComplexSpec,
+  // ── 도면 채택 판정 ──
+  // 실물 이미지를 시험에 넣어둘 수 없으므로(사용자 개인 파일) 판정식을 함수로 떼어
+  // '실제 도면에서 잰 숫자'로 회귀를 건다. 실측(1:50 평면도, 가구·해칭·표제란·색 채움):
+  //   쌍 53 · 설명률 0.425 · 사선 0.298 · 채색 0.054 → 자동 채택은 안 되지만 경고는 떠야 한다.
+  // ※임계를 낮춰 자동 채택하게 만들지 않은 이유: 같은 조건(직교 + 쌍 다수)을 UI 목업 같은
+  //   그림도 만족한다(실측: 쌍 113). 잘못 채택하면 손그림이 벽 52개가 되던 사고의 재판이다.
+  function planVerdict(r, cls, forcePlan) {
+    const ortho = (cls.diagRatio || 0) < 0.35;
+    const has = !!(r && r.strokes && r.strokes.length && r.meta);
+    const isPlan = !!forcePlan || (has && cls.chromaRatio < 0.05 && ortho
+      && r.meta.coverage >= 0.5 && r.meta.paired >= 2);
+    // 채택은 못 해도 '도면일 수 있다'는 신호 — 이중선 쌍이 넉넉하고 직교면 알려 준다.
+    const nearPlan = !isPlan && has && ortho && r.meta.paired >= 8;
+    return { isPlan, nearPlan, ortho };
+  }
+
+  window.__WEBCAD_AI_TEST__ = { execTool, send, attachImage, localReply, parseComplexSpec, planVerdict,
     get history() { return history; }, get cfg() { return cfg; },
     get lastImg() { return lastImg; }, setLastImg: (v) => { lastImg = v; },
     get pendingImgs() { return pendingImgs; },

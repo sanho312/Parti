@@ -3800,6 +3800,27 @@ function tests(){
           const H = AW.__WEBCAD_AI_TEST__;
           if (!H || !H.localReply) { ok(true, '(로컬 봇 훅 없음)'); return null; }
           const LR = H.localReply, SKl = AW.WEBCAD_SKETCH;
+          // ── ★도면 채택 판정 — 실제 도면에서 잰 숫자로 고정 ──
+          // 실물 이미지는 사용자 개인 파일이라 시험에 넣어둘 수 없다. 대신 실측값을 남긴다.
+          // 실측 ①: 1:50 평면도(가구·바닥 해칭·표제란·주방 색 채움) — 이중선 쌍을 53개나
+          //   찾았는데 설명률 0.425 · 채색 0.054 라 자동 채택이 안 되고 매싱으로 갔다
+          //   ("1동 박공"으로 읽혔다). 임계를 낮춰 채택시키면 안 된다 — 실측 ②의 UI 목업이
+          //   같은 조건(직교·쌍 113)을 만족해 손그림이 벽 52개가 되던 사고가 재발한다.
+          //   그래서 자동 채택은 그대로 두고 '왜 안 됐는지'를 알려 주는 경고만 낸다.
+          if (H.planVerdict) {
+            const PV = H.planVerdict;
+            const real = PV({ strokes: [1], meta: { coverage: 0.425, paired: 53 } }, { diagRatio: 0.298, chromaRatio: 0.054 });
+            ok(!real.isPlan, '★실측 1:50 평면도 — 설명률 0.425·채색 0.054 라 자동 채택은 안 된다');
+            ok(real.nearPlan, '★  대신 "도면일 수 있습니다" 경고가 뜬다 (조용히 매싱으로 넘기지 않는다)');
+            const ui = PV({ strokes: [1], meta: { coverage: 0.445, paired: 113 } }, { diagRatio: 0.201, chromaRatio: 0 });
+            ok(!ui.isPlan, '  실측 UI 목업(쌍 113)도 도면으로 채택되지 않는다 — 임계를 못 낮추는 이유');
+            const good = PV({ strokes: [1], meta: { coverage: 0.85, paired: 26 } }, { diagRatio: 0.14, chromaRatio: 0.02 });
+            ok(good.isPlan && !good.nearPlan, '  증거가 충분한 도면은 그대로 채택 (경고 없음)');
+            const sk = PV({ strokes: [1], meta: { coverage: 0.35, paired: 41 } }, { diagRatio: 0.525, chromaRatio: 0.183 });
+            ok(!sk.isPlan && !sk.nearPlan, '★사선이 지배적인 손그림은 경고도 내지 않는다 (헛경고 방지)');
+            ok(PV({ strokes: [], meta: { coverage: 0, paired: 0 } }, { diagRatio: 0.9, chromaRatio: 0.5 }, true).isPlan,
+              '  "도면 그대로" 라고 하면 강제 채택');
+          }
           const b3 = C.state.entities.length;
           return LR('10평 원룸 그려줘')
             .then(r => { ok(/원룸 평면을 만들었습니다/.test(r), '★로컬 봇 — "10평 원룸 그려줘" → 평면 생성'); return LR('벽 높이 2700'); })
