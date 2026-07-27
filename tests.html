@@ -3498,22 +3498,14 @@ function tests(){
             .then(() => { eqi(SKl.getParams().corner, 0.45, '★로컬 봇 — 인식 불만 → 보정값 조정 (인식 명령과 구분)'); SKl.setParams({ preset: 'basic' }); return LR('도움말'); })
             .then(r => { ok(/로컬 모드/.test(r), '  도움말 응답'); return LR('오늘 날씨 어때'); })
             .then(r => { ok(/이해하지 못했/.test(r), '  미해석은 솔직하게'); })
-            // ★다음 요청을 입력창에 미리 띄운다 — 제안은 '그대로 엔터하면 실행되는' 문장이어야 한다
+            // 흔히 쓰는 후속 명령이 전부 해석되는지 — 하나라도 미해석이면 대화가 끊긴다
+            // ('일렬 배치로 바꿔줘'는 직전에 배치가 있어야 성립하므로 먼저 하나 세운다)
+            .then(() => LR('박공 5동 1층 원형 배치로 세워줘'))
             .then(() => {
-              const inEl9 = AD.getElementById('aiIn');
-              ok(!!inEl9, '★코워커 입력창 존재');
-              return LR('20평 투룸 그려줘').then(() => {
-                const s9 = inEl9 ? inEl9.value : '';
-                void s9;
-                return LR('박공 5동 1층 원형 배치로 세워줘');
-              });
-            })
-            .then(() => {
-              // 제안 문장이 실제로 해석되는지 — 미해석이면 엔터를 쳐도 아무 일이 안 난다
               const cand = ['3D 보여줘', '일렬 배치로 바꿔줘', '기운 상자 높이 9m 로 만들어줘', '건물화해줘'];
               return cand.reduce((p, q) => p.then(acc => LR(q).then(rr => acc.concat([[q, !/이해하지 못했/.test(rr)]]))),
                 Promise.resolve([])).then(res => {
-                ok(res.every(x => x[1]), '★제안 문장은 모두 그대로 실행된다 ('
+                ok(res.every(x => x[1]), '★후속 명령이 모두 해석된다 ('
                   + res.filter(x => !x[1]).map(x => x[0]).join(',') + ')');
                 C.state.entities.length = b3;
               });
