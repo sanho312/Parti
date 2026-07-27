@@ -4027,6 +4027,46 @@ function tests(){
                 ok(tminx > mxx, '★표가 모델을 덮지 않는다 (오른쪽 여백에)');
                 C.state.entities.length = bS;
               }).then(() => {
+                // ── ★건축개요 · 면적표 ──
+                // 실을 '면적을 가진 객체'(bim.kind==='room')로 남겼기에 층별·실별 면적이
+                // 데이터에서 바로 나온다. ★대지면적은 도면에 없으므로 건폐율·용적률은
+                // 사용자가 줄 때만 계산한다 — 모르는 값을 채우면 인허가 서류가 거짓이 된다.
+                const bA = C.state.entities.length;
+                A.buildComplex({ count: 3, floors: 2, w: 9000, d: 11000, roof: 'gable',
+                  arrange: 'arc', attached: true, glass: false, lean: 0 });
+                const rmEnt = C.state.entities.slice(bA).filter(e0 => e0.bim && e0.bim.kind === 'room');
+                ok(rmEnt.length >= 12, '★실이 면적을 가진 객체로 남는다 (' + rmEnt.length + '개)');
+                ok(rmEnt.every(e0 => e0.bim.areaM2 > 0 && e0.bim.floor >= 1),
+                  '  실마다 면적·층 정보');
+                const ad = C.areaData();
+                eqi(ad.bays, 3, '★건축개요 — 동 수');
+                eqi(ad.floors, 2, '  지상 층수');
+                ok(ad.foot > 100 && ad.gross > ad.foot, '★건축면적 ' + ad.foot + '㎡ · 연면적 ' + ad.gross + '㎡');
+                ok(Math.abs(ad.gross - ad.foot * 2) / ad.gross < 0.05,
+                  '  2층이면 연면적이 건축면적의 약 2배');
+                ok(ad.height > 3000, '  최고 높이 ' + ad.height + 'mm');
+                const noSite = C.areaRows(0), withSite = C.areaRows(1200);
+                ok(!noSite.some(r0 => r0[1] === '건폐율'),
+                  '★대지면적을 안 주면 건폐율·용적률을 내지 않는다 (모르는 값을 채우지 않는다)');
+                ok(withSite.some(r0 => r0[1] === '건폐율') && withSite.some(r0 => r0[1] === '용적률'),
+                  '  대지면적을 주면 계산한다');
+                const acsv = C.areaCSV(withSite);
+                ok(acsv.charCodeAt(0) === 0xFEFF, '  CSV 에 BOM');
+                ok(/인허가용 면적 산정/.test(acsv), '★CSV 에 "인허가 산정을 대체하지 않는다" 고지');
+                // 표를 그리면 창호일람표 아래로 이어 놓는다 (서로 덮지 않게)
+                const b2A = C.state.entities.length;
+                C.owSchedDraw(C.owSchedRows());
+                const t1 = C.state.entities.slice(b2A).filter(e0 => e0.layer === '일람표');
+                const b3A = C.state.entities.length;
+                C.drawTable('건축개요 · 면적표', ['구분', '내용', '값', '단위'], withSite);
+                const t2 = C.state.entities.slice(b3A).filter(e0 => e0.layer === '일람표');
+                const lowOf = (arr) => Math.min.apply(null, arr.map(e0 =>
+                  e0.type === 'LINE' ? Math.min(e0.y1, e0.y2) : (e0.y || 0)));
+                const highOf = (arr) => Math.max.apply(null, arr.map(e0 =>
+                  e0.type === 'LINE' ? Math.max(e0.y1, e0.y2) : (e0.y || 0)));
+                ok(highOf(t2) < lowOf(t1), '★표가 여러 개면 아래로 이어 놓는다 (서로 덮지 않는다)');
+                C.state.entities.length = bA;
+              }).then(() => {
                 // ── ★내부 실 구획 ──
                 // 결과물이 외피뿐이라 안이 통째로 비어 있었다. 부채꼴 쐐기는 (각도, 반지름)
                 // 공간에서 직사각형이므로, 이미 검증된 재귀 이분할기 slice() 를 그 공간에서

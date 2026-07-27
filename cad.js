@@ -2823,44 +2823,140 @@ function owSchedCSV(rows) {
   if (guess) out += '\n# 개폐방식이 "추정"인 행이 ' + guess + '건 있습니다 — 그림에 표시가 없어 기본값으로 넣은 값입니다.\n';
   return out;
 }
-// 도면 위에 표를 그린다 — 모델 오른쪽 여백에. 실제 엔티티라 DXF·PDF 로도 함께 나간다.
-function owSchedDraw(rows) {
-  ensureLayer('일람표', '#cfd3da');
-  const TH = 300, RH = 700, PAD = 220;                     // 글자 · 행 높이 · 셀 여백
-  const cells = [OWSCHED_COLS].concat(rows.map(owSchedCells));
-  const cw = OWSCHED_COLS.map((_, c) =>
-    Math.max.apply(null, cells.map(rw => (rw[c] || '').length)) * TH * 0.62 + PAD * 2);
-  const W = cw.reduce((a, v) => a + v, 0), H = RH * cells.length;
-  // 모델 오른쪽에 놓는다
-  let mx = 0, my = 0, any = false;
+// 모델 오른쪽 여백의 표 자리 — 이미 그려둔 표가 있으면 그 아래로 이어 놓는다
+function tableAnchor() {
+  let mx = 0, my = 0, any = false, low = null;
   for (const e of state.entities) {
     const xs = e.type === 'LINE' ? [e.x1, e.x2] : e.points ? e.points.map(p => p[0]) : [e.x || 0];
     const ys = e.type === 'LINE' ? [e.y1, e.y2] : e.points ? e.points.map(p => p[1]) : [e.y || 0];
+    if (e.layer === '일람표') { for (const v of ys) low = (low == null || v < low) ? v : low; continue; }
     for (const v of xs) { if (!any || v > mx) mx = v; }
     for (const v of ys) { if (!any || v > my) my = v; any = true; }
   }
-  const X0 = (any ? mx : 0) + 4000, Y1 = (any ? my : 0);
+  return { X0: (any ? mx : 0) + 4000, Y1: low != null ? low - 2000 : (any ? my : 0) };
+}
+// 도면 위에 표를 그린다 — 실제 엔티티라 DXF·PDF 로도 함께 나간다.
+// ★창호일람표와 면적표가 같은 코드를 쓴다 — 표 모양이 어긋나면 도면이 지저분해진다.
+function drawTable(title, cols, rows) {
+  ensureLayer('일람표', '#cfd3da');
+  const TH = 300, RH = 700, PAD = 220;                     // 글자 · 행 높이 · 셀 여백
+  const cells = [cols].concat(rows);
+  const cw = cols.map((_, c) =>
+    Math.max.apply(null, cells.map(rw => String(rw[c] == null ? '' : rw[c]).length)) * TH * 0.62 + PAD * 2);
+  const W = cw.reduce((a, v) => a + v, 0), H = RH * cells.length;
+  const { X0, Y1 } = tableAnchor();
   const ln = (x1, y1, x2, y2) => addEntity({ type: 'LINE', layer: '일람표',
     x1: Math.round(x1), y1: Math.round(y1), x2: Math.round(x2), y2: Math.round(y2) });
-  // 격자
   let y = Y1;
   for (let r = 0; r <= cells.length; r++) { ln(X0, y, X0 + W, y); y -= RH; }
   let x = X0;
   for (let c = 0; c <= cw.length; c++) { ln(x, Y1, x, Y1 - H); x += cw[c] || 0; }
-  // 글자
   cells.forEach((rw, r) => {
     let cx = X0;
     rw.forEach((txt, c) => {
-      if (txt) addEntity({ type: 'TEXT', layer: '일람표',
+      if (txt != null && txt !== '') addEntity({ type: 'TEXT', layer: '일람표',
         x: Math.round(cx + PAD), y: Math.round(Y1 - RH * r - RH * 0.68),
         height: TH, text: String(txt), rotation: 0 });
       cx += cw[c];
     });
   });
   addEntity({ type: 'TEXT', layer: '일람표', x: Math.round(X0), y: Math.round(Y1 + RH * 0.5),
-    height: TH * 1.3, text: '창호일람표', rotation: 0 });
+    height: TH * 1.3, text: title, rotation: 0 });
   return { X0, Y1, W, H, n: cells.length };
 }
+function owSchedDraw(rows) {
+  return drawTable('창호일람표', OWSCHED_COLS, rows.map(owSchedCells));
+}
+// ── 건축개요 · 면적표 ──
+// ★모델에서 '잴 수 있는 것'만 낸다. 대지면적은 도면에 없으므로 건폐율·용적률은
+//   사용자가 대지면적을 줄 때만 계산한다. 모르는 값을 채워 넣으면 인허가 서류가 거짓이 된다.
+function polyAreaM2(pts) {
+  if (!pts || pts.length < 3) return 0;
+  let a = 0;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++)
+    a += pts[j][0] * pts[i][1] - pts[i][0] * pts[j][1];
+  return Math.abs(a) / 2 / 1e6;
+}
+function areaData() {
+  const rooms = state.entities.filter(e => e.bim && e.bim.kind === 'room');
+  const slabs = state.entities.filter(e => e.bim && e.bim.kind === 'slab'
+    && e.bim.t === 150 && (e.bim.top || 0) === 0 && e.points);
+  // 건축면적 — 지상 바닥판의 합. 동끼리 겹치지 않는 방사 쐐기라 단순 합이 성립한다.
+  const foot = slabs.reduce((a, e) => a + polyAreaM2(e.points), 0);
+  // 층별 — 실이 있으면 실 면적의 합, 없으면 건축면적 × 층수로 추정하지 않는다(모르면 안 낸다)
+  const byFloor = new Map();
+  for (const r of rooms) {
+    const f = r.bim.floor || 1;
+    byFloor.set(f, (byFloor.get(f) || 0) + (r.bim.areaM2 || polyAreaM2(r.points)));
+  }
+  const byRoom = new Map();
+  for (const r of rooms) {
+    if ((r.bim.floor || 1) !== 1) continue;               // 실별 면적은 기준층(1층) 기준
+    const k = r.bim.name || '실';
+    if (!byRoom.has(k)) byRoom.set(k, { n: 0, a: 0 });
+    const v = byRoom.get(k); v.n++; v.a += r.bim.areaM2 || polyAreaM2(r.points);
+  }
+  // 최고 높이 — 벽 꼭대기와 지붕 용마루 중 큰 값
+  let hi = 0;
+  for (const e of state.entities) {
+    if (!e.bim) continue;
+    if (e.bim.kind === 'wall') hi = Math.max(hi, (e.bim.base || 0) + (e.bim.h || 0));
+    if (e.bim.kind === 'roof') hi = Math.max(hi, (e.bim.eave || 0) + (e.bim.rise || 0));
+  }
+  const gross = [...byFloor.values()].reduce((a, v) => a + v, 0);
+  return { foot: +foot.toFixed(2), gross: +gross.toFixed(2),
+    floors: byFloor.size, height: Math.round(hi), bays: slabs.length,
+    byFloor: [...byFloor.entries()].sort((a, b) => a[0] - b[0]),
+    byRoom: [...byRoom.entries()].sort((a, b) => b[1].a - a[1].a) };
+}
+const AREA_COLS = ['구분', '내용', '값', '단위'];
+function areaRows(siteM2) {
+  const d = areaData();
+  const num = (v) => String(v).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  const out = [];
+  out.push(['개요', '동 수', String(d.bays), '동']);
+  if (d.floors) out.push(['개요', '지상 층수', String(d.floors), '층']);
+  if (d.height) out.push(['개요', '최고 높이', num(d.height), 'mm']);
+  if (d.foot) out.push(['면적', '건축면적', num(d.foot.toFixed(2)), '㎡']);
+  if (d.gross) out.push(['면적', '연면적', num(d.gross.toFixed(2)), '㎡']);
+  if (siteM2 > 0) {
+    out.push(['면적', '대지면적', num(siteM2.toFixed(2)), '㎡']);
+    out.push(['지표', '건폐율', (d.foot / siteM2 * 100).toFixed(1), '%']);
+    out.push(['지표', '용적률', (d.gross / siteM2 * 100).toFixed(1), '%']);
+  }
+  for (const [f, a] of d.byFloor) out.push(['층별', f + '층 바닥면적', num(a.toFixed(2)), '㎡']);
+  for (const [nm, v] of d.byRoom)
+    out.push(['실별', nm + (v.n > 1 ? ' ×' + v.n : ''), num(v.a.toFixed(2)), '㎡']);
+  return out;
+}
+function areaCSV(rows) {
+  const esc = (s) => /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  let out = '﻿' + AREA_COLS.join(',') + '\n';
+  for (const r of rows) out += r.map(esc).join(',') + '\n';
+  out += '\n# 대지면적을 주지 않으면 건폐율·용적률은 계산하지 않습니다 — "면적표 대지 500" 처럼 지정하세요.\n';
+  out += '# 이 값은 모델에서 잰 근사치이며, 인허가용 면적 산정(발코니·주차·필로티 산입 규칙)을 대체하지 않습니다.\n';
+  return out;
+}
+function cmdAreaTable(arg) {
+  const a = String(arg || '').trim();
+  const site = (a.match(/(?:대지|site)?\s*(\d+(?:\.\d+)?)/) || [])[1];
+  const siteM2 = site ? parseFloat(site) : 0;
+  const rows = areaRows(siteM2);
+  if (!rows.length) { logLine('  잴 것이 없습니다 — 건물을 먼저 만들어 주세요.', 'info'); return; }
+  if (/csv|내보내기/i.test(a)) {
+    dl3d(areaCSV(rows), (currentFileName || 'parti') + '_면적표.csv', 'text/csv;charset=utf-8');
+    logLine('  면적표 ' + rows.length + '행을 CSV 로 내보냈습니다.', 'ok');
+    return;
+  }
+  pushUndo();
+  drawTable('건축개요 · 면적표', AREA_COLS, rows);
+  draw(); updateStat();
+  for (const r of rows) logLine('  ' + r[0] + '  ' + r[1] + '  ' + r[2] + ' ' + r[3], 'info');
+  logLine('  면적표를 도면에 그렸습니다.'
+    + (siteM2 ? '' : '  건폐율·용적률은 대지면적을 주면 계산합니다 — "면적표 대지 500"')
+    + '  CSV 는 "면적표 csv"', 'ok');
+}
+
 function cmdOwSchedule(arg) {
   const rows = owSchedRows();
   if (!rows.length) { logLine('  개구부가 없습니다 — 창·문을 먼저 만들어 주세요.', 'info'); return; }
@@ -12014,7 +12110,7 @@ const INSTANT_CMDS = {
   railing: cmdRailingTag,
   setaslight: cmdSetAsLight,
   owsave: cmdOwSave, owlist: cmdOwList, owdel: () => cmdOwDel(prompt('삭제할 창호 기호 이름 (@ 없이):') || ''),   // 커스텀 창호 기호
-  owsched: cmdOwSchedule,
+  owsched: cmdOwSchedule, areatable: cmdAreaTable,
   raytrace: cmdRaytrace,
   rendered: cmdRendered,
   material: cmdMaterial,
@@ -12481,6 +12577,7 @@ const CMD_ALIASES = {
   setaslight: 'setaslight', light: 'setaslight', lamp: 'setaslight', 조명: 'setaslight', 광원지정: 'setaslight', 광원: 'setaslight',
   창호저장: 'owsave', 창호목록: 'owlist', 창호삭제: 'owdel',
   owsched: 'owsched', schedule: 'owsched', 창호일람표: 'owsched', 일람표: 'owsched', 창호표: 'owsched',
+  areatable: 'areatable', 면적표: 'areatable', 건축개요: 'areatable', 개요표: 'areatable',
   unsetlight: 'unsetlight', 광원해제: 'unsetlight',
   raytrace: 'raytrace', rt: 'raytrace', raytraced: 'raytrace', 레이트레이싱: 'raytrace', 렌더: 'raytrace',
   rendered: 'rendered', 렌더링: 'rendered', 렌더링뷰: 'rendered', 렌더뷰: 'rendered',
@@ -16055,6 +16152,7 @@ window.__CADTEST__ = {
   vpIsPlan, vpPlanIndex, vpRect, vpRectCss, planCvRect, syncPlanCv, open3D, close3D, is3DActive, resize, worldToScreen, screenToWorld,
   rview, rviewFrame, rviewBuildScene, rviewSyncSun, rviewSig, cmdRendered,
   owSchedRows, owSchedCSV, owSchedDraw, cmdOwSchedule, owTypeKo,
+  areaData, areaRows, areaCSV, cmdAreaTable, drawTable, polyAreaM2,
   MAT_PRESETS, MAT_ALIAS, matOf, matKey, matHex, matBoxUV, matGeo, matBuild, matTextures, matDrawTex, cmdMaterial, rtGeoSig, bimSolidColor, secHatchFor, computePatternSegs, owWt, OPENING_TYPES, owSaveDef, owPlaced, layerAutoBim, applyLayerRoleTo, addEntity, renderLayers,
   runCommandInput, feedCmdArg,
   skyCloud, sunDirectIlluminanceClear, skyBlend, SKY_OVERCAST_E, SKY_OVERCAST_RGB,

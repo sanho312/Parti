@@ -283,7 +283,7 @@ function buildComplex(spec) {
   br.ensureLayer('벽', '#cfc7ba'); br.ensureLayer('개구부', '#ff9f0a');
   br.ensureLayer('지붕', '#b8695a'); br.ensureLayer('조경', '#6aa84f'); br.ensureLayer('문자', '#8fa3c8');
   br.ensureLayer('유리', '#7ea6d1'); br.ensureLayer('조경길', '#e0dacc'); br.ensureLayer('바닥', '#bdb6a8');
-  br.ensureLayer('홈통', '#8d9099');
+  br.ensureLayer('홈통', '#8d9099'); br.ensureLayer('실', '#9fb3c8');
   const counts = { wall: 0, window: 0, door: 0, roof: 0, court: 0, slab: 0, room: 0 };
   // ── 치수 근거(웹 조사) ──
   // · 주거 박공 물매 4:12~9:12 (18.4~36.9°) — KCS 41 56 05 아스팔트 싱글 적용범위 1/3~3/4
@@ -611,6 +611,19 @@ function buildComplex(spec) {
               counts.wall++;
             }
             madeWalls.push({ cell: c, A: A2, B: B2, len: len2 });
+          }
+          // ── 실을 '면적을 가진 객체'로 남긴다 ──
+          // 이름표만 찍으면 면적표를 뽑을 수 없다. 실 경계를 폴리라인으로 남기고 면적을 함께
+          // 실어 두면 층별·실별 면적이 데이터에서 바로 나온다(층마다 하나씩 — 연면적 계산용).
+          const RP2 = [PXY(c.x, c.y), PXY(c.x + c.w, c.y),
+            PXY(c.x + c.w, c.y + c.h), PXY(c.x, c.y + c.h)];
+          const a2 = Math.abs(RP2.reduce((acc, p, k) =>
+            acc + (p[0] * RP2[(k + 1) % 4][1] - RP2[(k + 1) % 4][0] * p[1]), 0)) / 2;
+          for (let f = 0; f < Math.max(1, o.floors); f++) {
+            const rp = br.addEntity({ type: 'LWPOLYLINE', layer: '실', closed: true,
+              points: RP2.map(p => [Math.round(p[0]), Math.round(p[1])]) });
+            rp.bim = { kind: 'room', name: c.room.name, areaM2: +(a2 / 1e6).toFixed(2),
+              top: f * o.floorH, floor: f + 1 };
           }
           // 실 이름
           const cm2 = PXY(c.x + c.w / 2, c.y + c.h / 2);
