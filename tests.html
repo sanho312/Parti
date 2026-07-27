@@ -4145,6 +4145,39 @@ function tests(){
                 ok(allNo.some(n0 => n0 >= 200), '  2층은 200번대');
                 C.state.entities.length = bV;
               }).then(() => {
+                // ── ★도면 한 장으로 묶기 ──
+                // 평면·단면·입면·표가 따로 놀면 납품이 안 된다. 도면틀과 표제란을 두고 한 장에.
+                // ★시트는 '종이 mm' 로 그린다 — 모델(mm)을 1/축척 으로 줄여 얹어야 축척이 뜻을 갖는다.
+                const bH = C.state.entities.length;
+                A.buildComplex({ count: 3, floors: 2, w: 9000, d: 11000, roof: 'gable',
+                  arrange: 'arc', attached: true, glass: false, lean: 0 });
+                C.cmdOwSchedule(''); C.cmdAreaTable(''); C.cmdAutoSection('');
+                const sr = C.cmdSheet('A1');
+                ok(sr && sr.views.length >= 4,
+                  '★도면 한 장 — 평면·표·단면·입면을 함께 배치 (' + (sr ? sr.views.length : 0) + '뷰)');
+                eqi(sr.sheetW, 841, '  A1 용지 (841×594)');
+                ok(sr.denom >= 20, '  축척을 표준값으로 고른다 (1:' + sr.denom + ')');
+                const esH = C.state.entities;
+                const SWs = 841, SHs = 594, Ms = 10, TBWs = 180, TBHs = 55;
+                const t0 = SWs - Ms - TBWs, t1 = SWs - Ms, u0 = Ms, u1 = Ms + TBHs;
+                const ptsOf = (e0) => e0.type === 'LINE' ? [[e0.x1, e0.y1], [e0.x2, e0.y2]]
+                  : e0.points ? e0.points : e0.type === 'TEXT' ? [[e0.x, e0.y]]
+                  : (e0.cx != null ? [[e0.cx, e0.cy]] : []);
+                const outside = esH.filter(e0 => ptsOf(e0).some(p0 =>
+                  p0[0] < -1 || p0[0] > SWs + 1 || p0[1] < -1 || p0[1] > SHs + 1));
+                eqi(outside.length, 0, '★모든 요소가 용지 안에 들어간다');
+                const hitTB = esH.filter(e0 => e0.layer !== '표제란' && e0.layer !== '도면틀'
+                  && ptsOf(e0).some(p0 => p0[0] > t0 + 1 && p0[0] < t1 - 1
+                    && p0[1] > u0 + 1 && p0[1] < u1 - 1));
+                eqi(hitTB.length, 0, '★뷰가 표제란을 덮지 않는다');
+                eqi(esH.filter(e0 => e0.bim).length, 0,
+                  '★시트에는 BIM 을 얹지 않는다 (3D 에 축소된 건물이 하나 더 생기면 안 된다)');
+                ok(esH.filter(e0 => e0.layer === '뷰이름').length >= 4,
+                  '  뷰마다 이름·축척을 적는다');
+                ok(esH.some(e0 => e0.layer === '표제란' && e0.type === 'TEXT'
+                  && /축척/.test(e0.text || '')), '  표제란에 축척·용지·날짜');
+                C.state.entities.length = bH;
+              }).then(() => {
                 // ── ★내부 실 구획 ──
                 // 결과물이 외피뿐이라 안이 통째로 비어 있었다. 부채꼴 쐐기는 (각도, 반지름)
                 // 공간에서 직사각형이므로, 이미 검증된 재귀 이분할기 slice() 를 그 공간에서

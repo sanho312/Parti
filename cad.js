@@ -2944,6 +2944,138 @@ function areaCSV(rows) {
   out += '# 이 값은 모델에서 잰 근사치이며, 인허가용 면적 산정(발코니·주차·필로티 산입 규칙)을 대체하지 않습니다.\n';
   return out;
 }
+// ── 도면 한 장으로 묶기 (시트) ──
+// ★평면·단면·입면·표가 따로 놀면 납품이 안 된다. 도면틀과 표제란을 두고 한 장에 배치한다.
+//   시트는 '종이 mm' 로 그린다 — 모델(mm)을 1/축척 으로 줄여 얹는다. 그래야 축척이 뜻을 갖는다.
+const SHEET_SIZES = { A0: [1189, 841], A1: [841, 594], A2: [594, 420], A3: [420, 297], A4: [297, 210] };
+const SHEET_SCALES = [20, 30, 50, 100, 200, 300, 500, 1000];
+function sheetClone(e, k, tx, ty) {
+  const c = cloneEntity(e);
+  const P = (x, y) => [x * k + tx, y * k + ty];
+  switch (c.type) {
+    case 'LINE': [c.x1, c.y1] = P(c.x1, c.y1); [c.x2, c.y2] = P(c.x2, c.y2); break;
+    case 'LWPOLYLINE': c.points = c.points.map(p => P(p[0], p[1])); break;
+    case 'CIRCLE': [c.cx, c.cy] = P(c.cx, c.cy); c.r *= k; break;
+    case 'ARC': [c.cx, c.cy] = P(c.cx, c.cy); c.r *= k; break;
+    case 'TEXT': [c.x, c.y] = P(c.x, c.y); c.height = (c.height || 250) * k; break;
+    case 'HATCH': {
+      const b = c.boundary;
+      if (b.kind === 'circle') { [b.cx, b.cy] = P(b.cx, b.cy); b.r *= k; }
+      else b.points = b.points.map(p => P(p[0], p[1]));
+      break;
+    }
+    default: return null;                 // 시트에 올리지 않는 종류(MESH·IMAGE 등)
+  }
+  // ★BIM 을 떼고 얹는다 — 시트는 2D 도면이다. 남겨 두면 3D 에 축소된 건물이 하나 더 생긴다.
+  delete c.bim; delete c.zo; delete c.z1; delete c.z2; delete c.zs; delete c.mat;
+  return c;
+}
+function entsBBox(ents) {
+  let x0 = 1e18, y0 = 1e18, x1 = -1e18, y1 = -1e18;
+  for (const e of ents) {
+    const xs = e.type === 'LINE' ? [e.x1, e.x2] : e.points ? e.points.map(p => p[0])
+      : e.type === 'CIRCLE' || e.type === 'ARC' ? [e.cx - e.r, e.cx + e.r] : [e.x];
+    const ys = e.type === 'LINE' ? [e.y1, e.y2] : e.points ? e.points.map(p => p[1])
+      : e.type === 'CIRCLE' || e.type === 'ARC' ? [e.cy - e.r, e.cy + e.r] : [e.y];
+    for (const v of xs) { if (!isFinite(v)) continue; x0 = Math.min(x0, v); x1 = Math.max(x1, v); }
+    for (const v of ys) { if (!isFinite(v)) continue; y0 = Math.min(y0, v); y1 = Math.max(y1, v); }
+  }
+  return x1 > x0 ? { x0, y0, x1, y1, w: x1 - x0, h: y1 - y0 } : null;
+}
+// 시트에 올릴 뷰 모으기 — 현재 도면(평면·표) + 이미 만들어 둔 단면/입면 탭
+function sheetSources() {
+  docs[curDoc] = captureDoc();
+  const out = [];
+  docs.forEach((d, i) => {
+    const ents = (d && d.entities) || [];
+    if (!ents.length) return;
+    const nm = d.fileName || (i === curDoc ? '평면' : '도면-' + (i + 1));
+    if (i === curDoc) {
+      const plan = ents.filter(e => e.layer !== '일람표');
+      const tbl = ents.filter(e => e.layer === '일람표');
+      if (plan.length) out.push({ name: '평면도', ents: plan, kind: 'plan' });
+      if (tbl.length) out.push({ name: '표', ents: tbl, kind: 'table' });
+    } else if (/단면|입면/.test(nm)) {
+      out.push({ name: nm, ents, kind: /입면/.test(nm) ? 'elev' : 'sec' });
+    }
+  });
+  return out;
+}
+function sheetBuild(opt) {
+  const o = Object.assign({ size: 'A1', title: null, scale: 0 }, opt || {});
+  const [SW, SH] = SHEET_SIZES[o.size] || SHEET_SIZES.A1;
+  const srcs = sheetSources();
+  if (!srcs.length) return null;
+  // 도면틀 여백(왼쪽은 철하는 쪽이라 넓게) · 표제란
+  const M = 10, ML = 20, TBW = 180, TBH = 55;
+  const ax0 = ML, ay0 = M, ax1 = SW - M, ay1 = SH - M;          // 도면틀 안쪽
+  const cols = Math.ceil(Math.sqrt(srcs.length)), rows = Math.ceil(srcs.length / cols);
+  const cw = (ax1 - ax0) / cols, ch = (ay1 - ay0) / rows;
+  // 축척 — 모든 뷰가 자기 칸에 들어가는 가장 큰 표준 축척
+  const boxes = srcs.map(s => entsBBox(s.ents));
+  let k = Infinity;
+  boxes.forEach((b, i) => {
+    if (!b) return;
+    const pad = srcs[i].kind === 'table' ? 6 : 12;               // 뷰 이름표 자리
+    k = Math.min(k, (cw - 8) / Math.max(1, b.w), (ch - pad) / Math.max(1, b.h));
+  });
+  let denom = o.scale > 0 ? o.scale : 0;
+  if (!denom) {
+    denom = SHEET_SCALES.find(d => 1 / d <= k) || SHEET_SCALES[SHEET_SCALES.length - 1];
+  }
+  k = 1 / denom;
+  newDocTab();
+  setFileName('도면-' + o.size);
+  ensureLayer('도면틀', '#8d9099'); ensureLayer('표제란', '#cfd3da'); ensureLayer('뷰이름', '#e0a33a');
+  const rect = (x0, y0, x1, y1, ly) => addEntity({ type: 'LWPOLYLINE', layer: ly, closed: true,
+    points: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]] });
+  rect(0, 0, SW, SH, '도면틀');                                   // 용지
+  rect(ML - 5, M - 5, SW - M + 5, SH - M + 5, '도면틀');           // 도면틀
+  // 표제란 — 오른쪽 아래
+  const tx0 = SW - M - TBW, ty0 = M, tx1 = SW - M, ty1 = M + TBH;
+  rect(tx0, ty0, tx1, ty1, '표제란');
+  addEntity({ type: 'LINE', layer: '표제란', x1: tx0, y1: ty1 - 18, x2: tx1, y2: ty1 - 18 });
+  addEntity({ type: 'LINE', layer: '표제란', x1: tx0, y1: ty0 + 14, x2: tx1, y2: ty0 + 14 });
+  const T = (x, y, h, s) => addEntity({ type: 'TEXT', layer: '표제란', x, y, height: h, text: s, rotation: 0 });
+  T(tx0 + 5, ty1 - 13, 7, o.title || (currentFileName || 'PARTI PROJECT'));
+  T(tx0 + 5, ty0 + 20, 4.5, '축척  1:' + denom + '        용지  ' + o.size);
+  const d = new Date();
+  const ds = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0')
+    + '-' + String(d.getDate()).padStart(2, '0');
+  T(tx0 + 5, ty0 + 5, 4.5, '작성  ' + ds + '        Parti');
+  // 뷰 배치 — 칸 가운데 정렬
+  const placed = [];
+  srcs.forEach((s, i) => {
+    const b = boxes[i]; if (!b) return;
+    const c = i % cols, r = Math.floor(i / cols);
+    const bx = ax0 + c * cw, by = ay1 - (r + 1) * ch;            // 위 칸부터 채운다
+    const skip = (bx + cw > tx0 - 4 && by < ty1 + 4);            // 표제란과 겹치는 칸은 건너뛴다
+    const oy = skip ? by + TBH + 6 : by;
+    const tx = bx + (cw - b.w * k) / 2 - b.x0 * k;
+    const ty = oy + (ch - b.h * k) / 2 - b.y0 * k + 3;
+    let n = 0;
+    for (const e of s.ents) { const q = sheetClone(e, k, tx, ty); if (q) { addEntity(q); n++; } }
+    addEntity({ type: 'TEXT', layer: '뷰이름', x: bx + 4, y: oy + 2, height: 5,
+      text: s.name + '   S=1:' + denom, rotation: 0 });
+    placed.push({ name: s.name, n });
+  });
+  state.view = { x: SW / 2, y: SH / 2, scale: 1 };
+  renderLayers(); draw(); updateStat(); renderDocTabs();
+  return { size: o.size, denom, views: placed, sheetW: SW, sheetH: SH };
+}
+function cmdSheet(arg) {
+  const a = String(arg || '').trim();
+  const size = (a.match(/A[0-4]/i) || [])[0];
+  const sc = (a.match(/1\s*[:：]\s*(\d+)/) || [])[1];
+  const home = curDoc;
+  const r = sheetBuild({ size: size ? size.toUpperCase() : 'A1', scale: sc ? +sc : 0 });
+  if (!r) { switchDoc(home); logLine('  묶을 도면이 없습니다 — 평면이나 단면을 먼저 만들어 주세요.', 'info'); return; }
+  for (const v of r.views) logLine('  ' + v.name + ' — 요소 ' + v.n, 'info');
+  logLine('  ' + r.size + ' 도면 한 장으로 묶었습니다 (축척 1:' + r.denom + ', 뷰 ' + r.views.length + '개). '
+    + 'PDF 는 plot 명령으로.', 'ok');
+  return r;
+}
+
 // ── 단면·입면 자동 생성 ──
 // ★단면은 '아무 데나 자른 것'이 아니라 '보여줄 것을 자른 것'이어야 한다.
 //   실·복도·계단이 객체로 남아 있으므로, 그것들을 지나는 자리를 모델에서 직접 고른다.
@@ -12213,7 +12345,7 @@ const INSTANT_CMDS = {
   railing: cmdRailingTag,
   setaslight: cmdSetAsLight,
   owsave: cmdOwSave, owlist: cmdOwList, owdel: () => cmdOwDel(prompt('삭제할 창호 기호 이름 (@ 없이):') || ''),   // 커스텀 창호 기호
-  owsched: cmdOwSchedule, areatable: cmdAreaTable, autosection: cmdAutoSection,
+  owsched: cmdOwSchedule, areatable: cmdAreaTable, autosection: cmdAutoSection, sheet: cmdSheet,
   raytrace: cmdRaytrace,
   rendered: cmdRendered,
   material: cmdMaterial,
@@ -12682,6 +12814,7 @@ const CMD_ALIASES = {
   owsched: 'owsched', schedule: 'owsched', 창호일람표: 'owsched', 일람표: 'owsched', 창호표: 'owsched',
   areatable: 'areatable', 면적표: 'areatable', 건축개요: 'areatable', 개요표: 'areatable',
   autosection: 'autosection', 단면자동: 'autosection', 자동단면: 'autosection', 단면일괄: 'autosection',
+  sheet: 'sheet', 도면묶기: 'sheet', 시트: 'sheet', 도면판: 'sheet', 한장: 'sheet',
   unsetlight: 'unsetlight', 광원해제: 'unsetlight',
   raytrace: 'raytrace', rt: 'raytrace', raytraced: 'raytrace', 레이트레이싱: 'raytrace', 렌더: 'raytrace',
   rendered: 'rendered', 렌더링: 'rendered', 렌더링뷰: 'rendered', 렌더뷰: 'rendered',
@@ -16257,7 +16390,7 @@ window.__CADTEST__ = {
   rview, rviewFrame, rviewBuildScene, rviewSyncSun, rviewSig, cmdRendered,
   owSchedRows, owSchedCSV, owSchedDraw, cmdOwSchedule, owTypeKo,
   areaData, areaRows, areaCSV, cmdAreaTable, drawTable, polyAreaM2,
-  autoSecLines, cmdAutoSection,
+  autoSecLines, cmdAutoSection, sheetBuild, cmdSheet, sheetSources, entsBBox, SHEET_SIZES,
   MAT_PRESETS, MAT_ALIAS, matOf, matKey, matHex, matBoxUV, matGeo, matBuild, matTextures, matDrawTex, cmdMaterial, rtGeoSig, bimSolidColor, secHatchFor, computePatternSegs, owWt, OPENING_TYPES, owSaveDef, owPlaced, layerAutoBim, applyLayerRoleTo, addEntity, renderLayers,
   runCommandInput, feedCmdArg,
   skyCloud, sunDirectIlluminanceClear, skyBlend, SKY_OVERCAST_E, SKY_OVERCAST_RGB,
