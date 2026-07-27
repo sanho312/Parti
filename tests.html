@@ -4214,6 +4214,20 @@ function tests(){
                   '  뷰마다 이름·축척을 적는다');
                 ok(esH.some(e0 => e0.layer === '표제란' && e0.type === 'TEXT'
                   && /축척/.test(e0.text || '')), '  표제란에 축척·용지·날짜');
+                // ── ★PDF 내보내기 ──
+                // ★시트는 이미 종이 mm 다 — 1:1, 여백 0 으로 뽑아야 도면에 적힌 축척이
+                //   실제 인쇄물에서 맞는다. 기본 여백 15mm 를 두면 용지 밖으로 넘친다.
+                const pdfS = String(C.buildPDF({ paper: 'a1', landscape: true, scaleDenom: 1,
+                  units: 'mm', marginMM: 0, title: null }));
+                ok(/^%PDF-1\./.test(pdfS), '★PDF 로 나온다 (' + Math.round(pdfS.length / 1024) + 'KB)');
+                ok(/%%EOF/.test(pdfS), '  파일이 온전히 닫힌다');
+                const mbS = (pdfS.match(/MediaBox\s*\[([^\]]+)\]/) || [])[1] || '';
+                const nS = mbS.trim().split(/\s+/).map(Number);
+                const wMM = nS.length === 4 ? (nS[2] - nS[0]) / 2.83464567 : 0;
+                const hMM = nS.length === 4 ? (nS[3] - nS[1]) / 2.83464567 : 0;
+                ok(Math.abs(wMM - 841) < 2 && Math.abs(hMM - 594) < 2,
+                  '★용지가 A1 실치수와 맞는다 (' + Math.round(wMM) + '×' + Math.round(hMM) + 'mm)');
+                ok(C.PAPER_SIZES && C.PAPER_SIZES.a0, '  A0 용지도 지원한다');
                 C.state.entities.length = bH;
               }).then(() => {
                 // ── ★내부 실 구획 ──

@@ -3152,8 +3152,18 @@ function cmdSheet(arg) {
   const r = sheetBuild({ size: size ? size.toUpperCase() : 'A1', scale: sc ? +sc : 0 });
   if (!r) { switchDoc(home); logLine('  묶을 도면이 없습니다 — 평면이나 단면을 먼저 만들어 주세요.', 'info'); return; }
   for (const v of r.views) logLine('  ' + v.name + ' — 요소 ' + v.n, 'info');
+  // ★시트는 이미 종이 mm 다 — 1:1, 여백 0 으로 뽑아야 인쇄 축척이 도면에 적힌 값과 맞는다.
+  if (/pdf/i.test(a)) {
+    const pdf = buildPDF({ paper: r.size.toLowerCase(), landscape: true, scaleDenom: 1,
+      units: 'mm', marginMM: 0, title: null });
+    saveBlob(new Blob([pdf], { type: 'application/pdf' }),
+      (currentFileName || 'parti') + '.pdf');
+    logLine('  ' + r.size + ' 도면 한 장을 PDF 로 내보냈습니다 (1:1 인쇄 — 도면에 적힌 축척 1:'
+      + r.denom + ' 이 실제로 맞습니다).', 'ok');
+    return r;
+  }
   logLine('  ' + r.size + ' 도면 한 장으로 묶었습니다 (축척 1:' + r.denom + ', 뷰 ' + r.views.length + '개). '
-    + 'PDF 는 plot 명령으로.', 'ok');
+    + 'PDF 로 받으려면 "도면묶기 pdf"', 'ok');
   return r;
 }
 
@@ -15437,7 +15447,8 @@ function savePNG(fname) {
 //  PDF 내보내기 (벡터 단일 페이지)
 // ============================================================
 const PAPER_SIZES = { // pt (1mm=2.8346pt)
-  a4: [841.89, 595.28], a3: [1190.55, 841.89], a2: [1683.78, 1190.55], a1: [2383.94, 1683.78], letter: [792, 612],
+  a4: [841.89, 595.28], a3: [1190.55, 841.89], a2: [1683.78, 1190.55], a1: [2383.94, 1683.78],
+  a0: [3370.39, 2383.94], letter: [792, 612],
 };
 // opt: { paper:'a3', landscape:true, scaleDenom:100(=1:100, 0=자동맞춤), region:{minX..}|null, title:{...}|null, units:'mm' }
 function buildPDF(opt) {
@@ -15446,7 +15457,9 @@ function buildPDF(opt) {
   const size = PAPER_SIZES[opt.paper || 'a3'] || PAPER_SIZES.a3;
   let PW = size[0], PH = size[1];
   if (opt.landscape === false) { PW = size[1]; PH = size[0]; }        // 기본 가로
-  const margin = 15 * MM;
+  // ★여백은 인자로 받는다. 시트(도면묶기)는 이미 자기 도면틀 여백을 갖고 있어서
+  //   여기서 또 15mm 를 두면 1:1 로 뽑을 때 용지 밖으로 넘친다.
+  const margin = (opt.marginMM != null ? opt.marginMM : 15) * MM;
   const b = opt.region ? { minX: opt.region.minX, minY: opt.region.minY, w: opt.region.maxX - opt.region.minX, h: opt.region.maxY - opt.region.minY, maxX: opt.region.maxX, maxY: opt.region.maxY } : drawingBBox();
   const availW = PW - 2 * margin, availH = PH - 2 * margin - (opt.title ? 12 * MM : 0);
   // 축척: scaleDenom>0 이면 1:denom 고정, 아니면 용지에 맞춤
@@ -16474,7 +16487,7 @@ window.__CADTEST__ = {
   owSchedRows, owSchedCSV, owSchedDraw, cmdOwSchedule, owTypeKo,
   areaData, areaRows, areaCSV, cmdAreaTable, drawTable, polyAreaM2,
   autoSecLines, cmdAutoSection, sheetBuild, cmdSheet, sheetSources, entsBBox, SHEET_SIZES,
-  autoDimPlan, cmdAutoDim,
+  autoDimPlan, cmdAutoDim, buildPDF, PAPER_SIZES,
   MAT_PRESETS, MAT_ALIAS, matOf, matKey, matHex, matBoxUV, matGeo, matBuild, matTextures, matDrawTex, cmdMaterial, rtGeoSig, bimSolidColor, secHatchFor, computePatternSegs, owWt, OPENING_TYPES, owSaveDef, owPlaced, layerAutoBim, applyLayerRoleTo, addEntity, renderLayers,
   runCommandInput, feedCmdArg,
   skyCloud, sunDirectIlluminanceClear, skyBlend, SKY_OVERCAST_E, SKY_OVERCAST_RGB,
