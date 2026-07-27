@@ -505,7 +505,26 @@ async function traceConcept(src, opts) {
   const fa = Math.min(xb, xa + sideL), fb = Math.max(fa, xb - sideR);
   const profF = new Float32Array(w);
   for (let x = fa; x <= fb; x++) profF[x] = prof[x];
-  const peaks = prominentPeaks(profF, Math.max(6, Math.round(w / 22)), Math.max(3, maxH * 0.055));
+  let peaks = prominentPeaks(profF, Math.max(6, Math.round(w / 22)), Math.max(3, maxH * 0.055));
+  // ── ★엔투라지(수목·인물)를 동으로 세지 않는다 ──
+  // 실제 스케치에는 나무와 사람이 거의 항상 들어간다. 나뭇잎은 초록이라 bldg 에서 빠지지만
+  // '줄기'와 사람은 잉크로 남아 실루엣에 가느다란 뾰족탑을 만들고, 봉우리 검출이 그걸
+  // 동으로 센다(실측: 3동 그림의 봉우리 5개 중 2개가 나무·사람 — 몇 동을 그리든 5동이 나왔다).
+  // ★가르는 기준은 높이가 아니라 '제 높이 절반에서의 폭'이다.
+  //   높이로 거르면 낮은 부속동이 같이 날아가고, 전역 임계로 거르면 붙어 있는 동들이
+  //   한 덩어리로 이어져 무의미해진다. 자기 봉우리 높이의 절반에서 재면 척도에 무관하다.
+  //   (붙어 있는 박공은 처마가 이미 절반보다 높아 무리 전체가 한 런이 된다 → 넉넉히 통과)
+  if (peaks.length > 1) {
+    const minRun = Math.max(4, (xb - xa) * 0.04);
+    peaks = peaks.filter(p => {
+      const half = profF[p.i] * 0.5;
+      let a2 = p.i, b2 = p.i;
+      while (a2 > 0 && profF[a2 - 1] >= half) a2--;
+      while (b2 < w - 1 && profF[b2 + 1] >= half) b2++;
+      return (b2 - a2) >= minRun;
+    });
+    if (!peaks.length) peaks = prominentPeaks(profF, Math.max(6, Math.round(w / 22)), Math.max(3, maxH * 0.055));
+  }
   const promAvg = peaks.length ? peaks.reduce((a, p) => a + p.prom, 0) / peaks.length : 0;
   const greenR = green / total, blueR = blue / total;
 

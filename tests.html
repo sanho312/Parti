@@ -3671,6 +3671,48 @@ function tests(){
                 eqi(wD.filter(e6 => e6.bim.ot === 'window').length, 1, '  나머지는 창');
                 C.state.entities.length = bW;
               }).then(() => {
+                // ── ★엔투라지(수목·인물)를 동으로 세지 않는다 ──
+                // 실제 스케치에는 나무와 사람이 거의 항상 들어간다. 나뭇잎은 초록이라 빠지지만
+                // 줄기와 사람은 잉크로 남아 실루엣에 가느다란 뾰족탑을 만들고, 봉우리 검출이
+                // 그걸 동으로 센다(실측: 3동 그림이 5동 — 몇 동을 그리든 5동이 나왔다).
+                // 가르는 기준은 높이가 아니라 '제 높이 절반에서의 폭'이다.
+                const mkEnt = (n0, ent) => {
+                  const cv = AD.createElement('canvas'); cv.width = 1200; cv.height = 760;
+                  const g = cv.getContext('2d');
+                  g.fillStyle = '#f4efe6'; g.fillRect(0, 0, 1200, 760);
+                  g.lineJoin = 'round'; g.lineCap = 'round';
+                  const bY = 600, x0 = 260, mw = 170, eh = 190, rz = 70;
+                  g.strokeStyle = '#2b2b29'; g.lineWidth = 2.4;
+                  g.beginPath(); g.moveTo(70, bY); g.lineTo(1130, bY); g.stroke();
+                  for (let i0 = 0; i0 < n0; i0++) {
+                    const a0 = x0 + i0 * mw, b0 = a0 + mw;
+                    g.beginPath();
+                    g.moveTo(a0, bY); g.lineTo(a0, bY - eh); g.lineTo((a0 + b0) / 2, bY - eh - rz);
+                    g.lineTo(b0, bY - eh); g.lineTo(b0, bY); g.closePath(); g.stroke();
+                    g.strokeRect(a0 + mw * 0.18, bY - eh * 0.62, mw * 0.24, eh * 0.3);
+                    g.strokeRect(a0 + mw * 0.58, bY - eh * 0.62, mw * 0.24, eh * 0.3);
+                  }
+                  if (ent) {
+                    for (const tx of [140, 1060]) {
+                      g.strokeStyle = '#3a352d'; g.lineWidth = 3;
+                      g.beginPath(); g.moveTo(tx, bY); g.lineTo(tx, bY - 80); g.stroke();
+                      g.fillStyle = 'rgba(105,150,65,0.85)';
+                      g.beginPath(); g.arc(tx, bY - 118, 42, 0, 7); g.fill();
+                    }
+                    g.strokeStyle = '#3a352d'; g.lineWidth = 3;
+                    g.beginPath(); g.moveTo(900, bY); g.lineTo(900, bY - 48); g.stroke();
+                    g.beginPath(); g.arc(900, bY - 58, 9, 0, 7); g.stroke();
+                  }
+                  return cv.toDataURL('image/png');
+                };
+                return [2, 3, 4, 5].reduce((p0, n0) => p0.then(acc =>
+                  VZ.traceConcept(mkEnt(n0, true)).then(re => acc.concat([[n0, re.masses]]))),
+                  Promise.resolve([])).then(rows0 => {
+                  ok(rows0.every(r0 => r0[0] === r0[1]),
+                    '★수목·인물이 있어도 동 수가 맞다 ('
+                      + rows0.map(r0 => r0[0] + '→' + r0[1]).join(', ') + ')');
+                });
+              }).then(() => {
                 // ── ★창 '종류' 판독 ──
                 // 창에 표시(멀리언·창살·개폐 사선)를 그리면 유리 칸마다 갇힌 흰 구멍이 하나씩
                 // 생겨 창 하나가 여러 개로 세어지고 있었다(격자창 1개→9개, 미닫이 1개→2개).
