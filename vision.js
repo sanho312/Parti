@@ -517,11 +517,19 @@ async function traceConcept(src, opts) {
   if (peaks.length > 1) {
     const minRun = Math.max(4, (xb - xa) * 0.04);
     peaks = peaks.filter(p => {
-      const half = profF[p.i] * 0.5;
+      // ★'제 높이의 절반'이 아니라 '제 돌출의 절반'에서 잰다. 둔덕·지붕 위에 얹힌 나무는
+      //   절대 높이의 절반이 밑동보다 훨씬 아래라 런이 지형 전체로 번져 폭 검사가 통과된다.
+      //   안부에서 절반만 올라온 높이에서 재면 나무는 제 수관 폭(20~40px)으로 줄어든다.
+      //   지면에서 솟은 진짜 매스는 안부가 0 이라 half = 높이/2 로 수렴 = 예전과 같다.
+      const half = profF[p.i] - p.prom * 0.5;
       let a2 = p.i, b2 = p.i;
       while (a2 > 0 && profF[a2 - 1] >= half) a2--;
       while (b2 < w - 1 && profF[b2 + 1] >= half) b2++;
       return (b2 - a2) >= minRun;
+      // ★'봉우리 꼭대기가 초록이면 나무'로 한 번 더 거르는 것은 되돌렸다.
+      //   스케치에서 나무는 건물 '앞에' 겹쳐 그려지는 일이 흔해서(수관이 지붕 봉우리와
+      //   13px 거리) 창을 아무리 좁혀도 진짜 지붕까지 함께 지웠다 — 실측 3동이 1동이 됐다.
+      //   색으로 거르려면 픽셀이 아니라 '연결 성분' 단위로 나무를 통째로 떼어내야 한다.
     });
     if (!peaks.length) peaks = prominentPeaks(profF, Math.max(6, Math.round(w / 22)), Math.max(3, maxH * 0.055));
   }

@@ -3359,6 +3359,45 @@ function tests(){
                   '  그래도 값은 낸다 (기권이 침묵은 아니다 — 사람이 고칠 수 있게 세워는 준다)');
               });
           };
+          // ★수목이 동으로 세어지지 않는가 — 폭을 '제 돌출의 절반'에서 재는 것이 핵심
+          const treeCheck = (V, AD) => {
+            const mkT = (N, trees) => {
+              const c8 = AD.createElement('canvas'); c8.width = 900; c8.height = 520;
+              const g8 = c8.getContext('2d');
+              g8.fillStyle = '#fff'; g8.fillRect(0, 0, 900, 520);
+              g8.strokeStyle = '#222'; g8.lineWidth = 3; g8.lineJoin = 'round';
+              const W8 = 760 / N;
+              for (let i8 = 0; i8 < N; i8++) {
+                const x8 = 70 + i8 * W8, wd8 = W8 - 8;
+                g8.beginPath(); g8.moveTo(x8, 420); g8.lineTo(x8, 270);
+                g8.lineTo(x8 + wd8 / 2, 215); g8.lineTo(x8 + wd8, 270);
+                g8.lineTo(x8 + wd8, 420); g8.closePath(); g8.stroke();
+              }
+              g8.beginPath(); g8.moveTo(40, 420); g8.lineTo(860, 420); g8.stroke();
+              (trees || []).forEach(tx => {                    // 지붕보다 높은 수목
+                g8.strokeStyle = '#333'; g8.lineWidth = 3;
+                g8.beginPath(); g8.moveTo(tx, 420); g8.lineTo(tx, 300); g8.stroke();
+                g8.fillStyle = '#3f7d3f';
+                g8.beginPath(); g8.moveTo(tx, 150); g8.lineTo(tx - 26, 310);
+                g8.lineTo(tx + 26, 310); g8.closePath(); g8.fill();
+                g8.strokeStyle = '#2f2f2f'; g8.lineWidth = 2;
+                g8.beginPath(); g8.moveTo(tx, 150); g8.lineTo(tx - 26, 310);
+                g8.lineTo(tx + 26, 310); g8.closePath(); g8.stroke();
+              });
+              return c8.toDataURL('image/png');
+            };
+            return Promise.all([3, 5, 7].map(n8 => V.traceConcept(mkT(n8, []))))
+              .then(cl => {
+                eqi(cl.map(r8 => r8.masses).join(','), '3,5,7',
+                  '★수목 없는 그림은 그대로 (3·5·7동)');
+                return Promise.all([V.traceConcept(mkT(3, [180, 640])),
+                  V.traceConcept(mkT(5, [120, 450, 800]))]);
+              })
+              .then(([t3, t5]) => {
+                eqi(t3.masses, 3, '★나무 2그루를 세지 않는다 (3동 그대로)');
+                eqi(t5.masses, 5, '★지붕보다 높은 나무 3그루도 세지 않는다 (5동 그대로 — 예전엔 6동)');
+              });
+          };
           const facadeUrl = mkFacade(6, 4, 640, 560);
           let ci0 = null;
           return VZ.classifyImage(cv2.toDataURL('image/png'))
@@ -3371,7 +3410,8 @@ function tests(){
             })
             .then(cs => {
               ok(cs.kind !== 'plan', '★투시 스케치는 도면으로 오인하지 않는다');
-              return abstainCheck(VZ, AD, mkSketch).then(() => VZ.traceConcept(mkSketch())).then(cc2 => {
+              return abstainCheck(VZ, AD, mkSketch).then(() => treeCheck(VZ, AD))
+                .then(() => VZ.traceConcept(mkSketch())).then(cc2 => {
                 eqi(cc2.masses, 5, '★콘셉트 판독 — 지붕 봉우리로 동 수 (5동)');
                 eqi(cc2.roof, 'gable', '  뾰족한 봉우리 → 박공지붕');
                 // 마당이 건물 무리보다 '앞'에 있으면 부채꼴 배치 — 마당을 빙 두르는 링이 아니다
