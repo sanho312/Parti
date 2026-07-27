@@ -275,7 +275,7 @@ function buildComplex(spec) {
   const br = B(); if (!br) return null;
   const o = Object.assign({ count: 5, floors: 1, w: 8000, d: 12000, floorH: STD.ceil + 600,
     arrange: 'arc', roof: 'gable', glass: true, courtyardR: 0, massList: null, attached: true, lean: 0, depths: null,
-    mat: null,
+    mat: null, rooms: true, program: null,
     ox: 0, oy: 0 }, spec || {});
   const n = Math.max(1, Math.min(12, Math.round(o.count)));
   const H = o.floors * o.floorH;
@@ -284,7 +284,7 @@ function buildComplex(spec) {
   br.ensureLayer('지붕', '#b8695a'); br.ensureLayer('조경', '#6aa84f'); br.ensureLayer('문자', '#8fa3c8');
   br.ensureLayer('유리', '#7ea6d1'); br.ensureLayer('조경길', '#e0dacc'); br.ensureLayer('바닥', '#bdb6a8');
   br.ensureLayer('홈통', '#8d9099');
-  const counts = { wall: 0, window: 0, door: 0, roof: 0, court: 0, slab: 0 };
+  const counts = { wall: 0, window: 0, door: 0, roof: 0, court: 0, slab: 0, room: 0 };
   // ── 치수 근거(웹 조사) ──
   // · 주거 박공 물매 4:12~9:12 (18.4~36.9°) — KCS 41 56 05 아스팔트 싱글 적용범위 1/3~3/4
   // · 처마(eave) 내밀기 305~610mm, 박공측(rake/verge) 152~305mm — IRC R804 / 실무 표준
@@ -553,6 +553,93 @@ function buildComplex(spec) {
         const fa = br.addEntity({ type: 'LINE', layer: '지붕',
           x1: Math.round(fa1[0]), y1: Math.round(fa1[1]), x2: Math.round(fa2[0]), y2: Math.round(fa2[1]) });
         fa.bim = { kind: 'wall', h: 260, t: 120, base: Hi - 60 };
+      }
+      // ── ★내부 실 구획 ──
+      // 지금까지 결과물은 외피뿐이라 안이 통째로 비어 있었다. 부채꼴 쐐기는 (각도, 반지름)
+      // 공간에서 직사각형이므로, 이미 검증된 재귀 이분할기 slice() 를 그 공간에서 돌리고
+      // 결과를 PT(a, r) 로 되돌리면 그대로 실 구획이 된다. 새 배치 알고리즘이 필요 없다.
+      // ★각도축은 '호길이'로 환산해서 넘긴다 — 라디안 그대로 주면 slice() 의 '긴 변을 자른다'
+      //   판정이 무의미해져 실이 전부 한 방향으로만 잘린다.
+      if (o.rooms !== false && Ds[i] >= 3000 && chord >= 3000) {
+        const rmid = (r0 + r1i) / 2;
+        const arcW = Math.abs(aL - aR) * rmid;              // 각도축을 호길이로
+        const areaM2 = arcW * Ds[i] / 1e6;
+        const prog = o.program || (areaM2 < 26 ? 'oneroom' : areaM2 < 40 ? 'oneHalf'
+          : areaM2 < 60 ? 'tworoom' : 'threeroom');
+        const P = PROGRAMS[prog] || PROGRAMS.oneroom;
+        const fixed = P.rooms.filter(r2 => r2.fix), flex = P.rooms.filter(r2 => !r2.fix);
+        const fixSum = fixed.reduce((a2, r2) => a2 + r2.fix, 0);
+        const restA = Math.max(areaM2 * 0.25, areaM2 - fixSum);
+        const wSum = flex.reduce((a2, r2) => a2 + (r2.w || 1), 0) || 1;
+        const items = P.rooms.map(r2 => ({ name: r2.n, area: r2.fix ? r2.fix : restA * (r2.w || 1) / wSum }));
+        const cells = slice({ x: 0, y: 0, w: arcW, h: Ds[i] }, items);
+        // (호길이 x, 깊이 y) → 세계 좌표. 각은 aL 에서 줄어드는 방향이다.
+        const sgnA = aL >= aR ? -1 : 1;
+        const PXY = (x, y) => {
+          const p = PT(aL + sgnA * (x / rmid), r0 + y);
+          return wSh ? [p[0] + wSh[0], p[1] + wSh[1]] : p;   // 기운 동이면 벽도 같이 기운다
+        };
+        const EPS2 = 1;
+        const onEdge = (a2, b2, lim) => Math.abs(a2 - lim) < EPS2 && Math.abs(b2 - lim) < EPS2;
+        const seen = new Set();
+        const madeWalls = [];                                // {key, cell, A, B, len}
+        for (const c of cells) {
+          const x1 = c.x, x2 = c.x + c.w, y1 = c.y, y2 = c.y + c.h;
+          // 셀의 네 변 중 '쐐기 외곽에 붙은 변'은 이미 외벽이 있으므로 만들지 않는다
+          const edges = [
+            [x1, y1, x2, y1, onEdge(y1, y1, 0)],                 // 앞(마당 쪽)
+            [x1, y2, x2, y2, onEdge(y2, y2, Ds[i])],             // 뒤
+            [x1, y1, x1, y2, onEdge(x1, x1, 0)],                 // 좌
+            [x2, y1, x2, y2, onEdge(x2, x2, arcW)],              // 우
+          ];
+          for (const [ax, ay, bx, by, isExt] of edges) {
+            if (isExt) continue;
+            const k = [Math.round(ax), Math.round(ay), Math.round(bx), Math.round(by)].join(',');
+            const k2 = [Math.round(bx), Math.round(by), Math.round(ax), Math.round(ay)].join(',');
+            if (seen.has(k) || seen.has(k2)) continue;           // 이웃 실과 공유하는 벽은 한 번만
+            seen.add(k);
+            const A2 = PXY(ax, ay), B2 = PXY(bx, by);
+            const len2 = Math.hypot(B2[0] - A2[0], B2[1] - A2[1]);
+            if (len2 < 600) continue;
+            for (let f = 0; f < Math.max(1, o.floors); f++) {
+              const iw = br.addEntity({ type: 'LINE', layer: '벽',
+                x1: Math.round(A2[0]), y1: Math.round(A2[1]),
+                x2: Math.round(B2[0]), y2: Math.round(B2[1]) });
+              iw.bim = { kind: 'wall', h: STD.ceil, t: STD.wallInt, base: f * o.floorH };
+              if (wSh) iw.bim.shear = wSh;
+              if (curMat) iw.mat = curMat;
+              counts.wall++;
+            }
+            madeWalls.push({ cell: c, A: A2, B: B2, len: len2 });
+          }
+          // 실 이름
+          const cm2 = PXY(c.x + c.w / 2, c.y + c.h / 2);
+          br.addEntity({ type: 'TEXT', layer: '문자', x: Math.round(cm2[0]), y: Math.round(cm2[1]),
+            h: 300, text: c.room.name });
+          counts.room++;
+        }
+        // ── 실내문 ──
+        // ★내벽마다 문을 달면 안 된다(실측: 3동에 문 39개). 방 하나에 문 하나면 모든 방이
+        //   서로 이어진다(연결 트리). 첫 실은 현관 쪽이므로 건너뛴다.
+        const doored = new Set([cells[0]]);
+        for (const c of cells) {
+          if (doored.has(c)) continue;
+          const mine = madeWalls.filter(mw => mw.cell === c).sort((a2, b2) => b2.len - a2.len);
+          if (!mine.length) continue;
+          const mw = mine[0];
+          doored.add(c);
+          const L2 = mw.len, ux2 = (mw.B[0] - mw.A[0]) / L2, uy2 = (mw.B[1] - mw.A[1]) / L2;
+          const dw2 = Math.min(STD.doorW, L2 * 0.6);
+          const mx2 = (mw.A[0] + mw.B[0]) / 2, my2 = (mw.A[1] + mw.B[1]) / 2;
+          for (let f = 0; f < Math.max(1, o.floors); f++) {
+            const dpe = br.addEntity({ type: 'LINE', layer: '개구부',
+              x1: Math.round(mx2 - ux2 * dw2 / 2), y1: Math.round(my2 - uy2 * dw2 / 2),
+              x2: Math.round(mx2 + ux2 * dw2 / 2), y2: Math.round(my2 + uy2 * dw2 / 2) });
+            dpe.bim = { kind: 'opening', ot: 'door', wt: 'swing',
+              h: STD.doorH, sill: f * o.floorH, t: STD.wallInt };
+            counts.door++;
+          }
+        }
       }
       const cM = PT((aL + aR) / 2, (r0 + r1i) / 2);
       br.addEntity({ type: 'TEXT', layer: '문자', x: Math.round(cM[0]), y: Math.round(cM[1]), h: 400, text: (i + 1) + '동' });

@@ -3646,7 +3646,9 @@ function tests(){
                   A.buildComplex({ count: 1, floors: 1, w: 12000, d: 12000, roof: 'gable',
                     arrange: 'arc', attached: true, glass: false, lean: 0,
                     massList: [{ wFrac: 1, hFrac: 1, wins: wins }] });
-                  return C.state.entities.slice(bW).filter(e6 => e6.bim && e6.bim.kind === 'opening');
+                  // ★내부 실 문(t=100)은 이 검사 대상이 아니다 — 읽은 창이 만든 외피 개구부만 본다
+                  return C.state.entities.slice(bW)
+                    .filter(e6 => e6.bim && e6.bim.kind === 'opening' && e6.bim.t !== 100);
                 };
                 // 유리가 아니면 창이 하나도 없었다 — 그림에서 읽은 창이 그 자리를 메운다
                 const noW = unitW(null);
@@ -3839,7 +3841,7 @@ function tests(){
                     arrange: 'arc', attached: true, glass: false, lean: 0,
                     massList: [{ wFrac: 1, hFrac: 1, wins: ws }] });
                   const dEnt = C.state.entities.slice(bD)
-                    .filter(e8 => e8.bim && e8.bim.ot === 'door');
+                    .filter(e8 => e8.bim && e8.bim.ot === 'door' && e8.bim.t !== 100);
                   return { read: ws.length === 1 ? ws[0].dkind : null,
                     conf: ws.length === 1 ? ws[0].dkindConf : null,
                     made: dEnt.map(e8 => e8.bim.wt).join(',') };
@@ -3918,6 +3920,21 @@ function tests(){
                   }).then(rb => {
                     ok((rb.massList || []).every(m9 => !m9.mat),
                       '★안 칠한 그림에는 재료를 내지 않는다 — 흰 벽과 종이는 구분할 수 없다');
+                    // ★DXF 왕복에서 재질이 사라지던 결함 — WCX 확장에 mat/matx 를 담아 고쳤다.
+                    //   (판독한 재료를 내보냈다 불러오면 통째로 없어졌다)
+                    const bX = C.state.entities.length;
+                    A.buildComplex({ count: 2, floors: 1, w: 9000, d: 10000, roof: 'gable',
+                      arrange: 'arc', attached: true, glass: false, lean: 0, rooms: false,
+                      massList: [{ wFrac: 0.5, hFrac: 1, mat: 'brick' },
+                                 { wFrac: 0.5, hFrac: 1, mat: 'wood' }] });
+                    const matsBefore = C.state.entities.filter(e0 => e0.mat).map(e0 => e0.mat).sort().join(',');
+                    const dxf0 = C.buildDXFText();
+                    ok(/"mat"/.test(dxf0), '★DXF 에 재질이 실린다 (999 WCX 확장 — 타 CAD 는 주석으로 무시)');
+                    C.state.entities.length = 0;
+                    C.loadDXF(dxf0);
+                    const matsAfter = C.state.entities.filter(e0 => e0.mat).map(e0 => e0.mat).sort().join(',');
+                    eqi(matsAfter, matsBefore, '★DXF 왕복에서 재질이 보존된다');
+                    C.state.entities.length = bX;
                   });
               }).then(() => {
                 // ── ★창호일람표 ──
@@ -3936,12 +3953,15 @@ function tests(){
                       { u: 0.78, v: 0.55, wFrac: 0.12, hFrac: 0.24, kind: 'hung', kindConf: 0.6 }] }] });
                 const sr = C.owSchedRows();
                 ok(sr.length >= 3, '★창호일람표 — 같은 규격끼리 묶어 ' + sr.length + '종으로 정리');
-                eqi(sr.filter(r9 => r9.ot === 'window')[0].mark, 'W1', '  창은 W1 부터, 폭 큰 것부터');
+                eqi(sr.filter(r9 => r9.ot === 'window')[0].mark, 'W-1',
+                  '  부호는 KIA C타입 "기호-일련번호" (창은 W-1 부터, 폭 큰 것부터)');
                 ok(sr.some(r9 => r9.ot === 'door' && /^D/.test(r9.mark)), '  문은 D 번호로 따로');
                 ok(sr.some(r9 => r9.n >= 2), '  같은 규격 2개는 수량 2로 묶인다');
                 const csv = C.owSchedCSV(sr);
                 ok(csv.charCodeAt(0) === 0xFEFF, '  CSV 에 BOM — 엑셀에서 한글이 안 깨진다');
-                ok(/기호,종류,개폐방식/.test(csv), '  머리행이 실무 열 구성');
+                ok(/부호,종류,개폐방식/.test(csv), '  머리행이 한국 실무 용어 (기호→부호, 수량→개소)');
+                ok(/개소/.test(csv), '  수량 열은 "개소"');
+                ok(/1,\d{3}/.test(csv), '  4자리 치수는 3자리마다 쉼표 (KIA 2.10.1)');
                 ok(/추정/.test(csv), '★확신도가 낮은 개폐방식은 "추정"으로 표시 (그림에 표시가 없었던 것)');
                 const lines9 = csv.split(String.fromCharCode(10));
                 ok(!lines9.filter(l9 => l9.indexOf('미서기창') >= 0).some(l9 => l9.indexOf('추정') >= 0),
@@ -3964,6 +3984,44 @@ function tests(){
                   e9.type === 'LINE' ? Math.min(e9.x1, e9.x2) : (e9.x || 0)));
                 ok(tminx > mxx, '★표가 모델을 덮지 않는다 (오른쪽 여백에)');
                 C.state.entities.length = bS;
+              }).then(() => {
+                // ── ★내부 실 구획 ──
+                // 결과물이 외피뿐이라 안이 통째로 비어 있었다. 부채꼴 쐐기는 (각도, 반지름)
+                // 공간에서 직사각형이므로, 이미 검증된 재귀 이분할기 slice() 를 그 공간에서
+                // 돌리고 PT(a, r) 로 되돌리면 실 구획이 된다 — 새 배치 알고리즘이 필요 없다.
+                const bR = C.state.entities.length;
+                const runR = (opt) => {
+                  C.state.entities.length = bR;
+                  A.buildComplex(Object.assign({ count: 3, floors: 1, w: 9000, d: 11000,
+                    roof: 'gable', arrange: 'arc', attached: true, glass: false, lean: 0 }, opt));
+                  const es = C.state.entities.slice(bR);
+                  return {
+                    inWall: es.filter(e0 => e0.bim && e0.bim.kind === 'wall' && e0.bim.t === 100),
+                    inDoor: es.filter(e0 => e0.bim && e0.bim.ot === 'door' && e0.bim.t === 100),
+                    names: es.filter(e0 => e0.type === 'TEXT' && e0.layer === '문자' && !/동$/.test(e0.text)),
+                    slabs: es.filter(e0 => e0.bim && e0.bim.kind === 'slab' && e0.layer === '바닥'),
+                  };
+                };
+                const R1 = runR({});
+                ok(R1.inWall.length >= 9, '★내부 실 구획 — 내벽 ' + R1.inWall.length + '매 (예전엔 안이 통째로 비어 있었다)');
+                ok(R1.names.length >= 9, '  실 이름표 ' + R1.names.length + '개');
+                ok(R1.inDoor.length >= 3 && R1.inDoor.length < R1.inWall.length,
+                  '★방마다 문 하나 — 내벽마다 달면 3동에 39개가 된다 (지금 ' + R1.inDoor.length + '개)');
+                // ★내벽이 매스 밖으로 나가면 안 된다 — 각도축을 호길이로 환산하는 게 이 검사의 핵심
+                const inPolyR = (p, x, y) => { let c0 = false;
+                  for (let i0 = 0, j0 = p.length - 1; i0 < p.length; j0 = i0++)
+                    if (((p[i0][1] > y) !== (p[j0][1] > y)) &&
+                        (x < (p[j0][0] - p[i0][0]) * (y - p[i0][1]) / (p[j0][1] - p[i0][1]) + p[i0][0]))
+                      c0 = !c0;
+                  return c0; };
+                const outside = R1.inWall.filter(e0 =>
+                  !R1.slabs.some(sl => inPolyR(sl.points, (e0.x1 + e0.x2) / 2, (e0.y1 + e0.y2) / 2)));
+                eqi(outside.length, 0, '★내벽이 매스 밖으로 삐져나가지 않는다');
+                const R2 = runR({ floors: 2 });
+                ok(R2.inWall.length === R1.inWall.length * 2, '  2층이면 층마다 실 구획 (' + R2.inWall.length + '매)');
+                const R0 = runR({ rooms: false });
+                eqi(R0.inWall.length, 0, '  rooms:false 면 예전처럼 빈 외피 (선택 가능)');
+                C.state.entities.length = bR;
               }).then(() => {
                 // ★라우팅 근거 지표 — 전역 임계값 추측이 실물에서 두 번 뒤집힌 뒤 도입한 증거들.
                 //   도면은 무채색·축정렬·이중선, 손그림은 사선 지배 → 이 표가 오판을 막는다.
@@ -3998,7 +4056,9 @@ function tests(){
                 massList: [{ wFrac: 0.16, hFrac: 0.84 }, { wFrac: 0.19, hFrac: 0.94 },
                   { wFrac: 0.18, hFrac: 1 }, { wFrac: 0.17, hFrac: 0.92 }, { wFrac: 0.30, hFrac: 0.88 }] });
               const ae = C.state.entities.slice(b6);
-              const labels = ae.filter(e6 => e6.type === 'TEXT').sort((p, q) => (p.text > q.text ? 1 : -1));
+              // ★내부 실 이름표가 생겼으므로 '동' 이름표만 센다
+              const labels = ae.filter(e6 => e6.type === 'TEXT' && /동$/.test(e6.text))
+                .sort((p, q) => (p.text > q.text ? 1 : -1));
               ok(labels.length === 5 && labels.every((t6, i6) => i6 === 0 || t6.x > labels[i6 - 1].x),
                 '★부채꼴 — 그림 왼쪽 동이 도면에서도 왼쪽 (좌우 뒤집힘 방지)');
               ok(arcR.widths[4] > arcR.widths[0] * 1.5, '★동별 폭 반영 — 가장 넓은 동이 실제로 넓다 ('
@@ -4037,10 +4097,13 @@ function tests(){
               eqi(bays8.length, 5, '  동마다 바닥판');
               ok(ovl(bays8) < 0.5, '★★동끼리 바닥 겹침 0 — 측벽을 공유하는 방사 쐐기 (' + ovl(bays8).toFixed(2) + '㎡)');
               ok(ovl(roofs8) < 0.5, '★★지붕끼리 겹침 0 — 처마는 앞뒤로만 내민다 (' + ovl(roofs8).toFixed(2) + '㎡)');
-              eqi(ae.filter(e8 => e8.type === 'LINE' && e8.layer === '벽').length, 16, '★측벽 공유 — 벽 16매(앞5+뒤5+방사6), 중복 벽 없음');
+              // ★내벽(t=100)은 실 구획용이다 — 이 검사는 외피 벽이 대상
+              eqi(ae.filter(e8 => e8.type === 'LINE' && e8.layer === '벽'
+                && e8.bim && e8.bim.t !== 100).length, 16, '★측벽 공유 — 외피 벽 16매(앞5+뒤5+방사6), 중복 벽 없음');
               // 개구부가 '한쪽만 실내'인가 — 양쪽 다 실내면 두 동을 관통한 것, 양쪽 다 실외면 허공
               let bad8 = 0;
-              for (const q8 of ae.filter(e8 => e8.bim && e8.bim.kind === 'opening')) {
+              // ★내부 문은 '양쪽 다 실내'인 게 정상이다 — 외피 개구부만 본다
+              for (const q8 of ae.filter(e8 => e8.bim && e8.bim.kind === 'opening' && e8.bim.t !== 100)) {
                 const mx = (q8.x1 + q8.x2) / 2, my = (q8.y1 + q8.y2) / 2;
                 const dd = Math.hypot(q8.x2 - q8.x1, q8.y2 - q8.y1) || 1;
                 const nx = -(q8.y2 - q8.y1) / dd, ny = (q8.x2 - q8.x1) / dd;
@@ -4049,7 +4112,8 @@ function tests(){
                 if (inA === inB) bad8++;
               }
               eqi(bad8, 0, '★★커튼월이 이웃 동을 관통하지 않는다 (한쪽만 실내)');
-              ok(ae.filter(e8 => e8.bim && e8.bim.kind === 'opening' && e8.bim.ot === 'door').length === 1, '  가운데 동에 출입문');
+              ok(ae.filter(e8 => e8.bim && e8.bim.kind === 'opening' && e8.bim.ot === 'door'
+                && e8.bim.t !== 100).length === 1, '  가운데 동에 현관(외부문)');
               ok(ae.filter(e8 => e8.bim && e8.bim.kind === 'slab' && e8.bim.t === 400).length === 1, '  기단(건물군 외곽 한 장)');
               // ── 웹 조사로 얻은 건축 규범값을 코드에 고정 ──
               // 주거 박공 물매 4:12~9:12 (18.4~36.9°) — KCS 41 56 05 아스팔트 싱글 적용범위

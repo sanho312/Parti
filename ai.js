@@ -1167,6 +1167,7 @@
           + (winN ? ` · 그림에서 창 ${winN}개 자리 그대로` : '')
           + (kindTxt ? ` · 종류 ${kindTxt}` : '')
           + (matTxt ? ` · 재료 ${matTxt}` : '')
+          + (r.counts && r.counts.room ? ` · 내부 실 ${r.counts.room}개 구획` : '')
           + `, 동 폭 ${r.widths.map(v => (v / 1000).toFixed(0)).join('/')}m)`);
       }
       let builtFromPlan = null;

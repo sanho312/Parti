@@ -2795,17 +2795,24 @@ function owSchedRows() {
   const rows = [...groups.values()];
   // 창 먼저, 그 다음 문. 각각 폭 큰 것부터 — 실무 일람표의 통상 정렬.
   rows.sort((a, b) => (a.ot === b.ot ? (b.w - a.w || b.h - a.h) : (a.ot === 'window' ? -1 : 1)));
+  // ★부호는 KIA 「건축도면 공동 표준화지침」이 인정하는 C타입 '기호-일련번호' 형식을 쓴다.
+  //   KS F 1502 의 정식 부호는 '재질기호+용도기호'(AW=알루미늄창, SD=강철문 …)인데,
+  //   그림에서 창틀 재질까지는 알 수 없으므로 용도기호만 쓰고 재질은 비운다.
   let nw = 0, nd = 0;
-  for (const r of rows) r.mark = r.ot === 'window' ? ('W' + (++nw)) : ('D' + (++nd));
+  for (const r of rows) r.mark = r.ot === 'window' ? ('W-' + (++nw)) : ('D-' + (++nd));
   return rows;
 }
-const OWSCHED_COLS = ['기호', '종류', '개폐방식', '폭(W)', '높이(H)', '창대', '수량', '비고'];
+// 열 이름은 한국 실무 용어로 — '기호'가 아니라 부호, '수량'이 아니라 개소.
+// ※법정 필수 항목 중 위치·프레임 재질·유리 사양·부속철물은 그림에서 알 수 없어 넣지 않는다.
+//   빈 칸을 만들어 두면 채워진 것처럼 보인다.
+const OWSCHED_COLS = ['부호', '종류', '개폐방식', '나비(W)', '높이(H)', '창대', '개소', '비고'];
+const owNum = (v) => String(v).replace(/\B(?=(\d{3})+(?!\d))/g, ',');   // 4자리 이상은 3자리마다 쉼표
 function owSchedCells(r) {
   const note = [];
   if (r.conf != null && r.conf < 0.4) note.push('개폐방식 추정 — 확인 필요');
   if (r.mat && MAT_PRESETS[r.mat]) note.push(MAT_PRESETS[r.mat].ko);
   return [r.mark, r.ot === 'window' ? '창' : '문', owTypeKo(r.wt),
-    String(r.w), String(r.h), r.ot === 'window' ? String(r.sill) : '-', String(r.n),
+    owNum(r.w), owNum(r.h), r.ot === 'window' ? owNum(r.sill) : '-', String(r.n),
     note.join(' · ')];
 }
 function owSchedCSV(rows) {
@@ -2867,7 +2874,7 @@ function cmdOwSchedule(arg) {
   const g = owSchedDraw(rows);
   draw(); updateStat();
   for (const r of rows)
-    logLine('  ' + r.mark + '  ' + owTypeKo(r.wt) + '  ' + r.w + '×' + r.h + '  ' + r.n + '개'
+    logLine('  ' + r.mark + '  ' + owTypeKo(r.wt) + '  ' + owNum(r.w) + '×' + owNum(r.h) + '  ' + r.n + '개소'
       + (r.conf != null && r.conf < 0.4 ? '  (개폐방식 추정)' : ''), 'info');
   const guess = rows.filter(r => r.conf != null && r.conf < 0.4).length;
   logLine('  창호일람표 ' + rows.length + '종을 도면에 그렸습니다'
@@ -14643,6 +14650,10 @@ function buildDXFText() {
       const sig = entSig(e); if (!sig) continue;
       const x = {};
       if (e.bim) x.bim = e.bim;
+      // ★재질도 담는다 — 안 담으면 DXF 로 내보냈다 불러올 때 재료가 통째로 사라진다.
+      //   (판독한 파사드 재료가 왕복에서 없어지는 실제 결함이었다. 999 주석이라 타 CAD 무해)
+      if (e.mat) x.mat = e.mat;
+      if (e.matx) x.matx = e.matx;
       if (e.lightId) x.lightId = e.lightId; // 광원 참조 (속성 본체는 wcx.lights)
       if (e.grp) x.grp = e.grp;
       if (e.zo) x.zo = e.zo;
@@ -15292,6 +15303,8 @@ function applyWcxExt(text) {
       const q = map.get(sig); if (!q || !q.length) continue;
       const x = q.shift();
       if (x.bim) e.bim = JSON.parse(JSON.stringify(x.bim));
+      if (x.mat) e.mat = x.mat;
+      if (x.matx) e.matx = JSON.parse(JSON.stringify(x.matx));
       if (x.lightId) e.lightId = x.lightId;
       else if (x.light) legacyLights.push([e, x.light]); // 구버전(e.light) → 아래에서 LightSource로 변환
       if (x.grp) e.grp = x.grp;
