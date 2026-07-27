@@ -346,17 +346,42 @@ function buildComplex(spec) {
     const mull = 80;
     const pw = (span - mull * (nP - 1)) / nP;
     const dIdx = isEntry ? (nP >> 1) : -1;
+    // ── 층간 스팬드럴 ──
+    // 한 장의 거대한 유리로 두면 층 리듬이 없어 매스처럼 보인다. 층마다 유리를 끊고
+    // 그 사이를 불투명 띠(스팬드럴)로 남기면 입면에 수평 리듬이 생긴다(커튼월의 기본 구성).
+    const Ht = Hc || H;
+    const nf = Math.max(1, o.floors);
+    const bandH = Ht / nf, SPAND = Math.min(700, Math.max(400, bandH * 0.22));
     for (let k = 0; k < nP; k++) {
       const s0 = m + k * (pw + mull);
-      const e = br.addEntity({ type: 'LINE', layer: '개구부',
-        x1: Math.round(FL[0] + ux * s0), y1: Math.round(FL[1] + uy * s0),
-        x2: Math.round(FL[0] + ux * (s0 + pw)), y2: Math.round(FL[1] + uy * (s0 + pw)) });
-      if (k === dIdx) { e.bim = { kind: 'opening', ot: 'door', wt: 'single', h: 2100, sill: 0, t: STD.wallExt }; counts.door++; }
-      else { e.bim = { kind: 'opening', ot: 'window', wt: 'fix', h: (Hc || H) - 400, sill: 150, t: STD.wallExt }; counts.window++; }
+      const P1 = [FL[0] + ux * s0, FL[1] + uy * s0];
+      const P2 = [FL[0] + ux * (s0 + pw), FL[1] + uy * (s0 + pw)];
+      if (k === dIdx) {                              // 출입문 칸: 1층은 문, 위층은 유리
+        const e = br.addEntity({ type: 'LINE', layer: '개구부',
+          x1: Math.round(P1[0]), y1: Math.round(P1[1]), x2: Math.round(P2[0]), y2: Math.round(P2[1]) });
+        e.bim = { kind: 'opening', ot: 'door', wt: 'single', h: 2100, sill: 0, t: STD.wallExt };
+        counts.door++;
+        for (let f = 1; f < nf; f++) {
+          const g2 = br.addEntity({ type: 'LINE', layer: '개구부',
+            x1: Math.round(P1[0]), y1: Math.round(P1[1]), x2: Math.round(P2[0]), y2: Math.round(P2[1]) });
+          g2.bim = { kind: 'opening', ot: 'window', wt: 'fix',
+            h: Math.max(900, bandH - SPAND), sill: Math.round(f * bandH + SPAND * 0.4), t: STD.wallExt };
+          counts.window++;
+        }
+        continue;
+      }
+      for (let f = 0; f < nf; f++) {
+        const e = br.addEntity({ type: 'LINE', layer: '개구부',
+          x1: Math.round(P1[0]), y1: Math.round(P1[1]), x2: Math.round(P2[0]), y2: Math.round(P2[1]) });
+        e.bim = { kind: 'opening', ot: 'window', wt: 'fix',
+          h: Math.max(900, bandH - SPAND),
+          sill: Math.round(f === 0 ? 150 : f * bandH + SPAND * 0.4), t: STD.wallExt };
+        counts.window++;
+      }
     }
   };
 
-  let R = 0, courtC = [o.ox, o.oy];
+  let R = 0, courtC = [o.ox, o.oy], entryFront = null;
 
   if (o.arrange === 'arc') {
     // ── 방사 분할 쐐기(사다리꼴) 배치 ──
@@ -426,7 +451,7 @@ function buildComplex(spec) {
         poly([OS2(PT(aL, r0)), OS2(PT(aR, r0)), OS2(PT(aR, r0 + 240)), OS2(PT(aL, r0 + 240))], o.glass ? '유리' : '벽', prof);
         poly([OS2(PT(aL, r1i - 240)), OS2(PT(aR, r1i - 240)), OS2(PT(aR, r1i)), OS2(PT(aL, r1i))], '벽', prof);
       }
-      if (o.glass) curtain(FL, FR, i === mid, Hi);
+      if (o.glass) { curtain(FL, FR, i === mid, Hi); if (i === mid) entryFront = [FL, FR]; }
       // 처마돌림(fascia) — 처마 끝을 마감하는 띠. 얇은 벽으로 표현하면 3D 에서 지붕 가장자리가
       // '두께 있는 면'으로 보여 종잇장 같지 않다. 앞/뒤 처마선에만.
       const sgn2 = aL >= aR ? 1 : -1;
@@ -533,6 +558,47 @@ function buildComplex(spec) {
     }
   }
 
+  // ── 진입 계단 ── 기단이 150 올라와 있으므로 문 앞에 디딤판이 필요하다(문턱 13mm 제한).
+  if (entryFront) {
+    const [A9, B9] = entryFront;
+    const dx9 = B9[0] - A9[0], dy9 = B9[1] - A9[1], L9 = Math.hypot(dx9, dy9) || 1;
+    const ux9 = dx9 / L9, uy9 = dy9 / L9, nx9 = -uy9, ny9 = ux9;
+    const hw = 900, dp = 1200;                       // 계단참 폭·깊이
+    const mx9 = (A9[0] + B9[0]) / 2, my9 = (A9[1] + B9[1]) / 2;
+    // 마당 쪽(바깥)으로 내밀어 놓는다
+    const sgn9 = ((mx9 + nx9 * 100) - courtC[0]) ** 2 + ((my9 + ny9 * 100) - courtC[1]) ** 2
+      < ((mx9 - nx9 * 100) - courtC[0]) ** 2 + ((my9 - ny9 * 100) - courtC[1]) ** 2 ? 1 : -1;
+    const st = [
+      [mx9 - ux9 * hw + nx9 * sgn9 * 40, my9 - uy9 * hw + ny9 * sgn9 * 40],
+      [mx9 + ux9 * hw + nx9 * sgn9 * 40, my9 + uy9 * hw + ny9 * sgn9 * 40],
+      [mx9 + ux9 * hw + nx9 * sgn9 * dp, my9 + uy9 * hw + ny9 * sgn9 * dp],
+      [mx9 - ux9 * hw + nx9 * sgn9 * dp, my9 - uy9 * hw + ny9 * sgn9 * dp],
+    ];
+    const sl = br.addEntity({ type: 'LWPOLYLINE', layer: '바닥', closed: true,
+      points: st.map(p => [Math.round(p[0]), Math.round(p[1])]) });
+    sl.bim = { kind: 'slab', t: 120, top: 80 };      // 기단(150)의 절반 높이 디딤판 (두께를 달리해 바닥판과 구분)
+    counts.slab++;
+  }
+  // ── 스케일 앵커 ── 인물 1.7m·차량 4.5×1.8m. 매스만 보면 크기 감각이 0이라
+  //   비례 오류를 못 잡는다(리서치: 매스 단계에서 비용 대비 효과가 가장 큰 요소).
+  //   인쇄에는 빠지도록 별도 레이어.
+  if (R > 0) {
+    br.ensureLayer('참조', '#8fa3c8');
+    const pl = (br.state && br.state.layers || []).find(l => l.name === '참조');
+    if (pl) pl.plot = false;                        // 인쇄·내보내기에서는 빠진다
+    const person = (px, py) => {
+      const e = br.addEntity({ type: 'CIRCLE', layer: '참조', cx: Math.round(px), cy: Math.round(py), r: 220 });
+      e.bim = { kind: 'mass', base: 0, h: 1700 };
+    };
+    person(courtC[0] - R * 0.5, courtC[1] + R * 0.15);
+    person(courtC[0] - R * 0.5 + 700, courtC[1] + R * 0.15 - 400);
+    const car = br.addEntity({ type: 'LWPOLYLINE', layer: '참조', closed: true, points: [
+      [Math.round(courtC[0] + R * 0.55), Math.round(courtC[1] - 900)],
+      [Math.round(courtC[0] + R * 0.55 + 4500), Math.round(courtC[1] - 900)],
+      [Math.round(courtC[0] + R * 0.55 + 4500), Math.round(courtC[1] + 900)],
+      [Math.round(courtC[0] + R * 0.55), Math.round(courtC[1] + 900)]] });
+    car.bim = { kind: 'mass', base: 0, h: 1450, taper: 0.72 };
+  }
   if (R > 0) {                                        // 마당 — 방사형 수레바퀴 잔디
     const cx = Math.round(courtC[0]), cy = Math.round(courtC[1]), Rr = Math.round(R);
     const ct = br.addEntity({ type: 'CIRCLE', layer: '조경', cx, cy, r: Rr });

@@ -3160,6 +3160,24 @@ function tests(){
         const oSol = solW.filter(s0 => oIds.has(s0.eid));
         ok(oSol.length > 0 && oSol.every(s0 => s0.ptop), '★개구부(커튼월)도 같은 기울기 면 위에 (' + oSol.length + ')');
         C.state.entities.length = bWl;
+        // ★마감 — 층간 스팬드럴(입면 리듬)·진입 계단·스케일 앵커
+        {
+          const bF = C.state.entities.length;
+          A0.buildComplex({ count: 5, floors: 3, w: 8000, d: 12000, roof: 'gable', arrange: 'arc', attached: true });
+          const eF = C.state.entities.slice(bF);
+          const winF = eF.filter(e0 => e0.bim && e0.bim.kind === 'opening' && e0.bim.ot === 'window');
+          const sills = [...new Set(winF.map(e0 => Math.round(e0.bim.sill / 100) * 100))];
+          eqi(sills.length, 3, '★층간 스팬드럴 — 층마다 유리가 끊긴다 (sill 단계 ' + sills.sort((p, q) => p - q).join('/') + ')');
+          ok(eF.some(e0 => e0.bim && e0.bim.kind === 'slab' && e0.bim.top === 80), '★진입 계단 — 기단 앞 디딤판');
+          const refE = eF.filter(e0 => e0.layer === '참조');
+          ok(refE.length >= 3, '★스케일 앵커 — 인물·차량 프록시 (' + refE.length + ')');
+          const refIds2 = new Set(refE.map(e0 => e0.id));
+          const refSol = C.bimSolids().filter(s0 => refIds2.has(s0.eid));
+          ok(refSol.some(s0 => Math.abs(s0.z1 - 1700) < 50), '  인물 1.7m');
+          const refLay = C.state.layers.find(l0 => l0.name === '참조');
+          ok(refLay && refLay.plot === false, '  참조 레이어는 인쇄에서 빠진다');
+          C.state.entities.length = bF;
+        }
         // ★동별 깊이 — 배치 종류와 무관하게 반영되고, 그래도 겹치지 않아야 한다
         {
           const inP = (P8, x8, y8) => { let c8 = false;
@@ -3215,8 +3233,9 @@ function tests(){
         const bWl0 = C.state.entities.length;
         A0.buildComplex({ count: 5, floors: 1, w: 8000, d: 12000, roof: 'gable', arrange: 'arc', attached: true, lean: 0 });
         const eWl0 = C.state.entities.slice(bWl0);
-        eqi(C.bimSolids().filter(s0 => s0.ptop && eWl0.some(x0 => x0.id === s0.eid)).length, 0,
-          '  기울기 0 이면 벽·개구부도 수직 (기존 동작 유지)');
+        const bodyIds0 = new Set(eWl0.filter(x0 => x0.layer !== '참조').map(x0 => x0.id));
+        eqi(C.bimSolids().filter(s0 => s0.ptop && bodyIds0.has(s0.eid)).length, 0,
+          '  기울기 0 이면 벽·개구부도 수직 (참조 프록시는 제외)');
         C.state.entities.length = bWl0;
       }
       { // API 없이 — 건축 지식 엔진(arch) · 이미지 벡터화(vision) · 로컬 코워커
@@ -3562,7 +3581,7 @@ function tests(){
                 '★부채꼴 — 그림 왼쪽 동이 도면에서도 왼쪽 (좌우 뒤집힘 방지)');
               ok(arcR.widths[4] > arcR.widths[0] * 1.5, '★동별 폭 반영 — 가장 넓은 동이 실제로 넓다 ('
                 + arcR.widths.map(v => (v / 1000).toFixed(0)).join('/') + 'm)');
-              const yard = ae.find(e6 => e6.type === 'CIRCLE');
+              const yard = ae.find(e6 => e6.type === 'CIRCLE' && e6.layer === '조경');   // 참조 프록시(인물)도 원이다
               const frontY = Math.min.apply(null, ae.filter(e6 => e6.bim && e6.bim.kind === 'roof')
                 .flatMap(e6 => e6.points.map(p => p[1])));
               ok(yard && (yard.cy + yard.r) - frontY > -6000 && (yard.cy + yard.r) - frontY < 6000,
