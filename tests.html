@@ -3621,6 +3621,18 @@ function tests(){
                 }).then(w5 => {
                   const s5 = scoreW(w5, GTW);
                   ok(s5.u <= 0.06, '  반대로 기울여도 (u ' + s5.u + ')');
+                  // ★창이 그려져 있으면 기울기 판독이 무너지던 버그 — 동별 측정 창이 벽 대신
+                  //   창틀을 모서리로 잡아 -0.25 그림이 -0.54 로 읽혔다(16도 오차). 기존 기울기
+                  //   테스트는 '큰 유리면'만 그려서 이걸 못 잡았다. 작은 창으로 고정한다.
+                  return [-0.30, -0.15, 0.15, 0.30].reduce((p7, sk7) =>
+                    p7.then(acc7 => VZ.traceConcept(mkW(GTW, { lean: sk7 })).then(r7 => {
+                      const wnt = Math.atan(sk7) * 180 / Math.PI, gt7 = Math.atan(r7.lean) * 180 / Math.PI;
+                      return acc7.concat([[wnt, gt7, Math.abs(gt7 - wnt)]]);
+                    })), Promise.resolve([]));
+                }).then(rows7 => {
+                  const worst7 = Math.max.apply(null, rows7.map(r7 => r7[2]));
+                  ok(worst7 < 3, '★창을 그려도 기울기가 안 무너진다 — 최대 오차 ' + worst7.toFixed(1)
+                    + '도 (' + rows7.map(r7 => r7[0].toFixed(0) + '→' + r7[1].toFixed(0)).join(', ') + ')');
                   return VZ.traceConcept(mkW([[], [], []]));
                 }).then(w6 => {
                   eqi((w6.massList || []).reduce((a2, m2) => a2 + ((m2.wins || []).length), 0), 0,

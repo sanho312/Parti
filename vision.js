@@ -722,11 +722,19 @@ async function traceConcept(src, opts) {
     leanAvg += ln; leanN++;
   }
   leanAvg = leanN ? leanAvg / leanN : 0;
-  // ★크기는 바깥 실루엣(가림 없음)을 믿는다 — 안쪽 동은 이웃에 가려 항상 작게 나온다.
-  if (clusterLean != null && Math.abs(clusterLean) > Math.abs(leanAvg)) {
-    const k = Math.abs(leanAvg) > 1e-3 ? clusterLean / leanAvg : 1;
-    if (isFinite(k) && k > 0) for (const mm of massList)
-      mm.lean = +Math.max(-0.9, Math.min(0.9, mm.lean * k)).toFixed(3);
+  // ── 어느 값을 믿을 것인가 ──
+  // ★붙어 있는 동은 자기 좌·우 모서리를 이웃에 가려 못 보여준다. 그 상태에서 창까지 그려져
+  //   있으면 측정 창 안에서 '벽 대신 창틀'을 모서리로 잡아 값이 통째로 튄다
+  //   (실측: -0.25 로 그린 그림에서 동별 -0.656/-0.667/-0.296, 무리 평균 -0.54.
+  //    같은 그림에서 창만 지우면 -0.25/-0.25/-0.247 로 정확했다).
+  //   예전에는 '무리 값이 더 클 때만' 믿었는데, 이 오염은 값을 부풀리는 쪽이라 그 조건이
+  //   거꾸로 작동해 오염된 값이 이겼다. 바깥 실루엣은 아무것도 가리지 않으므로 항상 옳다.
+  //   ※'붙어 있을 때만' 무리 값을 쓰는 것으로 먼저 고쳤으나, 떨어진 동에서도 기울기 0.25
+  //     이상이면 같은 오염이 났다(창 위치 오차 0.15). 가림이 아니라 '창' 자체가 원인이므로
+  //     동별 측정은 조건 없이 버린다. 잃는 것은 '동마다 다른 기울기'인데, 그건 애초에
+  //     신뢰성 있게 잰 적이 없다(깊이 때와 같은 결론).
+  if (clusterLean != null) {
+    for (const mm of massList) mm.lean = +clusterLean.toFixed(3);
     leanAvg = clusterLean;
   }
 
@@ -764,7 +772,10 @@ async function traceConcept(src, opts) {
   //   되고 폭이 0 이 된다(실측: 기울인 그림에서 3동 중 2동이 통째로 버려졌다).
   //   건물 밑단은 그림에 '가로선'으로 그려져 있으므로, 바닥선 근처에서 잉크가 가장 많은
   //   행을 골라 그 행의 연속 구간을 쓴다. 이 값은 기울기와 무관한 실측값이다.
-  const baseSpan = (a4, b4) => {
+  //   ※무리 전체(whole=true)는 틈을 건너 좌·우 끝을 쓰고, 동 하나는 '가장 긴 연속 구간'을
+  //     쓴다. 끝에서 끝으로 재면 기울어 다가온 이웃의 밑단까지 삼켜 창이 밀린다
+  //     (실측: 떨어진 동 + 기울기 0.25 이상에서 u 오차 0.15).
+  const baseSpan = (a4, b4, whole) => {
     let bestY = -1, bestN = -1;
     for (let dy = -2; dy <= 2; dy++) {
       const y = baseY + dy; if (y < 0 || y >= h) continue;
@@ -773,11 +784,27 @@ async function traceConcept(src, opts) {
       if (n > bestN) { bestN = n; bestY = y; }
     }
     if (bestY < 0 || bestN <= 0) return null;
-    let p0 = -1, p1 = -1;
-    for (let x = a4; x <= b4; x++) if (bldg[bestY * w + x]) { if (p0 < 0) p0 = x; p1 = x; }
-    return [p0, p1];
+    if (whole) {
+      let p0 = -1, p1 = -1;
+      for (let x = a4; x <= b4; x++) if (bldg[bestY * w + x]) { if (p0 < 0) p0 = x; p1 = x; }
+      return [p0, p1];
+    }
+    let s0 = -1, bs = -1, be = -1, gapRun = 0;
+    for (let x = a4; x <= b4 + 1; x++) {
+      const on = x <= b4 && !!bldg[bestY * w + x];
+      if (on) { if (s0 < 0) s0 = x; gapRun = 0; }
+      else if (s0 >= 0) {
+        gapRun++;
+        if (gapRun > 3 || x > b4) {                 // 3px 이하 끊김은 손그림 붓 끊김으로 본다
+          const e0 = x - gapRun;
+          if (e0 - s0 > be - bs) { bs = s0; be = e0; }
+          s0 = -1; gapRun = 0;
+        }
+      }
+    }
+    return bs >= 0 ? [bs, be] : null;
   };
-  const clB = baseSpan(0, w - 1) || [fa, fb];
+  const clB = baseSpan(0, w - 1, true) || [fa, fb];
   const winsOf = (x0, x1, eh) => {
     const wd = x1 - x0 + 1, ht = Math.round(eh);
     if (wd < 12 || ht < 12) return null;
