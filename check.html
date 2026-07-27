@@ -141,9 +141,30 @@ async function run(dataUrl, name) {
         'mut'],
       ['높이 비율', (cp.massList || []).map(m => (m.hFrac * 100).toFixed(0) + '%').join(' / ') || '-', 'mut'],
     ]));
+    // ★왜 그렇게 읽었는지 — 판정의 근거가 된 내부 값. 틀린 값을 봤을 때 '어디서'가 여기 있다.
+    const m = cp.meta || {};
+    html.push(table('② 왜 그렇게 읽었나 (판정 근거)', [
+      ['봉우리 자리', (cp.peaks || []).join(', ') + ' (px)'],
+      ['봉우리 평균 돌출 / 최고 높이', m.promAvg + ' / ' + m.maxH
+        + '  →  ' + (m.maxH ? (m.promAvg / m.maxH).toFixed(3) : '-') + ' (0.08 넘어야 박공)'],
+      ['고원 비율', m.plateau + ' (0.42 미만이라야 박공)'],
+      ['초록 비율 (수목)', m.greenRatio],
+      ['파랑 비율 (유리)', m.blueRatio + ' (0.008 넘으면 커튼월)'],
+      ['마당', (m.courtyard ? '있음' : '없음') + (m.courtFront ? ' · 앞마당' : '')
+        + (m.enclosed ? ' · 둘러쌈' : '')],
+      ['덩어리(연결요소) 수', m.comps],
+      ['가로 블록', m.blocks + '개  ' + JSON.stringify(m.block || [])],
+      ['지면선 y', m.baseY + ' (그림 높이 ' + m.h + ')'],
+      ['처마 비율', m.eaveRatio],
+      ['잉크 임계', m.inkThr],
+    ]));
     // ③ 한 문장으로 전부 — 실제로 돌린다
     busy.textContent = '세우는 중…';
-    const n0 = C.state.entities.length;
+    // ★매번 빈 도면에서 시작한다. 앞서 검사한 그림이 남아 있으면 실·면적이 두 배로 잡혀
+    //   '판독은 3동인데 실이 84개' 같은 읽을 수 없는 표가 된다(실측으로 걸렸다).
+    C.switchDoc(0, true);
+    C.state.entities.length = 0;
+    C.state.planFloor = null;
     const AI = AW.__WEBCAD_AI_TEST__ || AW.PARTI_AI;
     const rep = AI && (AI.localReply || AI.reply);
     let reply = '(코워커 훅 없음)';
