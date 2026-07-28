@@ -33,6 +33,20 @@ function record(ok, msg){
   const d=document.createElement('div'); d.className='case '+(ok?'pass':'fail');
   d.textContent=(ok?'  ✓ ':'  ✗ ')+msg; R.appendChild(d);
   ok?pass++:fail++;
+  // ★요약은 기록이 멎은 뒤에 다시 센다.
+  //   예전에는 finishAsync() 때만 갱신했는데, 비동기 묶음이 여럿이라 '마지막으로 끝난 묶음'
+  //   이 '마지막으로 기록한 묶음'과 달랐다 — 그래서 화면에는 1730개가 찍혀 있는데 요약은
+  //   1357 이라고 하는 일이 생겼다(실측). 숫자를 못 믿으면 회귀 자체가 쓸모없어진다.
+  settleSummary();
+}
+let settleT = 0, lastSum = 0;
+function settleSummary(){
+  // 기록이 멎으면 바로, 계속 이어지면 최소 1초마다 — 디바운스만 두면 기록이 촘촘할 때
+  // 영영 안 터져서 요약이 옛 숫자에 멈춘다(실측: DOM 1437개인데 요약은 1357).
+  const now = Date.now();
+  if (now - lastSum > 1000) { lastSum = now; updateSummary(); }
+  clearTimeout(settleT);
+  settleT = setTimeout(() => { lastSum = Date.now(); updateSummary(); }, 400);
 }
 const near = (a,b,tol=1e-6)=>Math.abs(a-b)<=tol;
 function ok(cond,msg){ record(!!cond,msg); }
@@ -6541,6 +6555,26 @@ function tests(){
     //   사용자가 보고 있는 진짜 Parti 탭의 연결을 빼앗는다(서버는 클라이언트를 하나만 둔다).
     if (M) ok(M.connected === false, '★iframe 안에서는 브리지에 연결하지 않는다 (진짜 탭의 연결을 뺏지 않음)');
 
+    // ★"왜 로컬 모드지?" 에 답하는 자리가 있어야 한다 — 예전에는 붙지 못한 자리에서
+    //   mcp.js 가 통째로 return 해 버려서, 물어볼 곳조차 없었다.
+    if (M) {
+      ok(typeof M.diagnose === 'function' && typeof M.openDialog === 'function',
+        '★진단·연결 안내 API 가 있다 (diagnose · openDialog)');
+      const btn = W.document.getElementById('aiMcpBtn');
+      ok(!!btn, '★코워커 패널에 MCP 연결 단추가 있다');
+      ok(/MCP/.test(btn ? btn.textContent : ''), '  라벨이 MCP');
+      ok(!!(btn && btn.querySelector('.dot')), '  상태 점이 있다 (색이 곧 연결 상태)');
+      M.openDialog();
+      const dl = W.document.getElementById('mcpDlg');
+      ok(!!dl, '★단추를 누르면 진단창이 뜬다');
+      if (dl) {
+        // 창은 비동기로 채워진다 — 뼈대만 확인하고 닫는다(내용은 아래 비동기 블록에서)
+        ok(!!dl.querySelector('.box'), '  창 뼈대');
+        M.closeDialog();
+        ok(!W.document.getElementById('mcpDlg'), '  닫으면 사라진다');
+      }
+    }
+
     if (M && AI) {
       // 호출 1건 = undo 1단계
       reset();
@@ -6701,6 +6735,53 @@ function tests(){
           finishAsync();
         })
         .catch(e => { record(false, '로컬 분기 검사 오류: ' + e.message); finishAsync(); });
+    }
+  }
+
+  // ---------- 2026-07-28 MCP 진단창 — 세 조각을 갈라서 짚는다 (비동기) ----------
+  {
+    const W = document.getElementById('app').contentWindow;
+    const M = W.PARTI_MCP;
+    if (M && M.diagnose) {
+      M.diagnose().then(g => {
+        group('MCP 진단 — 어느 조각이 빠졌는지 갈라서 짚는다');
+        // ★서버·브라우저·Claude 를 각각 따로 판정해야, 사용자가 무엇을 해야 하는지 알 수 있다
+        for (const k of ['server', 'browser', 'claude', 'servedByBridge', 'eligible', 'probeUrl'])
+          ok(k in g, '  진단에 ' + k + ' 가 있다');
+        ok(typeof g.browser === 'boolean' && typeof g.claude === 'boolean',
+          '★브라우저 연결과 Claude 연결을 따로 판정한다 (한 덩어리로 뭉뚱그리지 않는다)');
+        // 테스트 iframe 은 브리지에 붙지 않으므로 browser 는 false 여야 한다
+        eqi(g.browser, false, '  iframe 은 붙지 않았다고 정확히 답한다');
+        ok(/^https?:\/\//.test(g.probeUrl), '  확인해 볼 주소를 들고 있다 (' + g.probeUrl + ')');
+        M.openDialog();
+        // 창은 fetch 로 채워진다 — 고정 대기 대신 실제로 채워질 때까지 기다린다
+        return new Promise(res => {
+          const t0 = Date.now();
+          const tick = () => {
+            const b = W.document.querySelector('#mcpDlg .box');
+            if ((b && b.querySelectorAll('.step').length >= 3) || Date.now() - t0 > 6000) res();
+            else setTimeout(tick, 150);
+          };
+          tick();
+        });
+      }).then(() => {
+          const dl = W.document.getElementById('mcpDlg');
+          const box = dl && dl.querySelector('.box');
+          ok(!!box && box.querySelectorAll('.step').length === 3,
+            '★창이 세 조각(서버·브라우저·Claude)을 각각 한 줄로 보여 준다');
+          const txt = box ? box.textContent : '';
+          ok(/서버/.test(txt) && /Claude/.test(txt), '  세 조각의 이름이 보인다');
+          // ★막힌 단계에는 '무엇을 하면 되는지' 가 실행 가능한 형태로 있어야 한다
+          const marks = [...box.querySelectorAll('.step')].map(s => s.querySelector('.mark').textContent);
+          const stuck = marks.filter(m => m === '❌').length;
+          if (stuck) {
+            ok(box.querySelectorAll('code').length > 0 || box.querySelectorAll('button').length > 1,
+              '★막힌 단계에는 복사할 명령이나 누를 단추가 함께 있다');
+          } else ok(true, '  (전부 연결된 상태)');
+          M.closeDialog();
+          finishAsync();
+        })
+        .catch(e => { record(false, 'MCP 진단창 오류: ' + e.message); try { M.closeDialog(); } catch (e2) {} finishAsync(); });
     }
   }
 

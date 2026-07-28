@@ -43,10 +43,14 @@
 
   let OPT = '';
   try { OPT = localStorage.getItem('parti_mcp_url') || ''; } catch (e) {}
-  // 루프백이거나, 평문 http 로 열렸고 토큰이 있으면(=브리지가 준 주소) 동작한다.
-  if (!LOOP && !(PLAIN && TOKEN) && !OPT) return;
-  const BASE = (LOOP || (PLAIN && TOKEN)) ? '' : OPT.replace(/\/+$/, '');
+  // 루프백이거나, 평문 http 로 열렸고 토큰이 있으면(=브리지가 준 주소) 붙을 수 있다.
+  // ★붙을 수 없어도 이 파일은 끝까지 실행된다 — 진단·안내는 어디서든 해야 하기 때문이다.
+  //   (예전엔 여기서 return 해 버려서, 정작 "왜 연결이 안 되나" 를 물을 곳이 없었다.)
+  const ELIGIBLE = LOOP || (PLAIN && !!TOKEN) || !!OPT;
+  const BASE = (LOOP || (PLAIN && TOKEN)) ? '' : (OPT || '').replace(/\/+$/, '');
   const q = TOKEN ? ('?t=' + encodeURIComponent(TOKEN)) : '';
+  // 이 페이지가 브리지가 준 것이 아닐 때, '거기 서버가 떠 있나' 를 물어볼 곳
+  const PROBE = BASE || 'http://127.0.0.1:7391';
 
   const AI = () => window.WEBCAD_AI || window.__WEBCAD_AI_TEST__ || null;
   const C = () => window.__CADTEST__ || null;
@@ -72,8 +76,10 @@
         + 'background:var(--glass-fill,rgba(20,24,32,.72));border-radius:999px;padding:3px 9px';
       document.body.appendChild(chip);
     }
-    // 눌러서 재연결 — 끊겼을 때나 다른 탭에 자리를 뺏겼을 때 되찾는 유일한 수단
-    chip.addEventListener('click', () => { try { connect(); } catch (e) {} });
+    // ★눌러서 진단창 — 왜 안 붙었는지 알려주고 거기서 바로 잇는다.
+    //   (예전엔 조용히 재연결만 해서, 서버가 꺼져 있으면 아무 반응도 없었다.)
+    chip.style.cursor = 'pointer';
+    chip.addEventListener('click', () => { try { openDialog(); } catch (e) {} });
     return chip;
   }
   function setDot(cssVar, tip, on) {
@@ -341,8 +347,195 @@
     try { B().logLine('MCP 브리지 준비 — parti-mcp 서버에 연결합니다.', 'info'); } catch (e) {}
   }
   if (TOP) {
-    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => setTimeout(start, 300));
-    else setTimeout(start, 300);
+    const boot = () => setTimeout(() => {
+      if (ELIGIBLE) start();
+      // ★붙을 수 없는 자리에서도 칩은 띄운다 — 눌러서 '무엇을 해야 하나' 를 볼 수 있어야 한다.
+      else setDot('var(--muted,#888)', '연결 안 됨 — 눌러서 연결 방법 보기', false);
+    }, 300);
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+    else boot();
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  //  진단 + 연결 안내 — "왜 로컬 모드지?" 에 답하는 곳
+  //
+  //  MCP 는 세 조각이 다 붙어야 동작한다. 하나라도 빠지면 코워커가 로컬이라고 말하는데,
+  //  예전에는 어느 조각이 빠졌는지 알 길이 없었다.
+  //    ① 서버   — node parti-mcp/server.js 가 떠 있는가
+  //    ② 브라우저 — 이 탭이 그 서버가 준 페이지이고 브리지에 붙었는가
+  //    ③ Claude  — Claude Code 가 그 서버를 MCP 로 붙였는가 (서버가 initialize 를 받았는가)
+  // ═══════════════════════════════════════════════════════════════════════════
+  async function probe(base) {
+    try {
+      const r = await fetch(base + '/bridge/status' + q, { cache: 'no-store' });
+      if (r.status === 403) return { up: true, forbidden: true };
+      if (!r.ok) return { up: true, bad: r.status };
+      return Object.assign({ up: true }, await r.json());
+    } catch (e) { return { up: false, err: String((e && e.message) || e) }; }
+  }
+  async function diagnose() {
+    const st = await probe(PROBE);
+    return {
+      probeUrl: PROBE,
+      servedByBridge: ELIGIBLE && BASE === '',
+      eligible: ELIGIBLE,
+      https: location.protocol === 'https:',
+      origin: location.origin,
+      server: st,
+      browser: !!(es && es.readyState === 1),
+      claude: !!st.claude,
+    };
+  }
+
+  const esc = (s) => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
+  function dlgStyle() {
+    if (document.getElementById('mcpDlgCss')) return;
+    const st = document.createElement('style');
+    st.id = 'mcpDlgCss';
+    st.textContent = `
+    #mcpDlg{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;
+      background:rgba(0,0,0,.45)}
+    #mcpDlg .box{width:min(560px,calc(100vw - 32px));max-height:calc(100vh - 60px);overflow:auto;
+      background:var(--panel,#141922);color:var(--text,#e7ecf5);border:1px solid var(--line,#2a3242);
+      border-radius:14px;box-shadow:var(--shadow-pop,0 18px 60px rgba(0,0,0,.5));padding:18px 20px;
+      font:13px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif}
+    #mcpDlg h3{margin:0 0 4px;font-size:15px;display:flex;align-items:center;gap:8px}
+    #mcpDlg .sub{color:var(--muted,#8fa3c8);font-size:12px;margin-bottom:14px}
+    #mcpDlg .step{display:flex;gap:10px;padding:9px 0;border-top:1px solid var(--line,#2a3242)}
+    #mcpDlg .mark{flex:0 0 20px;font-size:15px;line-height:1.4}
+    #mcpDlg .body{flex:1;min-width:0}
+    #mcpDlg .t{font-weight:600}
+    #mcpDlg .d{color:var(--muted,#8fa3c8);font-size:12px;margin-top:2px}
+    #mcpDlg code{display:block;margin-top:7px;padding:8px 10px;border-radius:8px;
+      background:var(--glass-fill,rgba(255,255,255,.06));font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;
+      white-space:pre-wrap;word-break:break-all;user-select:all}
+    #mcpDlg .row{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
+    #mcpDlg button{background:var(--accent,#0A84FF);color:#fff;border:none;border-radius:8px;
+      padding:7px 13px;cursor:pointer;font-size:12px;font-weight:600}
+    #mcpDlg button.ghost{background:var(--glass-fill,rgba(255,255,255,.08));color:var(--text,#e7ecf5)}
+    #mcpDlg .foot{display:flex;justify-content:space-between;align-items:center;margin-top:16px;
+      padding-top:12px;border-top:1px solid var(--line,#2a3242)}`;
+    document.head.appendChild(st);
+  }
+
+  function copyBtn(text, label) {
+    const b = document.createElement('button');
+    b.className = 'ghost'; b.textContent = label || '복사';
+    b.addEventListener('click', () => {
+      const done = () => { const o = b.textContent; b.textContent = '복사됨 ✓'; setTimeout(() => { b.textContent = o; }, 1400); };
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, done);
+        else { const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta);
+          ta.select(); document.execCommand('copy'); ta.remove(); done(); }
+      } catch (e) { done(); }
+    });
+    return b;
+  }
+
+  function step(mark, title, desc, extras) {
+    const d = document.createElement('div'); d.className = 'step';
+    d.innerHTML = '<div class="mark">' + mark + '</div><div class="body"><div class="t">'
+      + esc(title) + '</div>' + (desc ? '<div class="d">' + desc + '</div>' : '') + '</div>';
+    const body = d.querySelector('.body');
+    for (const e of (extras || [])) body.appendChild(e);
+    return d;
+  }
+  function cmdBlock(text) { const c = document.createElement('code'); c.textContent = text; return c; }
+  function rowOf(...els) { const r = document.createElement('div'); r.className = 'row'; for (const e of els) if (e) r.appendChild(e); return r; }
+
+  let dlg = null, dlgTimer = 0;
+  async function render() {
+    if (!dlg) return;
+    const g = await diagnose();
+    const root = (g.server && g.server.root) || 'C:\\Parti';
+    const port = (g.server && g.server.port) || 7391;
+    const runCmd = 'node parti-mcp/server.js';
+    const addCmd = 'claude mcp add parti -- node ' + root.replace(/\\/g, '/') + '/parti-mcp/server.js';
+    const box = dlg.querySelector('.box');
+    box.innerHTML = '<h3>MCP 연결</h3><div class="sub">Claude 가 이 도면을 직접 만지게 합니다. '
+      + '세 조각이 다 붙어야 동작합니다.</div>';
+
+    // ① 서버
+    if (g.server.up) {
+      box.appendChild(step('✅', 'parti-mcp 서버가 떠 있습니다',
+        esc(root) + ' · 포트 ' + port + (g.server.tools ? ' · 도구 ' + g.server.tools + '개' : '')));
+    } else {
+      box.appendChild(step('❌', 'parti-mcp 서버가 꺼져 있습니다',
+        g.https ? '이 페이지는 https 라 로컬 서버를 확인하지 못할 수도 있습니다.'
+          : 'Parti 폴더에서 아래를 실행하세요. 아이패드에서도 쓰려면 <b>--lan</b> 을 붙입니다.',
+        [cmdBlock(runCmd), rowOf(copyBtn(runCmd, '명령 복사'), copyBtn(runCmd + ' --lan', 'LAN 모드 복사'))]));
+    }
+
+    // ② 브라우저
+    if (g.browser) {
+      box.appendChild(step('✅', '이 탭이 브리지에 붙었습니다', esc(g.origin)));
+    } else if (!g.servedByBridge) {
+      const open = document.createElement('button');
+      open.textContent = PROBE + '/ 로 열기';
+      open.addEventListener('click', () => { location.href = PROBE + '/'; });
+      box.appendChild(step('❌', '이 페이지는 브리지가 준 것이 아닙니다',
+        '지금 주소는 <b>' + esc(g.origin) + '</b> 입니다. MCP 는 서버가 직접 서빙한 주소에서만 붙습니다 — '
+        + '그래야 같은 출처가 되어 브라우저가 막지 않습니다.'
+        + (g.https ? '<br>배포본(https)에서는 쓸 수 없습니다. 데스크톱에서 로컬 주소로 열어 주세요.' : ''),
+        [rowOf(g.server.up ? open : null, copyBtn(PROBE + '/', '주소 복사'))]));
+    } else {
+      const re = document.createElement('button');
+      re.textContent = '다시 연결';
+      re.addEventListener('click', () => { connect(); setTimeout(render, 700); });
+      box.appendChild(step('❌', '브리지에 붙지 않았습니다',
+        g.server.forbidden ? '토큰이 맞지 않습니다 — 서버를 다시 켰다면 새 주소(?t=…)로 여세요.'
+          : g.server.up ? '서버는 떠 있습니다. 다시 연결해 보세요.' : '서버부터 켜 주세요.',
+        [rowOf(re)]));
+    }
+
+    // ③ Claude
+    if (g.claude) {
+      const c = g.server.client || {};
+      box.appendChild(step('✅', 'Claude 가 붙었습니다',
+        esc((c.name || '') + ' ' + (c.version || '')) + ' — 이제 Claude 에게 그냥 말하면 됩니다.'));
+    } else {
+      box.appendChild(step('❌', 'Claude 가 아직 붙지 않았습니다',
+        '이 저장소에는 <b>.mcp.json</b> 이 있어서, <b>' + esc(root) + '</b> 에서 Claude Code 를 열면 '
+        + '<b>parti</b> 서버를 쓸지 물어봅니다 — 승인하면 끝입니다.<br>'
+        + '이미 열려 있다면 <b>한 번 껐다 켜야</b> 합니다(MCP 설정은 시작할 때 읽습니다).<br>'
+        + '다른 폴더에서 쓰려면 아래 명령으로 등록하세요.',
+        [cmdBlock(addCmd), rowOf(copyBtn(addCmd, '등록 명령 복사'))]));
+    }
+
+    const foot = document.createElement('div'); foot.className = 'foot';
+    const hint = document.createElement('span');
+    hint.style.cssText = 'color:var(--muted,#8fa3c8);font-size:11px';
+    hint.textContent = g.browser && g.claude ? '전부 연결됨' : '3초마다 다시 확인합니다';
+    const close = document.createElement('button');
+    close.className = 'ghost'; close.textContent = '닫기';
+    close.addEventListener('click', closeDialog);
+    foot.appendChild(hint); foot.appendChild(close);
+    box.appendChild(foot);
+  }
+
+  function closeDialog() {
+    if (dlgTimer) { clearInterval(dlgTimer); dlgTimer = 0; }
+    if (dlg) { dlg.remove(); dlg = null; }
+  }
+  function openDialog() {
+    if (dlg) { render(); return; }
+    dlgStyle();
+    dlg = document.createElement('div');
+    dlg.id = 'mcpDlg';
+    dlg.innerHTML = '<div class="box"></div>';
+    dlg.addEventListener('click', (e) => { if (e.target === dlg) closeDialog(); });
+    document.body.appendChild(dlg);
+    render();
+    // ★열어 둔 채로 서버를 켜면 바로 초록으로 바뀌어야 한다 — 그게 '한 번에 연결'의 실체다.
+    //   ★단 iframe 안에서는 절대 붙지 않는다. 이 자동 연결이 TOP 가드를 무시하면
+    //   tests.html 이 진단창을 여는 순간 임베드된 Parti 가 브리지를 가로채,
+    //   사용자가 보고 있는 진짜 탭의 연결을 빼앗는다(실측으로 잡았다).
+    dlgTimer = setInterval(async () => {
+      if (!dlg) return;
+      if (TOP && ELIGIBLE && !(es && es.readyState === 1)) { const s = await probe(PROBE); if (s.up) connect(); }
+      render();
+    }, 3000);
   }
 
   // ── 노드 어휘 사전 (get_node_reference) ────────────────────────────────────
@@ -394,5 +587,6 @@
     '그래프는 매번 전체 교체이므로 수정 시 action:"get" 으로 현재 스펙을 받아 전체를 다시 보낼 것.',
   ].join('\n');
 
-  window.PARTI_MCP = { dispatch, connect, OWN, get connected() { return !!es && es.readyState === 1; } };
+  window.PARTI_MCP = { dispatch, connect, OWN, diagnose, openDialog, closeDialog, eligible: ELIGIBLE,
+    get connected() { return !!es && es.readyState === 1; } };
 })();

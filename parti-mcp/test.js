@@ -90,6 +90,26 @@ const lanIP = () => {
   ok(S.got(5) && S.got(5).result, 'ping');
   ok(S.got(6) && S.got(6).error && S.got(6).error.code === -32601, '미지원 메서드는 -32601');
 
+  group('상태 — 어느 조각이 빠졌는지 알려 준다');
+  // ★브라우저 패널이 "왜 로컬 모드지?" 에 답하려면, 서버가 Claude 쪽 상태까지 알려 줘야 한다.
+  //   서버만 떠 있고 Claude 는 안 붙은 상태가 사용자가 가장 헷갈리는 지점이다.
+  {
+    const st = await fetch('http://127.0.0.1:' + PORT + '/bridge/status').then(r => r.json());
+    ok(st.claude === true, '★initialize 를 받았으면 claude:true');
+    ok(st.client && st.client.name === 't', '  붙은 클라이언트 이름을 알려 준다 (' + (st.client && st.client.name) + ')');
+    ok(st.connected === false, '  브라우저는 아직 안 붙었다고 구분해서 알려 준다');
+    ok(st.root && st.port === PORT, '  작업본 경로와 포트 (패널이 등록 명령을 조립하는 데 쓴다)');
+    ok(typeof st.lan === 'boolean', '  LAN 모드 여부');
+  }
+  {
+    // Claude 가 안 붙은 서버는 claude:false 여야 한다 — 위 값이 상수가 아님을 확인
+    const F = start(7394);
+    await wait(700);
+    const st2 = await fetch('http://127.0.0.1:7394/bridge/status').then(r => r.json());
+    ok(st2.claude === false, '★initialize 전에는 claude:false (항상 true 를 내는 게 아니다)');
+    F.proc.kill();
+  }
+
   group('정적 서빙');
   const html = await fetch('http://127.0.0.1:' + PORT + '/').then(r => r.text());
   ok(/<title>/i.test(html), 'GET / 이 Parti index.html 을 준다');

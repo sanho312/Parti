@@ -72,6 +72,9 @@ function lanURLs() {
 // 브라우저 브리지
 // ═══════════════════════════════════════════════════════════════════════════
 let client = null;        // 현재 붙어 있는 Parti 탭 (SSE 응답 객체). 항상 하나만.
+// Claude 쪽이 붙었는가 — initialize 를 받으면 채운다. 브라우저 패널이 '어느 쪽이 빠졌는지'
+// 를 알려 주려면 이 정보가 필요하다(서버만 떠 있고 Claude 는 안 붙은 상태가 제일 헷갈린다).
+let mcpClient = null;
 let clientSeq = 0;
 const pending = new Map(); // callId → {resolve, reject, timer}
 let callSeq = 0;
@@ -212,7 +215,8 @@ const server = http.createServer(async (req, res) => {
   // ── 상태 조회 (사람이 눈으로 확인용) ──
   if (p === '/bridge/status') {
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
-      .end(JSON.stringify({ connected: !!client, root: ROOT, port: PORT, tools: TOOLS.length }));
+      .end(JSON.stringify({ connected: !!client, claude: !!mcpClient, client: mcpClient,
+        root: ROOT, port: PORT, tools: TOOLS.length, lan: LAN, version: SERVER_INFO.version }));
     return;
   }
 
@@ -298,6 +302,9 @@ async function handle(msg) {
     // 클라이언트가 요청한 버전을 그대로 돌려준다 — 우리가 쓰는 것은 tools 하위집합뿐이라
     // 알려진 모든 버전과 호환된다.
     const v = (params && params.protocolVersion) || FALLBACK_PROTOCOL;
+    const ci = (params && params.clientInfo) || {};
+    mcpClient = { name: ci.name || 'unknown', version: ci.version || '', at: new Date().toISOString() };
+    log('Claude 연결됨 — ' + mcpClient.name + ' ' + mcpClient.version);
     reply(id, {
       protocolVersion: v, capabilities: { tools: {} },
       serverInfo: SERVER_INFO, instructions: INSTRUCTIONS,

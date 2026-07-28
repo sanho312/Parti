@@ -558,6 +558,13 @@
   #aiHead b{flex:1;font-size:13px}
   #aiHead button{background:none;border:none;color:#8fa4d4;font-size:14px;cursor:pointer;padding:2px 5px}
   #aiHead button:hover{color:#fff}
+  /* MCP 연결 단추 — 점 색이 곧 상태다 (회색=끊김, 초록=연결) */
+  #aiMcpBtn{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;
+    border:1px solid #2a3760;border-radius:999px;padding:2px 9px 2px 7px;letter-spacing:.02em}
+  #aiMcpBtn .dot{width:6px;height:6px;border-radius:50%;background:#6b7280;flex:0 0 auto}
+  #aiMcpBtn.on{border-color:#2f7d4f;color:#8ee6ac}
+  #aiMcpBtn.on .dot{background:#30d158}
+  #aiMcpBtn:hover{border-color:#4a6bd0}
   #aiMsgs{flex:1;overflow-y:auto;padding:10px;display:flex;flex-direction:column;gap:8px}
   .aiM{max-width:92%;padding:7px 10px;border-radius:10px;white-space:pre-wrap;word-break:break-word}
   .aiM.user{align-self:flex-end;background:#2a54b0;color:#fff;border-bottom-right-radius:3px}
@@ -659,6 +666,22 @@
     const headTitle = h('b');
     headTitle.innerHTML = IC_BOT + ' AI 코워커';
     head.appendChild(headTitle);
+    // ★MCP 연결 단추 — "왜 로컬 모드지?" 에 답하는 자리.
+    //   상태를 색으로 보여 주고, 누르면 어느 조각이 빠졌는지와 거기서 바로 잇는 법을 띄운다.
+    const mcpBtn = h('button', { id: 'aiMcpBtn', title: 'MCP 연결 상태' });
+    mcpBtn.innerHTML = '<span class="dot"></span><span class="lb">MCP</span>';
+    mcpBtn.addEventListener('click', () => {
+      if (window.PARTI_MCP && window.PARTI_MCP.openDialog) window.PARTI_MCP.openDialog();
+      else addMsg('ai', 'MCP 브리지 모듈이 로드되지 않았습니다 — 페이지를 새로고침해 주세요.');
+    });
+    head.appendChild(mcpBtn);
+    // 연결 상태를 주기적으로 비춘다 (표시만 — 연결은 mcp.js 가 한다)
+    setInterval(() => {
+      const on = !!(window.PARTI_MCP && window.PARTI_MCP.connected);
+      mcpBtn.classList.toggle('on', on);
+      mcpBtn.title = on ? 'MCP 연결됨 — Claude 가 이 도면을 만질 수 있습니다'
+        : 'MCP 연결 안 됨 — 눌러서 연결하기';
+    }, 1000);
     const clrBtn = h('button', { title: '대화 초기화' });
     clrBtn.innerHTML = '<svg class="ic" viewBox="0 0 24 24"><path d="M4.5 7h15M9.5 7V5.2A1.2 1.2 0 0 1 10.7 4h2.6a1.2 1.2 0 0 1 1.2 1.2V7M6.5 7l1 12.5h9L17.5 7M10 10.5v6M14 10.5v6"/></svg>';
     clrBtn.addEventListener('click', () => { msgsEl.innerHTML = ''; greet(); });
