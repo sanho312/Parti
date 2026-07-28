@@ -725,7 +725,15 @@
       if (f && f.type.startsWith('image/')) attachImage(f);
     });
     sendBtn = h('button', { id: 'aiSend' }, '보내기');
-    sendBtn.addEventListener('click', () => { if (!busy) submit(); });
+    // ★단추가 '⏹ 중단' 이면 진짜로 중단해야 한다. 예전엔 글자만 바뀌고 눌러도 아무 일이
+    //   없었다(busy 면 submit 이 그냥 빠져나감). MCP 모드는 한 번에 1분도 걸리므로 중요하다.
+    sendBtn.addEventListener('click', () => {
+      if (!busy) { submit(); return; }
+      if (mcpState === 'on' && window.PARTI_MCP && window.PARTI_MCP.stopAsk) {
+        window.PARTI_MCP.stopAsk();
+        addMsg('tool', '⏹ 중단을 요청했습니다');
+      }
+    });
     row.appendChild(clipBtn); row.appendChild(inEl); row.appendChild(sendBtn);
     panel.appendChild(row);
     // AI 토글은 하단 탭 라인(팝업창 줄) — 노드 왼쪽 (2026-07-20, 상단바에서 이동)
@@ -757,14 +765,13 @@
     + 'Parti 폴더(C:\\Parti)에서 Claude Code 를 열고 parti 서버를 승인하세요.\n'
     + '★이미 열어 두셨다면 한 번 껐다 켜야 합니다 — MCP 설정은 시작할 때만 읽습니다.\n\n'
     + '그때까지 아래 입력창은 로컬 모드로 씁니다. 자세한 건 위 MCP 단추를 누르세요.';
-  const GREET_MCP = '🔗 Claude 연결됨 — Claude 가 이 도면을 직접 만질 수 있습니다.\n\n'
-    + '★ Claude Code 창에 말씀하세요.\n'
-    + '   거기서 "3층짜리 두 동 세우고 도면세트 뽑아줘" 처럼 말하면 이 화면의 도면이 바뀝니다.\n'
-    + '   이미지도 Claude Code 창에 붙여 넣으세요 — 이 입력창이 아니라요.\n\n'
-    + '아래 입력창은 로컬 모드로 남아 있습니다 — 키 없이 도는 간단한 명령용입니다\n'
-    + '("10평 원룸 그려줘" · "3D 보여줘" · "도움말").';
+  const GREET_MCP = '🔗 Claude 연결됨 — 여기에 그냥 말하면 됩니다.\n\n'
+    + '예) "3층짜리 두 동 세우고 도면세트 뽑아줘"\n'
+    + '    "이 스케치대로 매스 세워줘" (그림은 왼쪽 클립으로 첨부)\n\n'
+    + '★그림은 화면에서 먼저 판독해 숫자만 넘깁니다 — 원본 이미지는 보내지 않습니다.\n'
+    + '한 마디마다 Claude 가 실제로 돌기 때문에 사용량이 듭니다.';
   const PH_LOCAL = '예: 5000×4000 방 그려줘 · 도면 이미지를 첨부하면 그대로 모델링해 드립니다';
-  const PH_MCP = '로컬 모드 — 자유 대화·이미지는 Claude Code 창에서. 여기서는 "10평 원룸 그려줘" 같은 간단한 명령';
+  const PH_MCP = 'Claude 에게 말하세요 — 예: 3층짜리 두 동 세우고 도면세트 뽑아줘';
   const GREET_OF = { on: GREET_MCP, bridge: GREET_BRIDGE, off: GREET_LOCAL };
   // ★인사말이 먼저 그려질 수도, mcp.js 가 먼저 붙을 수도 있다. 순서에 기대지 않고
   //   그리는 시점에 실제 상태를 물어본다.
@@ -783,9 +790,15 @@
   //   state: 'off'(브리지 없음) · 'bridge'(브리지만) · 'on'(Claude 까지)
   function setMcp(state) {
     try {
+      const was = mcpState;
       mcpState = (state === true) ? 'on' : (state === false ? 'off' : String(state || 'off'));
       if (greetEl && greetEl.isConnected) greetEl.textContent = GREET_OF[mcpState] || GREET_LOCAL;
       if (inEl) inEl.placeholder = mcpState === 'on' ? PH_MCP : PH_LOCAL;
+      // ★연결이 끊기면 '작업 중'을 풀어 준다 — 안 그러면 done 이 영영 안 와서 입력창이 잠긴다.
+      if (was === 'on' && mcpState !== 'on' && busy) {
+        addMsg('err', '연결이 끊겨 요청을 마치지 못했습니다.');
+        busy = false; setBusy(false);
+      }
     } catch (e) {}
   }
   function addMsg(kind, text) {
@@ -799,7 +812,9 @@
   let busyEl = null;
   function setBusy(on) {
     if (sendBtn) { sendBtn.textContent = on ? '⏹ 중단' : '보내기'; sendBtn.disabled = false; }
-    if (on) { busyEl = h('div', { class: 'aiM tool' }, '⋯ 작업 중'); msgsEl.appendChild(busyEl); msgsEl.scrollTop = msgsEl.scrollHeight; }
+    // ★두 번 켜도 표시는 하나여야 한다 — MCP 모드에서는 보낼 때 한 번, 서버의 start 신호로
+    //   또 한 번 켜지는데, 그때마다 붙이면 '작업 중' 줄이 쌓이고 지울 때 하나만 지워진다.
+    if (on && !busyEl) { busyEl = h('div', { class: 'aiM tool' }, '⋯ 작업 중'); msgsEl.appendChild(busyEl); msgsEl.scrollTop = msgsEl.scrollHeight; }
     else if (busyEl) { busyEl.remove(); busyEl = null; }
   }
   // ============================================================
@@ -1341,6 +1356,66 @@
     finally { busy = false; setBusy(false); }
   }
 
+  // 그림 한 장 → 글 몇 줄. ★이미지 자체는 절대 넘기지 않는다 (Parti 의 원칙).
+  //   알고리즘이 읽어낸 값과 '확신도·못 믿을 이유'까지 함께 넘겨야 Claude 가 단정하지 않는다.
+  async function briefOf(img) {
+    const V = window.PARTI_VISION;
+    if (!V || !img || !img.dataUrl) return '';
+    const RK = { gable: '박공지붕', flat: '평지붕', shed: '외쪽지붕' };
+    const AK = { arc: '부채꼴', circle: '마당을 둘러싼 배치', row: '일렬' };
+    const L = [];
+    try {
+      const cls = await V.classifyImage(img.dataUrl).catch(() => null);
+      if (cls) L.push('· 그림 종류: ' + (cls.kind === 'plan' ? '평면도로 보임'
+        : cls.kind === 'photo' ? '사진으로 보임' : '손그림/스케치로 보임'));
+      const c = await V.traceConcept(img.dataUrl);
+      if (!c) return L.join('\n');
+      L.push('· 덩어리(동) ' + c.masses + '개' + (c.attached ? ' (서로 붙어 있음)' : '')
+        + ' · 층수 ' + (c.floors || 1) + ' · ' + (RK[c.roof] || c.roof) + ' · 배치 ' + (AK[c.arrange] || c.arrange));
+      const wins = (c.massList || []).reduce((a, m) => a + (((m && m.wins) || []).length), 0);
+      if (wins) L.push('· 창으로 보이는 자리 ' + wins + '개');
+      if (c.depthRatio) L.push('· 측면 음영으로 잰 깊이 비율 ' + c.depthRatio + '%');
+      if (Math.abs(c.lean || 0) > 0.05) L.push('· 실루엣 기울기 ' + (Math.atan(c.lean) * 180 / Math.PI).toFixed(0) + '도');
+      if (c.meta && c.meta.courtyard) L.push('· 가운데 초록(마당) 검출');
+      L.push('· 판독 확신도 ' + Math.round((c.conf != null ? c.conf : 0) * 100) + '%'
+        + ((c.why || []).length ? ' — 못 믿을 이유: ' + c.why.join(' · ') : ''));
+      L.push('★치수는 그림에서 알 수 없다 — 위 값은 비율과 개수뿐이다.');
+    } catch (e) { L.push('· (판독 실패: ' + ((e && e.message) || e) + ')'); }
+    return L.join('\n');
+  }
+
+  // ── MCP 모드 — 입력창의 말을 진짜 Claude 가 처리한다 ────────────────────────
+  // ★이미지는 통째로 보내지 않는다. 화면에서 알고리즘으로 먼저 판독하고(전처리),
+  //   그 '숫자'만 글로 붙여 보낸다 — Parti 의 원칙이다(AI 는 판단만).
+  async function runMcp(text, imgs) {
+    busy = true; setBusy(true);
+    let brief = '';
+    try {
+      if (imgs.length) {
+        addMsg('tool', '🔍 그림 판독 중… (이미지는 보내지 않고 숫자만 넘깁니다)');
+        brief = await briefOf(imgs[imgs.length - 1]);
+        if (brief) addMsg('tool', '📐 판독 결과를 함께 넘깁니다');
+      }
+      await window.PARTI_MCP.ask(text, brief);
+      // 나머지는 서버가 SSE 로 밀어 준다 → onChat
+    } catch (e) {
+      addMsg('err', 'Claude 에게 넘기지 못했습니다: ' + ((e && e.message) || e));
+      busy = false; setBusy(false);
+    }
+  }
+  // 서버가 밀어 주는 진행 상황
+  function onChat(c) {
+    if (!c) return;
+    if (c.k === 'start') { busy = true; setBusy(true); return; }
+    if (c.k === 'text') { addMsg('ai', String(c.text).trim()); return; }
+    if (c.k === 'done') {
+      if (c.error) addMsg('err', String(c.error));
+      // ★사용량은 숨기지 않는다 — 이 입력창은 한 마디마다 Claude 를 실제로 돌린다.
+      else if (c.cost != null) addMsg('tool', '· 이번 요청 약 $' + Number(c.cost).toFixed(3));
+      busy = false; setBusy(false);
+    }
+  }
+
   function submit() {
     const t = (inEl.value || '').trim();
     if ((!t && !pendingImgs.length) || busy) return;
@@ -1351,7 +1426,8 @@
     //   원래는 API 분기에서만 걸었는데, 그 분기가 사라지면 localReply 가 비전 경로를 타지 않는
     //   문장(예: "이거 밑그림으로 깔아줘")에서 set_underlay 가 '이미지 없음'을 내게 된다.
     if (imgs.length) lastImg = imgs[imgs.length - 1];
-    runLocal(t, imgs);
+    if (mcpState === 'on' && window.PARTI_MCP && window.PARTI_MCP.ask) runMcp(t, imgs);
+    else runLocal(t, imgs);
   }
 
   function init() {
@@ -1385,7 +1461,7 @@
   function beginTurn() { turnPushed = false; turnCreated = 0; }
 
   // TOOL_KO 는 도구 이름의 한국어 표기 — MCP 브리지가 명령 로그에 무슨 도구가 돌았는지 적을 때 쓴다.
-  window.WEBCAD_AI = { execTool, beginTurn, TOOLS, TOOL_KO, localReply,
+  window.WEBCAD_AI = { execTool, beginTurn, TOOLS, TOOL_KO, localReply, onChat, briefOf,
     notify: (kind, text) => addMsg(kind, text),   // mcp.js 가 도구 실행을 채팅에 알린다
     setMcp,                                       // mcp.js 가 연결 상태를 알려 주면 안내를 다시 쓴다
     get lastImg() { return lastImg; }, setLastImg: (v) => { lastImg = v; } };

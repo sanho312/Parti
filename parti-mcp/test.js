@@ -8,6 +8,7 @@
 'use strict';
 const { spawn } = require('node:child_process');
 const os = require('node:os');
+const fs = require('node:fs');
 const path = require('node:path');
 
 const SERVER = path.join(__dirname, 'server.js');
@@ -230,6 +231,35 @@ const lanIP = () => {
   ok(S.got(9) && S.got(9).result.isError === true && /되돌릴/.test(S.got(9).result.content[0].text),
     '브라우저 쪽 오류가 isError 로 전달된다');
 
+  group('붙이기 모드 — 포트를 잡지 않고 본체에 얹힌다');
+  // ★코워커 채팅이 띄우는 헤드리스 Claude 도 parti 도구가 필요하다. 평범하게 띄우면 두 번째
+  //   서버가 같은 포트를 잡으려다 실패해 브리지 없는 껍데기가 된다 — 그 사고를 못박는다.
+  {
+    const A = start(7391 /* 값은 무시된다 */, ['--attach=http://127.0.0.1:' + PORT]);
+    await wait(600);
+    ok(/붙이기 모드/.test(A.err), '붙이기 모드로 떴다');
+    ok(!/Parti 를 서빙합니다/.test(A.err), '★HTTP 를 열지 않는다 (포트 충돌이 날 수 없다)');
+    A.send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'headless', version: '1' } } });
+    await wait(200);
+    ok(A.got(1) && A.got(1).result, '  MCP 핸드셰이크는 그대로 된다');
+    A.send({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'measure', arguments: { what: 'x' } } });
+    const ca = await nextCall();
+    ok(ca && ca.name === 'measure', '★붙이기 모드의 도구 호출이 본체를 거쳐 브라우저까지 온다');
+    ok(ca && ca.input && ca.input.what === 'x', '  인자가 그대로 전달된다');
+    await reply(ca.id, { ok: true, result: { len: 42 } });
+    await wait(300);
+    ok(A.got(2) && !A.got(2).result.isError && /42/.test(JSON.stringify(A.got(2).result)),
+      '  결과가 붙이기 서버까지 되돌아온다');
+    // 실패도 실패로 전달돼야 한다 — 조용히 성공으로 둔갑하면 Claude 가 헛일을 한다
+    A.send({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'undo', arguments: {} } });
+    const cb = await nextCall();
+    await reply(cb.id, { ok: false, error: '되돌릴 것이 없습니다' });
+    await wait(300);
+    ok(A.got(3) && A.got(3).result.isError === true && /되돌릴/.test(JSON.stringify(A.got(3).result)),
+      '★브라우저 쪽 오류가 붙이기 모드에서도 isError 로 온다');
+    A.proc.kill();
+  }
+
   group('stdout 계약');
   // ★stdout 은 MCP 채널이다. console.log 하나면 클라이언트가 파싱에 실패한다.
   ok(!S.msgs.some(m => m.__PARSE_FAIL), '★stdout 에 JSON-RPC 아닌 것이 섞이지 않았다');
@@ -261,6 +291,15 @@ const lanIP = () => {
     ok((await fetch('http://' + ip + ':' + LP + '/bridge/result', { method: 'POST',
       headers: { 'content-type': 'application/json' }, body: '{"id":1,"ok":true,"result":1}' })).status === 403,
       '★결과 회신 창구도 토큰이 없으면 403 (여기가 열리면 남이 결과를 위조할 수 있다)');
+    // ★도구 대행 창구와 코워커 채팅도 같은 문을 써야 한다 — 하나라도 열리면 남이 도면을 만진다
+    ok((await fetch('http://' + ip + ':' + LP + '/bridge/call', { method: 'POST',
+      headers: { 'content-type': 'application/json' }, body: '{"name":"undo","input":{}}' })).status === 403,
+      '★도구 대행(/bridge/call)도 토큰이 없으면 403');
+    ok((await fetch('http://' + ip + ':' + LP + '/coworker/ask', { method: 'POST',
+      headers: { 'content-type': 'application/json' }, body: '{"text":"hi"}' })).status === 403,
+      '★코워커 채팅(/coworker/ask)도 토큰이 없으면 403 (남이 내 계정으로 Claude 를 돌릴 수 있다)');
+    ok((await fetch('http://' + ip + ':' + LP + '/coworker/stop', { method: 'POST' })).status === 403,
+      '★코워커 중단도 토큰이 없으면 403');
     ok((await fetch('http://' + ip + ':' + LP + '/')).ok,
       '  정적 파일은 토큰 없이도 준다 (앱만으로는 도면을 만질 수 없다)');
     const good = await fetch('http://' + ip + ':' + LP + '/bridge/events?t=' + TOKEN);
@@ -285,6 +324,118 @@ const lanIP = () => {
     ok(!reachable, '★LAN 주소로는 닿지 않는다 (127.0.0.1 에만 바인딩)');
   }
   D.proc.kill();
+
+  // ═══ ④ 코워커 채팅 — 입력창의 자연어가 헤드리스 Claude 까지 갔다 오는가 ══════
+  // ★진짜 Claude 를 돌리지 않는다(느리고 돈이 든다). PARTI_CLAUDE_BIN/ARGS 로 가짜 실행기를
+  //   끼워 배관 전체 — 인자 조립 · 스트림 파싱 · SSE 중계 · 대화 이어가기 — 를 검사한다.
+  group('코워커 채팅 — 입력창 → claude -p → SSE');
+  const FAKE = path.join(__dirname, 'test-fake-claude.js');
+  const argvLog = path.join(os.tmpdir(), 'parti-fake-argv-' + process.pid + '.txt');
+  try { fs.unlinkSync(argvLog); } catch (e) {}
+  const chatEnv = { PARTI_CLAUDE_BIN: process.execPath,
+    PARTI_CLAUDE_ARGS: JSON.stringify([FAKE]), PARTI_FAKE_ARGV: argvLog };
+  const KP = 7396;
+  const K = start(KP, [], chatEnv);
+  await wait(700);
+  {
+    const es2 = await fetch('http://127.0.0.1:' + KP + '/bridge/events');
+    const rd = es2.body.getReader(); const dc = new TextDecoder(); let bf = '';
+    const frames = [];
+    const pump = async (ms) => {
+      const t0 = Date.now();
+      while (Date.now() - t0 < ms) {
+        const mm = bf.match(/data: (\{.*?\})\n\n/);
+        if (mm) { bf = bf.slice(mm.index + mm[0].length); frames.push(JSON.parse(mm[1])); continue; }
+        const { value, done } = await Promise.race([rd.read(), wait(300).then(() => ({ value: null, done: false }))]);
+        if (done) return;
+        if (value) bf += dc.decode(value, { stream: true });
+      }
+    };
+    const ask = (text) => fetch('http://127.0.0.1:' + KP + '/coworker/ask', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text }) }).then(r => r.json());
+
+    const a1 = await ask('방 하나 그려줘');
+    ok(a1 && a1.ok === true, '입력창의 말을 접수한다');
+    ok(a1 && a1.resumed === false, '  첫 마디는 새 대화다');
+    await pump(6000);
+    const chat = frames.filter(f => f.chat).map(f => f.chat);
+    ok(chat.some(c => c.k === 'start'), '★시작을 알린다 (패널이 "작업 중"을 띄울 수 있게)');
+    const txt = chat.find(c => c.k === 'text');
+    ok(txt && /가짜 응답/.test(txt.text), '★Claude 의 말이 SSE 로 패널까지 온다');
+    const done = chat.find(c => c.k === 'done');
+    ok(!!done, '★끝났음을 알린다 (안 오면 입력창이 영영 잠긴다)');
+    ok(done && Math.abs(done.cost - 0.0123) < 1e-9, '  사용 비용을 함께 준다 (' + (done && done.cost) + ')');
+    ok(done && !done.error, '  성공은 오류로 표시하지 않는다');
+
+    // 실제로 어떤 인자로 불렀나 — 여기가 어긋나면 Claude 에게 도구가 없거나 권한이 없다
+    const lines = fs.readFileSync(argvLog, 'utf8').trim().split('\n').map(l => JSON.parse(l));
+    const av = lines[0];
+    ok(av.includes('-p') && av[av.indexOf('-p') + 1] === '방 하나 그려줘', '★사용자의 말이 그대로 프롬프트가 된다');
+    ok(av.includes('--output-format') && av[av.indexOf('--output-format') + 1] === 'stream-json',
+      '  스트림으로 받는다 (다 끝날 때까지 기다리지 않는다)');
+    const cfg = JSON.parse(av[av.indexOf('--mcp-config') + 1]);
+    ok(cfg.mcpServers && cfg.mcpServers.parti, '★parti 도구를 붙여서 띄운다');
+    ok((cfg.mcpServers.parti.args || []).some(x => /--attach=http:\/\/127\.0\.0\.1:7396/.test(x)),
+      '★★붙이기 모드로 띄운다 — 안 그러면 두 번째 서버가 포트를 못 잡아 도구가 전부 실패한다');
+    ok(av.includes('--allowedTools') && av[av.indexOf('--allowedTools') + 1] === 'mcp__parti',
+      '★도구를 미리 허용한다 (헤드리스에서 권한을 물으면 그대로 멈춘다)');
+    ok(av.includes('--append-system-prompt'), '  코워커 역할을 일러 준다');
+    ok(!av.includes('--resume'), '  첫 마디에는 --resume 이 없다');
+
+    // 두 번째 마디는 같은 대화를 이어야 한다 ("방금 그거" 가 통하려면)
+    const a2 = await ask('거기에 문 달아줘');
+    ok(a2 && a2.ok === true && a2.resumed === true, '두 번째 마디는 이어서 간다');
+    await pump(6000);
+    const lines2 = fs.readFileSync(argvLog, 'utf8').trim().split('\n').map(l => JSON.parse(l));
+    const av2 = lines2[1] || [];
+    ok(av2.includes('--resume') && av2[av2.indexOf('--resume') + 1] === 'FAKE-SESSION-1',
+      '★★앞 대화를 이어 간다 — 이게 없으면 "방금 만든 그 방" 이 통하지 않는다');
+    try { rd.cancel(); } catch (e) {}
+  }
+  K.proc.kill();
+
+  {
+    // 앞 요청이 도는 중에 또 보내면 거절해야 한다 (두 Claude 가 같은 도면을 동시에 만지면 엉킨다)
+    const H = start(7390, [], Object.assign({}, chatEnv, { PARTI_FAKE_MODE: 'hang' }));
+    await wait(700);
+    const hEs = await fetch('http://127.0.0.1:7390/bridge/events');
+    const post = (p, b) => fetch('http://127.0.0.1:7390' + p, { method: 'POST',
+      headers: { 'content-type': 'application/json' }, body: JSON.stringify(b || {}) }).then(r => r.json());
+    ok((await post('/coworker/ask', { text: 'a' })).ok === true, '첫 요청은 받는다');
+    await wait(400);
+    const busy = await post('/coworker/ask', { text: 'b' });
+    ok(busy.ok === false && /처리하고 있습니다/.test(busy.error), '★도는 중에 또 보내면 거절한다');
+    const st = await post('/coworker/stop', {});
+    ok(st.ok === true && st.stopped === true, '★중단이 실제로 프로세스를 죽인다');
+    await wait(500);
+    ok((await post('/coworker/ask', { text: 'c' })).ok === true, '  중단한 뒤에는 다시 받는다');
+    try { hEs.body.cancel(); } catch (e) {}
+    H.proc.kill();
+  }
+  {
+    // claude 가 실패하면 조용히 삼키지 말고 패널에 알려야 한다
+    const X = start(7389, [], Object.assign({}, chatEnv, { PARTI_FAKE_MODE: 'crash' }));
+    await wait(700);
+    const xEs = await fetch('http://127.0.0.1:7389/bridge/events');
+    const rd2 = xEs.body.getReader(); const dc2 = new TextDecoder(); let bf2 = '';
+    await fetch('http://127.0.0.1:7389/coworker/ask', { method: 'POST',
+      headers: { 'content-type': 'application/json' }, body: '{"text":"a"}' });
+    let err = null; const t0 = Date.now();
+    while (Date.now() - t0 < 6000 && !err) {
+      const mm = bf2.match(/data: (\{.*?\})\n\n/);
+      if (mm) { bf2 = bf2.slice(mm.index + mm[0].length); const o = JSON.parse(mm[1]);
+        if (o.chat && o.chat.k === 'done' && o.chat.error) err = o.chat.error; continue; }
+      const { value, done } = await Promise.race([rd2.read(), wait(400).then(() => ({ value: null, done: false }))]);
+      if (done) break;
+      if (value) bf2 += dc2.decode(value, { stream: true });
+    }
+    ok(!!err, '★claude 가 실패하면 done{error} 로 알린다 (조용히 멈추지 않는다)');
+    ok(err && /3/.test(err), '  종료 코드를 알려 준다 (' + String(err).slice(0, 60) + ')');
+    try { rd2.cancel(); } catch (e) {}
+    X.proc.kill();
+  }
+  try { fs.unlinkSync(argvLog); } catch (e) {}
 
   console.log('\n' + (fail ? '✗ 실패 ' + fail + ' / 통과 ' + pass : '✔ 전체 통과 — ' + pass + '/' + pass));
   process.exit(fail ? 1 : 0);

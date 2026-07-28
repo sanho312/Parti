@@ -270,6 +270,25 @@
     } catch (e) { /* 서버가 죽었으면 SSE 도 곧 끊긴다 */ }
   }
 
+  // ── 코워커 채팅 — 입력창의 자연어를 서버가 헤드리스 Claude 에게 넘긴다 ──────
+  // ★MCP 는 Claude→서버 한 방향이라 서버가 Claude 를 부를 수 없다(sampling 미지원).
+  //   그래서 서버가 `claude -p` 를 띄우고, 그 Claude 가 붙이기 모드로 이 브리지에 얹혀
+  //   같은 탭의 도면을 만진다. 도구 실행 표시는 평소처럼 onCall 이 찍는다.
+  async function ask(text, brief) {
+    const r = await fetch(BASE + '/coworker/ask' + q, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: text || '', brief: brief || '' }),
+    }).then(x => x.json());
+    if (!r || !r.ok) throw new Error((r && r.error) || '요청을 보내지 못했습니다.');
+    return r;
+  }
+  async function stopAsk() {
+    try { await fetch(BASE + '/coworker/stop' + q, { method: 'POST' }); } catch (e) {}
+  }
+  function onChat(c) {
+    try { const ai = AI(); if (ai && ai.onChat) ai.onChat(c); } catch (e) {}
+  }
+
   // Claude 가 무엇을 하고 있는지 채팅 패널에 남긴다 — 이게 없으면 사용자는 도면이 저절로
   // 바뀌는 것만 보고 누가 왜 그랬는지 알 길이 없다.
   const OWN_KO = { inspect: '도면 조회', run_command: '명령 실행', build_massing: '건물 생성',
@@ -344,6 +363,7 @@
             : '브리지만 연결됨 — Claude Code 에서 parti 서버를 승인하세요 (눌러서 진단)', true);
         return;
       }
+      if (m && m.chat) { onChat(m.chat); return; }
       if (m && m.id) onCall(m).catch(() => {});   // 절대 밖으로 던지지 않는다
     };
     es.onerror = () => {
@@ -612,7 +632,8 @@
     '그래프는 매번 전체 교체이므로 수정 시 action:"get" 으로 현재 스펙을 받아 전체를 다시 보낼 것.',
   ].join('\n');
 
-  window.PARTI_MCP = { dispatch, connect, OWN, diagnose, openDialog, closeDialog, eligible: ELIGIBLE,
+  window.PARTI_MCP = { dispatch, connect, OWN, diagnose, openDialog, closeDialog, ask, stopAsk,
+    eligible: ELIGIBLE,
     get connected() { return !!es && es.readyState === 1; },
     // 'off' | 'bridge' | 'on' — 'on' 이라야 Claude 가 실제로 붙어 있다는 뜻이다.
     get state() { return (!!es && es.readyState === 1) ? uiState : 'off'; } };

@@ -45,6 +45,19 @@ const CALL_TIMEOUT = Number(process.env.PARTI_MCP_TIMEOUT || 60000);
 //   이미 붙어 있는 탭이 있으면 열지 않는다. 끄려면 --no-open 또는 PARTI_MCP_OPEN=0.
 const OPEN = !process.argv.includes('--no-open') && process.env.PARTI_MCP_OPEN !== '0';
 const LAN = process.argv.includes('--lan') || process.env.PARTI_MCP_LAN === '1';
+
+// ── 붙이기 모드 (--attach[=주소]) ────────────────────────────────────────────
+// HTTP 를 열지 않고, 이미 떠 있는 parti-mcp 의 브리지에 얹혀 도구만 중계하는 MCP 서버가 된다.
+// ★왜 필요한가: 코워커 채팅이 헤드리스 `claude -p` 를 띄우는데, 그 Claude 도 parti 도구가
+//   필요하다. 그런데 평범하게 띄우면 두 번째 서버가 같은 포트를 잡으려다 실패해서(EADDRINUSE)
+//   브리지 없는 껍데기가 된다. 붙이기 모드는 아예 포트를 잡지 않고 원본 서버에 도구 호출을
+//   넘긴다 — 그래서 활성 탭도 하나로 유지된다.
+const ATTACH = (() => {
+  const a = process.argv.find(s => s === '--attach' || s.startsWith('--attach='));
+  const v = a ? (a.split('=')[1] || '') : (process.env.PARTI_MCP_ATTACH || '');
+  if (!a && !v) return '';
+  return (v || 'http://127.0.0.1:' + PORT).replace(/\/+$/, '');
+})();
 const TOKEN = LAN ? (process.env.PARTI_MCP_TOKEN || crypto.randomBytes(9).toString('base64url')) : '';
 const HOST = LAN ? '0.0.0.0' : '127.0.0.1';
 
@@ -112,8 +125,26 @@ function dropClient(id) {
   }
 }
 
+// 붙이기 모드 — 도구 호출을 원본 서버에 넘긴다. 브라우저와의 왕복은 저쪽이 한다.
+async function callViaAttach(name, input) {
+  let r;
+  try {
+    r = await fetch(ATTACH + '/bridge/call', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name, input: input || {} }),
+    });
+  } catch (e) {
+    throw new Error('parti-mcp 본체(' + ATTACH + ')에 닿지 못했습니다 — 서버가 꺼졌는지 확인하세요.');
+  }
+  if (!r.ok) throw new Error('본체가 ' + r.status + ' 를 냈습니다.');
+  const j = await r.json();
+  if (!j.ok) throw new Error(String(j.error || '알 수 없는 오류'));
+  return j.result;
+}
+
 // 브라우저에 도구 실행을 시키고 결과를 기다린다.
 function callBrowser(name, input) {
+  if (ATTACH) return callViaAttach(name, input);
   return new Promise((resolve, reject) => {
     if (!client) {
       reject(new Error(
@@ -132,6 +163,142 @@ function callBrowser(name, input) {
       reject(new Error('브라우저로 전달하지 못했습니다.'));
     }
   });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 코워커 채팅 — Parti 입력창의 자연어를 진짜 Claude 가 처리한다
+//
+// ★왜 이렇게 하나
+//   MCP 는 클라이언트(Claude)가 서버를 부르는 한 방향이다. 서버가 Claude 에게 먼저 말을 걸려면
+//   sampling(sampling/createMessage)이 필요한데 Claude Code 는 아직 그걸 지원하지 않는다
+//   (anthropics/claude-code#1785, 아직 열림). 그래서 반대로 — 입력창이 헤드리스 `claude -p` 를
+//   띄우고, 그 Claude 가 붙이기 모드로 이 브리지에 얹혀 같은 탭의 도면을 만진다.
+//   사용자의 기존 로그인을 그대로 쓰므로 API 키가 필요 없다.
+//
+// ★작업 디렉터리를 저장소 밖으로 둔다
+//   C:\Parti 에서 띄우면 .mcp.json 이 자동으로 읽혀 parti 서버가 한 벌 더 뜬다(포트 충돌).
+//   또 코워커는 코드를 고치는 사람이 아니라 도면을 그리는 사람이다 — 저장소 컨텍스트가 필요 없다.
+// ═══════════════════════════════════════════════════════════════════════════
+const { spawn } = require('node:child_process');
+
+const CHAT_TIMEOUT = Number(process.env.PARTI_COWORKER_TIMEOUT || 300000);
+let chatProc = null;
+let chatSession = '';     // --resume 용 — 같은 대화를 이어 간다
+
+const COWORKER_PROMPT = `너는 Parti 의 설계 코워커다. 사용자는 Parti 화면(도면·3D)을 보며 말하고 있다.
+- 파일을 읽거나 고치지 마라. 오직 parti 도구로 화면의 도면을 만져라.
+- 대답은 한국어로, 짧게. 무엇을 했는지 한두 줄이면 된다. 코드 블록·표는 쓰지 마라.
+- 치수가 없으면 합리적인 기본값으로 일단 세우고, 무엇을 가정했는지 한 줄로 밝혀라.
+- 손그림·사진 판독 결과가 함께 오면 그 숫자를 근거로 삼되, 확신도가 낮다고 적힌 항목은 단정하지 마라.`;
+
+// claude 실행 파일 찾기.
+// ★셸을 거치지 않는다 — 사용자가 친 문장이 그대로 argv 로 들어가므로 셸을 끼우면 명령 주입이 된다.
+//   그래서 .cmd 가 아니라 진짜 실행 파일을 찾는다(npm 설치본은 패키지 안의 bin/claude.exe).
+// ★PARTI_CLAUDE_ARGS — 실행 파일 앞에 붙일 인자(JSON 배열). 회귀가 진짜 Claude 를 돌리지 않고
+//   가짜 실행기로 파이프라인 전체를 검사할 수 있게 하는 자리다(브라우저 자동 열기의 OPEN_CMD 와 같은 결).
+const CLAUDE_ARGS = (() => {
+  try { const a = JSON.parse(process.env.PARTI_CLAUDE_ARGS || '[]'); return Array.isArray(a) ? a : []; }
+  catch (e) { return []; }
+})();
+
+function findClaude() {
+  if (process.env.PARTI_CLAUDE_BIN) return process.env.PARTI_CLAUDE_BIN;
+  const win = process.platform === 'win32';
+  const isFile = (f) => { try { return fs.statSync(f).isFile(); } catch (e) { return false; } };
+  const dirs = (process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  for (const d of dirs) {
+    const direct = path.join(d, win ? 'claude.exe' : 'claude');
+    if (isFile(direct)) return direct;
+    if (win && isFile(path.join(d, 'claude.cmd'))) {
+      // npm 전역 설치 배치 — 셸 없이 부를 수 있는 진짜 exe 가 패키지 안에 있다
+      const real = path.join(d, 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe');
+      if (isFile(real)) return real;
+    }
+  }
+  return null;
+}
+
+function chatSend(o) { sendToClient({ chat: o }); }
+
+function coworkerAsk(text, brief) {
+  if (ATTACH) return { ok: false, error: '붙이기 모드에서는 코워커 채팅을 열지 않습니다.' };
+  if (chatProc) return { ok: false, error: '앞의 요청을 아직 처리하고 있습니다.' };
+  const msg = (text || '').trim();
+  if (!msg && !brief) return { ok: false, error: '내용이 비어 있습니다.' };
+  const bin = findClaude();
+  if (!bin) {
+    return { ok: false, error: 'claude 명령을 찾지 못했습니다. Claude Code 를 설치했다면 '
+      + 'PARTI_CLAUDE_BIN 환경변수에 실행 파일 경로를 넣어 주세요.' };
+  }
+
+  // 저장소 밖의 작업 폴더 (위 주석 참고)
+  const cwd = path.join(os.tmpdir(), 'parti-coworker');
+  try { fs.mkdirSync(cwd, { recursive: true }); } catch (e) {}
+
+  const mcpCfg = JSON.stringify({ mcpServers: { parti: {
+    command: process.execPath, args: [__filename, '--attach=http://127.0.0.1:' + PORT],
+  } } });
+  const prompt = brief ? (msg + '\n\n[화면에서 미리 판독한 결과 — 이미지 원본이 아니라 알고리즘이 뽑은 숫자다]\n' + brief) : msg;
+  const args = ['-p', prompt,
+    '--output-format', 'stream-json', '--verbose',
+    '--mcp-config', mcpCfg,
+    '--allowedTools', 'mcp__parti',
+    '--append-system-prompt', COWORKER_PROMPT];
+  if (chatSession) args.push('--resume', chatSession);
+
+  let proc;
+  try {
+    proc = spawn(bin, CLAUDE_ARGS.concat(args), { cwd, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+  } catch (e) {
+    return { ok: false, error: 'claude 를 실행하지 못했습니다: ' + ((e && e.message) || e) };
+  }
+  chatProc = proc;
+  log('코워커: claude 실행 (' + (chatSession ? '이어서' : '새 대화') + ') — ' + msg.slice(0, 40));
+  chatSend({ k: 'start' });
+
+  let out = '', err = '', said = false;
+  const timer = setTimeout(() => {
+    log('코워커: 시간 초과 — 중단');
+    try { proc.kill(); } catch (e) {}
+  }, CHAT_TIMEOUT);
+
+  proc.stdout.setEncoding('utf8');
+  proc.stdout.on('data', (c) => {
+    out += c;
+    let nl;
+    while ((nl = out.indexOf('\n')) >= 0) {
+      const line = out.slice(0, nl).trim(); out = out.slice(nl + 1);
+      if (!line) continue;
+      let ev; try { ev = JSON.parse(line); } catch (e) { continue; }
+      if (ev.session_id) chatSession = ev.session_id;
+      // 도구 실행 표시는 브리지가 이미 패널에 찍는다(mcp.js onCall) — 여기서 또 보내면 두 줄이 된다.
+      if (ev.type === 'assistant' && ev.message && Array.isArray(ev.message.content)) {
+        for (const b of ev.message.content) {
+          if (b.type === 'text' && b.text && b.text.trim()) { said = true; chatSend({ k: 'text', text: b.text }); }
+        }
+      } else if (ev.type === 'result') {
+        if (!said && ev.result) chatSend({ k: 'text', text: String(ev.result) });
+        chatSend({ k: 'done', cost: ev.total_cost_usd, error: ev.is_error ? String(ev.result || '실패') : '' });
+        said = true;
+      }
+    }
+  });
+  proc.stderr.setEncoding('utf8');
+  proc.stderr.on('data', (c) => { err += c.slice(0, 4000); });
+  proc.on('error', (e) => {
+    clearTimeout(timer); chatProc = null;
+    chatSend({ k: 'done', error: 'claude 실행 실패: ' + e.message });
+  });
+  proc.on('close', (code) => {
+    clearTimeout(timer); chatProc = null;
+    if (code !== 0 && !said) {
+      log('코워커: claude 가 ' + code + ' 로 끝남 — ' + err.slice(0, 200));
+      chatSend({ k: 'done', error: 'claude 가 ' + code + ' 로 끝났습니다. ' + (err.trim().split('\n').pop() || '') });
+    } else if (code !== 0) {
+      log('코워커: claude 종료 코드 ' + code);
+    }
+  });
+  return { ok: true, resumed: !!chatSession };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -222,6 +389,44 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(400, { 'content-type': 'application/json' })
         .end(JSON.stringify({ ok: false, error: String(e.message || e) }));
     }
+    return;
+  }
+
+  // ── 브리지: 붙이기 모드 서버 → 이 서버 (도구 호출 대행) ──
+  // ★LAN 에서 이 창구가 열리면 남이 도면을 마음대로 만질 수 있다 — /bridge/result 와 같은 문을 쓴다.
+  if (p === '/bridge/call' && req.method === 'POST') {
+    if (!authed(req, url)) { res.writeHead(403).end('{"ok":false,"error":"token"}'); return; }
+    let out;
+    try {
+      const b = JSON.parse((await readBody(req)).toString('utf8'));
+      out = { ok: true, result: await callBrowser(b.name, b.input || {}) };
+    } catch (e) {
+      // 도구 실패는 전송 실패와 구분되어야 한다 — 200 + ok:false 로 내려보낸다.
+      out = { ok: false, error: String((e && e.message) || e) };
+    }
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
+      .end(JSON.stringify(out === undefined ? null : out));
+    return;
+  }
+
+  // ── 코워커 채팅: 브라우저 입력창 → 헤드리스 Claude ──
+  if (p === '/coworker/ask' && req.method === 'POST') {
+    if (!authed(req, url)) { res.writeHead(403).end('{"ok":false,"error":"token"}'); return; }
+    try {
+      const b = JSON.parse((await readBody(req)).toString('utf8'));
+      const r = coworkerAsk(String(b.text || ''), b.brief ? String(b.brief) : '');
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' }).end(JSON.stringify(r));
+    } catch (e) {
+      res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
+        .end(JSON.stringify({ ok: false, error: String((e && e.message) || e) }));
+    }
+    return;
+  }
+  if (p === '/coworker/stop' && req.method === 'POST') {
+    if (!authed(req, url)) { res.writeHead(403).end('{"ok":false,"error":"token"}'); return; }
+    const had = !!chatProc;
+    try { if (chatProc) chatProc.kill(); } catch (e) {}
+    res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: true, stopped: had }));
     return;
   }
 
@@ -416,7 +621,10 @@ function openBrowser(url) {
   } catch (e) { log('브라우저를 열지 못했습니다 — 직접 ' + url + ' 을 여세요.'); }
 }
 
-server.listen(PORT, HOST, () => {
+// ★붙이기 모드는 포트를 잡지 않는다 — 도구 호출을 본체로 넘기는 얇은 MCP 서버로만 산다.
+if (ATTACH) {
+  log('붙이기 모드 — 도구 호출을 ' + ATTACH + ' 로 넘깁니다 (HTTP 를 열지 않습니다).');
+} else server.listen(PORT, HOST, () => {
   log('Parti 를 서빙합니다 → http://127.0.0.1:' + PORT + '/   (작업본: ' + ROOT + ')');
   log('도구 ' + TOOLS.length + '개 준비됨.');
   // 이미 열려 있는 탭이 있으면 열지 않는다. EventSource 는 1초 간격으로 재접속하므로
