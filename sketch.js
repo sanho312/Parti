@@ -845,7 +845,7 @@ async function buildBuilding() {
       B.logLine && B.logLine(`  📐 축척 확정 ×${k} — 가장 큰 방 기준으로 스케치를 건축 스케일에 맞췄습니다.`, 'info');
     }
     // ② 역할 판정 — 규칙 우선, API 키가 있으면 AI 가 요약만 보고 보정 (이미지 전송 없음)
-    const { roles, usedAI } = await BF.classify(anal);
+    const { roles } = await BF.classify(anal);
     // ③ 생성 — 전부 프로그램
     const counts = BF.build(anal, roles);
     preview = null; SK.rev++; infoEl.style.display = 'none';
@@ -853,7 +853,7 @@ async function buildBuilding() {
     clearConverted();
     const KO = { wall: '벽', door: '문', window: '창', column: '기둥', furniture: '가구', slab: '슬래브' };
     const parts = Object.entries(counts).filter(([, n]) => n > 0).map(([kk, n]) => KO[kk] + ' ' + n);
-    B.logLine && B.logLine(`  🏠 손그림 → 건물 생성: ${parts.join(' · ')} (${usedAI ? 'AI 역할 판정' : '규칙 판정 — AI 키 없음'}). 스케치 선은 정리했습니다(Ctrl+Z 복원). 3D(view3d)로 확인해 보세요.`, 'ok');
+    B.logLine && B.logLine(`  🏠 손그림 → 건물 생성: ${parts.join(' · ')} (규칙 판정). 스케치 선은 정리했습니다(Ctrl+Z 복원). 3D(view3d)로 확인해 보세요.`, 'ok');
     return counts;
   } finally { building = false; }
 }

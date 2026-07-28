@@ -127,58 +127,11 @@ function heuristic(analysis) {
 }
 
 // ---------- AI 역할 판정 (요약 JSON 만 — 이미지 없음) ----------
-const ROLE_SET = ['wall', 'door', 'window', 'column', 'furniture', 'ignore'];
-function aiPrompt(analysis, guesses) {
-  const shapes = analysis.shapes.map(s => ({
-    id: s.strokeId, kind: s.kind, closed: !!s.closed, color: s.color,
-    len: Math.round(s.lengthMM || 0),
-    size: s.bbox ? [Math.round(s.bbox.w), Math.round(s.bbox.h)] : null,
-    guess: guesses[s.strokeId],
-  }));
-  return '건축 평면 스케치를 전처리한 도형 목록이다(단위 mm). guess 는 규칙 기반 추정.\n'
-    + '각 도형의 역할을 wall|door|window|column|furniture|ignore 중에서 판정해\n'
-    + '{"roles":{"<id>":"<역할>"}} JSON 만 출력하라. 확신이 없으면 guess 를 유지하라.\n'
-    + JSON.stringify({ shapes, regions: analysis.summary.regions });
-}
-async function aiJudge(analysis, guesses, key, model) {
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-api-key': key,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true',
-    },
-    body: JSON.stringify({
-      model: model || 'claude-haiku-4-5-20251001',   // 판단만 — 빠르고 저렴한 모델이면 충분
-      max_tokens: 500,
-      system: '건축 평면 스케치의 도형 역할 판정기. 반드시 JSON 만 출력한다.',
-      messages: [{ role: 'user', content: aiPrompt(analysis, guesses) }],
-    }),
-  });
-  if (!res.ok) throw new Error('API ' + res.status);
-  const data = await res.json();
-  const text = (data.content || []).map(c => c.text || '').join('');
-  const m = text.match(/\{[\s\S]*\}/);
-  if (!m) throw new Error('JSON 없음');
-  const parsed = JSON.parse(m[0]);
-  const out = {};
-  for (const [id, role] of Object.entries(parsed.roles || {}))
-    if (ROLE_SET.includes(role)) out[id] = role;
-  return out;
-}
+// ★2026-07-28: 브라우저에서 api.anthropic.com 을 직접 때리던 역할 판정(aiJudge/aiPrompt)을 걷어냈다.
+//   같은 평문 API 키(webcad_ai_cfg)를 읽어 쓰던 두 번째 경로였다. 역할 판정은 규칙(heuristic)만
+//   남기고, 더 나은 판정이 필요하면 MCP 쪽에서 Claude 가 도면을 보고 고치면 된다.
 async function classify(analysis) {
-  const roles = heuristic(analysis);
-  let usedAI = false;
-  try {
-    const cfg = JSON.parse(localStorage.getItem('webcad_ai_cfg') || '{}');
-    if (cfg.key) {
-      const fixed = await aiJudge(analysis, roles, cfg.key);
-      for (const [id, role] of Object.entries(fixed)) roles[id] = role;
-      usedAI = true;
-    }
-  } catch (e) { console.warn('[bimify] AI 판단 실패 — 규칙 판단으로 진행:', e); }
-  return { roles, usedAI };
+  return { roles: heuristic(analysis), usedAI: false };
 }
 
 // ---------- BIM 생성 (전부 프로그램) ----------
@@ -335,5 +288,5 @@ function build(analysis, roles, opts) {
   return counts;
 }
 
-return { calcScale, heuristic, classify, aiJudge, aiPrompt, build };
+return { calcScale, heuristic, classify, build };
 })();

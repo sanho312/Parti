@@ -247,8 +247,22 @@
     } catch (e) { /* 서버가 죽었으면 SSE 도 곧 끊긴다 */ }
   }
 
+  // Claude 가 무엇을 하고 있는지 채팅 패널에 남긴다 — 이게 없으면 사용자는 도면이 저절로
+  // 바뀌는 것만 보고 누가 왜 그랬는지 알 길이 없다.
+  const OWN_KO = { inspect: '도면 조회', run_command: '명령 실행', build_massing: '건물 생성',
+    trace_concept: '손그림 판독', get_node_reference: '노드 사전', switch_doc: '탭 전환',
+    undo: '실행취소', export_drawing: '내보내기' };
+  function notify(kind, text) {
+    try { const ai = AI(); if (ai && ai.notify) ai.notify(kind, text); } catch (e) {}
+  }
+  function toolKo(name) {
+    const ai = AI();
+    return OWN_KO[name] || (ai && ai.TOOL_KO && ai.TOOL_KO[name]) || name;
+  }
+
   async function onCall(msg) {
     const { id, name, input } = msg;
+    notify('tool', '🔧 ' + toolKo(name));
     setDot('var(--accent,#0A84FF)', name + ' 실행 중', true);
     try {
       const out = await Promise.resolve(dispatch(name, input));
@@ -261,7 +275,7 @@
   }
 
   // ── 연결 ───────────────────────────────────────────────────────────────────
-  let es = null, evicted = false;
+  let es = null, evicted = false, announced = false;
   function connect() {
     evicted = false;
     try { if (es) es.close(); } catch (e) {}
@@ -269,7 +283,11 @@
     try {
       es = new EventSource(BASE + '/bridge/events');
     } catch (e) { setDot('var(--danger,#ff453a)', '연결 실패', false); return; }
-    es.onopen = () => setDot('var(--success,#30d158)', '연결됨 — Claude 가 이 도면을 만질 수 있습니다', true);
+    es.onopen = () => {
+      setDot('var(--success,#30d158)', '연결됨 — Claude 가 이 도면을 만질 수 있습니다', true);
+      // 재접속마다 떠들지 않는다 — 처음 붙었을 때만 알린다
+      if (!announced) { announced = true; notify('ai', '🔗 **MCP 연결됨** — Claude 가 이 도면을 직접 만질 수 있습니다. Claude 쪽에 그냥 말씀하세요.'); }
+    };
     es.onmessage = (ev) => {
       let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
       // ★다른 탭에 자리를 내준다. 여기서 스스로 close 하지 않으면 EventSource 가 1초 뒤
