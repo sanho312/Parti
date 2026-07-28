@@ -5,12 +5,14 @@
 // 도면에 실행한다. 서버→브라우저는 SSE, 브라우저→서버는 fetch POST.
 //
 // ★언제 붙나
-//   기본은 브리지가 서빙하는 http://127.0.0.1:PORT/ 에서 열렸을 때만 붙는다.
+//   ① 루프백 — 브리지가 서빙하는 http://127.0.0.1:PORT/ (데스크톱 기본)
+//   ② LAN — 서버를 --lan 으로 띄우면 http://<PC의 IP>:PORT/?t=토큰 을 출력한다.
+//      아이패드가 그 주소를 열면 서버가 페이지를 준 것이므로 동일 출처고, 중계 홉이 없다.
+//      토큰을 아는 기기만 브리지를 쓸 수 있다.
 //   배포본(https://sanho312.github.io/Parti/)에서는 아무 일도 하지 않는다 — HTTPS 페이지가
 //   http 로컬로 붙는 것은 브라우저마다 막히는 정도가 다르고(사파리는 차단), 무엇보다
-//   휴대기기 입장에서 127.0.0.1 은 자기 자신이라 데스크톱 서버에 애초에 닿지 않는다.
-//   조용히 실패하느니 시도하지 않는 편이 낫다. 굳이 쓰려면:
-//     localStorage.setItem('parti_mcp_url', 'http://127.0.0.1:7391')
+//   휴대기기 입장에서 127.0.0.1 은 자기 자신이라 데스크톱 서버에 닿지 않는다.
+//   조용히 실패하느니 시도하지 않는 편이 낫다.
 //
 // ★도구 호출 1건 = 실행취소 1단계
 //   ai.js 의 turnPushed 리셋은 send()(API 경로) 안에 있었다. 그 경로가 사라졌으므로
@@ -25,11 +27,26 @@
 (() => {
   'use strict';
 
-  const LOCAL = /^(127\.0\.0\.1|localhost|\[::1\])$/.test(location.hostname);
+  const LOOP = /^(127\.0\.0\.1|localhost|\[::1\])$/.test(location.hostname);
+  const PLAIN = location.protocol === 'http:';     // 배포본(https)은 여기서 걸러진다
+
+  // ── 페어링 토큰 (LAN 모드) ────────────────────────────────────────────────
+  // 서버가 --lan 으로 뜨면 주소에 ?t=… 를 실어 출력한다. 아이패드가 그 주소를 열면
+  // 여기서 받아 기억하고, 브리지 호출마다 붙인다. 루프백은 토큰이 필요 없다.
+  const TKEY = 'parti_mcp_token:' + location.origin;
+  let TOKEN = '';
+  try {
+    const qt = new URLSearchParams(location.search).get('t');
+    if (qt) { TOKEN = qt; localStorage.setItem(TKEY, qt); }
+    else TOKEN = localStorage.getItem(TKEY) || '';
+  } catch (e) {}
+
   let OPT = '';
   try { OPT = localStorage.getItem('parti_mcp_url') || ''; } catch (e) {}
-  if (!LOCAL && !OPT) return;                      // 배포본에서는 동작하지 않는다
-  const BASE = LOCAL ? '' : OPT.replace(/\/+$/, '');
+  // 루프백이거나, 평문 http 로 열렸고 토큰이 있으면(=브리지가 준 주소) 동작한다.
+  if (!LOOP && !(PLAIN && TOKEN) && !OPT) return;
+  const BASE = (LOOP || (PLAIN && TOKEN)) ? '' : OPT.replace(/\/+$/, '');
+  const q = TOKEN ? ('?t=' + encodeURIComponent(TOKEN)) : '';
 
   const AI = () => window.WEBCAD_AI || window.__WEBCAD_AI_TEST__ || null;
   const C = () => window.__CADTEST__ || null;
@@ -240,7 +257,7 @@
   // ── 전송 ───────────────────────────────────────────────────────────────────
   async function post(id, ok, payload) {
     try {
-      await fetch(BASE + '/bridge/result', {
+      await fetch(BASE + '/bridge/result' + q, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify(ok ? { id, ok: true, result: payload } : { id, ok: false, error: String(payload) }),
       });
@@ -281,7 +298,7 @@
     try { if (es) es.close(); } catch (e) {}
     setDot('var(--muted,#888)', '연결 중…', false);
     try {
-      es = new EventSource(BASE + '/bridge/events');
+      es = new EventSource(BASE + '/bridge/events' + q);
     } catch (e) { setDot('var(--danger,#ff453a)', '연결 실패', false); return; }
     es.onopen = () => {
       setDot('var(--success,#30d158)', '연결됨 — Claude 가 이 도면을 만질 수 있습니다', true);
@@ -302,7 +319,11 @@
     };
     es.onerror = () => {
       if (evicted) return;
-      setDot('var(--danger,#ff453a)', '끊김 — parti-mcp 서버가 떠 있는지 확인 (눌러서 재연결)', false);
+      // ★토큰은 서버를 다시 켤 때마다 바뀐다. 기억해 둔 옛 토큰으로는 403 이 나는데
+      //   EventSource 는 상태 코드를 알려 주지 않으므로, 토큰을 쓰는 중이면 그 가능성을 함께 안내한다.
+      setDot('var(--danger,#ff453a)', TOKEN
+        ? '끊김 — 서버를 다시 켰다면 토큰이 바뀌었습니다. 서버가 출력한 새 주소로 여세요.'
+        : '끊김 — parti-mcp 서버가 떠 있는지 확인 (눌러서 재연결)', false);
     };
   }
 

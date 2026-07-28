@@ -24,14 +24,49 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 
+const os = require('node:os');
+const crypto = require('node:crypto');
+
 const ROOT = path.resolve(process.env.PARTI_ROOT || path.join(__dirname, '..'));
 const PORT = Number(process.env.PARTI_MCP_PORT || 7391);
 const CALL_TIMEOUT = Number(process.env.PARTI_MCP_TIMEOUT || 60000);
+
+// ── LAN 모드 (아이패드에서 쓰기) ────────────────────────────────────────────
+// 기본은 루프백만 듣는다. --lan (또는 PARTI_MCP_LAN=1) 을 주면 0.0.0.0 에 열어
+// 같은 네트워크의 아이패드가 http://<이 PC 의 IP>:PORT/ 로 들어올 수 있게 한다.
+//
+// ★그 순간 이 브리지는 '도면을 마음대로 만질 수 있는 창구'가 된다. 그래서 LAN 모드에서는
+//   루프백이 아닌 접속에 한해 페어링 토큰을 요구한다. 토큰은 켤 때마다 새로 만들어
+//   주소에 실어 출력하고(?t=…), 페이지가 그 값을 기억해 브리지 호출에 붙인다.
+//   루프백(127.0.0.1)은 예외 — 이 PC 안에서 온 것은 신뢰한다.
+const LAN = process.argv.includes('--lan') || process.env.PARTI_MCP_LAN === '1';
+const TOKEN = LAN ? (process.env.PARTI_MCP_TOKEN || crypto.randomBytes(9).toString('base64url')) : '';
+const HOST = LAN ? '0.0.0.0' : '127.0.0.1';
 
 const { TOOLS } = require('./tools.js');
 
 // ── 진단 출력 (stdout 은 MCP 전용이므로 절대 쓰지 않는다) ──
 const log = (...a) => process.stderr.write('[parti-mcp] ' + a.join(' ') + '\n');
+
+const isLoopback = (req) => {
+  const a = (req.socket && req.socket.remoteAddress) || '';
+  return a === '127.0.0.1' || a === '::1' || a === '::ffff:127.0.0.1';
+};
+// 브리지 엔드포인트만 지킨다. 정적 파일은 막지 않는다 — 앱만 받아서는 아무것도 못 하고,
+// 활성 클라이언트가 되려면 /bridge/events 를 통과해야 한다.
+function authed(req, url) {
+  if (!LAN || isLoopback(req)) return true;
+  return url.searchParams.get('t') === TOKEN;
+}
+function lanURLs() {
+  const out = [];
+  for (const list of Object.values(os.networkInterfaces())) {
+    for (const ni of (list || [])) {
+      if (ni.family === 'IPv4' && !ni.internal) out.push('http://' + ni.address + ':' + PORT + '/?t=' + TOKEN);
+    }
+  }
+  return out;
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 브라우저 브리지
@@ -126,6 +161,12 @@ const server = http.createServer(async (req, res) => {
 
   // ── 브리지: 서버 → 브라우저 (SSE) ──
   if (p === '/bridge/events') {
+    if (!authed(req, url)) {
+      log('토큰 없는 접속 거절: ' + (req.socket.remoteAddress || '?'));
+      res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' })
+        .end('페어링 토큰이 필요합니다 — 서버가 출력한 주소(?t=…)로 열어 주세요.');
+      return;
+    }
     // 활성 탭은 하나뿐이고 새 탭이 이긴다. ★밀려나는 탭에는 evict 를 먼저 보낸다 —
     //   그냥 끊으면 EventSource 가 1초 뒤 자동 재접속해서 두 탭이 서로를 끊는 무한 루프가 된다.
     if (client) {
@@ -151,6 +192,7 @@ const server = http.createServer(async (req, res) => {
 
   // ── 브리지: 브라우저 → 서버 (도구 결과) ──
   if (p === '/bridge/result' && req.method === 'POST') {
+    if (!authed(req, url)) { res.writeHead(403).end('{"ok":false,"error":"token"}'); return; }
     try {
       const body = JSON.parse((await readBody(req)).toString('utf8'));
       const w = pending.get(body.id);
@@ -329,7 +371,17 @@ server.on('error', (e) => {
     log('MCP 는 계속 뜨지만 브리지가 없어 도구 호출이 실패합니다. PARTI_MCP_PORT 로 바꿀 수 있습니다.');
   } else log('HTTP 서버 오류:', e.message);
 });
-server.listen(PORT, '127.0.0.1', () => {
+server.listen(PORT, HOST, () => {
   log('Parti 를 서빙합니다 → http://127.0.0.1:' + PORT + '/   (작업본: ' + ROOT + ')');
   log('도구 ' + TOOLS.length + '개 준비됨. 브라우저에서 위 주소를 열면 연결됩니다.');
+  if (LAN) {
+    const us = lanURLs();
+    log('');
+    log('── LAN 모드 — 아이패드/다른 기기에서 아래 주소를 여세요 (같은 와이파이) ──');
+    if (us.length) for (const u of us) log('   ' + u);
+    else log('   (외부 IPv4 주소를 찾지 못했습니다 — 네트워크에 연결돼 있나요?)');
+    log('   ★주소의 ?t=… 가 페어링 토큰입니다. 이 토큰을 아는 기기만 도면을 만질 수 있고,');
+    log('     서버를 다시 켜면 새로 만들어집니다. 화면 공유·캡처 시 주의하세요.');
+    log('');
+  }
 });
