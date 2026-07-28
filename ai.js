@@ -1054,7 +1054,10 @@
         run(() => br.cmdAutoSection && br.cmdAutoSection(''), '단면·입면', true);
         // 용지·PDF 는 문장에서 읽는다 — "A3 로", "PDF 로 뽑아줘"
         const paper = ((t.match(/(?:^|[^A-Za-z0-9])(A[0-4])(?![0-9])/i) || [])[1] || '');
-        const wantPdf = /pdf|피디에프|인쇄|출력|뽑아/i.test(t);
+        // ★'뽑아'·'출력' 은 PDF 요청이 아니다 — 한국어에서 "도면 한 장 뽑아줘" 는
+        //   "만들어줘" 라는 뜻인데, 이것 때문에 묻지도 않은 PDF 가 내려받아졌다.
+        //   파일을 사용자 디스크에 쓰는 일은 명시적으로 말했을 때만 한다.
+        const wantPdf = /pdf|피디에프|프린트|인쇄/i.test(t);
         const sArg = [paper.toUpperCase(), wantPdf ? 'pdf' : ''].filter(Boolean).join(' ');
         // 한 장이냐 세트냐 — 문장에서 읽는다. 세트면 종류마다 장을 나누고 번호를 붙인다.
         const wantSet = /세트|여러\s*장|장별|나눠|나누어|일습|낱장/.test(t);

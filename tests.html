@@ -5325,6 +5325,23 @@ function tests(){
               ok(/A3/.test(r), '★문장에서 용지를 읽는다 (A3)');
               ok(/PDF/.test(r), '★문장에서 PDF 요청을 읽어 내보내기까지 끝낸다');
               ok(/1:1 인쇄/.test(r), '  인쇄 축척이 도면과 맞는다는 것을 밝힌다');
+              // ★회귀가 진짜로 파일을 내려받으면 안 된다 — 예전에는 테스트를 한 번 돌릴 때마다
+              //   브라우저 '파일 저장' 창이 뜨고 Downloads 에 도면-A3.pdf 가 쌓였다.
+              //   만들기까지는 그대로 하므로 __PARTI_SAVED__ 에 기록은 남아야 한다.
+              const saved = AW.__PARTI_SAVED__ || [];
+              ok(AW.__PARTI_NO_DOWNLOAD__ === true, '★테스트 모드에서는 실제 내려받기를 하지 않는다');
+              ok(saved.some(x => /\.pdf$/i.test(x.name)), '  그래도 PDF 는 실제로 만들어졌다 (' + saved.map(x => x.name).join(',') + ')');
+              ok(saved.every(x => x.bytes > 500), '  빈 파일이 아니다');
+              C.state.entities.length = b3;
+              AW.__PARTI_SAVED__.length = 0;
+              // ★'뽑아' 는 PDF 요청이 아니다 — "도면 한 장 뽑아줘" 는 "만들어줘" 라는 뜻인데
+              //   예전엔 이 말만으로 묻지도 않은 PDF 가 사용자 디스크에 내려받아졌다.
+              return LR('이 이미지로 도면 한 장 뽑아줘', [{ dataUrl: mkSketch() }]);
+            })
+            .then(r => {
+              ok(/도면 한 장/.test(r), '  "뽑아줘" 도 도면은 만든다');
+              ok(!/PDF/i.test(r), '★"뽑아줘" 만으로는 PDF 로 보지 않는다');
+              eqi((AW.__PARTI_SAVED__ || []).length, 0, '★파일을 내려받지 않는다 (명시했을 때만 디스크에 쓴다)');
               C.state.entities.length = b3;
               // ★"세트" 라고 하면 한 장이 아니라 장을 나눠 번호를 붙여야 한다
               return LR('이 이미지로 A2 도면 세트로 나눠서 만들어줘', [{ dataUrl: mkSketch() }]);
@@ -6734,6 +6751,11 @@ function tests(){
 document.getElementById('rerun').addEventListener('click', () => { if(T) runAll(); });
 document.getElementById('app').addEventListener('load', () => {
   setTimeout(() => {
+    // ★회귀가 진짜로 파일을 내려받지 않게 한다.
+    //   아래 도면 테스트가 "A3 도면 한 장 PDF로 뽑아줘" 를 실행하므로, 이 플래그가 없으면
+    //   테스트를 돌릴 때마다 브라우저 '파일 저장' 창이 뜨고 Downloads 에 파일이 쌓인다.
+    //   만들기까지는 그대로 하고 saveBlob 만 건너뛰므로, 생성 자체는 계속 검사된다.
+    document.getElementById('app').contentWindow.__PARTI_NO_DOWNLOAD__ = true;
     T = document.getElementById('app').contentWindow.__CADTEST__;
     if (!T) { S.innerHTML = '<span class="fail">__CADTEST__ 훅을 찾을 수 없습니다 (cad.js 로드 실패?)</span>'; return; }
     runAll();

@@ -15780,6 +15780,15 @@ function buildDXFText() {
 // DXF 저장 — 모바일은 공유시트(파일 앱 저장), 데스크톱은 다운로드
 // 공통 저장: 모바일은 공유시트(파일 앱), 데스크톱은 다운로드
 async function saveBlob(blob, fname) {
+  // ★회귀를 돌릴 때는 실제로 내려받지 않는다.
+  //   tests.html 이 "A3 도면 한 장 PDF로 뽑아줘" 를 실행하므로, 예전에는 테스트를 한 번
+  //   돌릴 때마다 브라우저의 '파일 저장' 창이 뜨고 Downloads 에 도면-A3.pdf 가 쌓였다.
+  //   만드는 것(buildPDF/buildDXFText)까지는 그대로 하므로 생성 자체는 여전히 검사된다.
+  if (window.__PARTI_NO_DOWNLOAD__) {
+    (window.__PARTI_SAVED__ || (window.__PARTI_SAVED__ = [])).push({ name: fname, bytes: blob.size });
+    logLine('  ✔ ' + fname + ' (테스트 모드 — 저장 생략)', 'ok');
+    return;
+  }
   const ua = navigator.userAgent || '';
   const isiOS = /iPad|iPhone|iPod/.test(ua) || (navigator.maxTouchPoints > 1 && /Mac/.test(navigator.platform || ''));
   const isCoarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
