@@ -6592,6 +6592,101 @@ function tests(){
     }
   }
 
+  // ---------- 2026-07-28 로컬 코워커 — 하지 않은 일을 했다고 답하지 않는다 ----------
+  // 전수 조사에서 확정된 거짓보고·오동작을, 조사가 준 재현 문장 그대로 못박는다.
+  group('로컬 코워커 — 숫자·분기 함정 (조사에서 확정된 재현 문장)');
+  {
+    const W = document.getElementById('app').contentWindow;
+    const H = W.__WEBCAD_AI_TEST__, A = W.PARTI_ARCH;
+    if (!H || !H.parseComplexSpec || !A) ok(true, '(로컬 봇 훅 없음 — 건너뜀)');
+    else {
+      const P = H.parseComplexSpec;
+      // ★단위 — 'm' 이 "3000mm" 의 첫 글자에 걸려 1000배가 되던 것
+      eqi(A.shapeOf('원통 높이 3000mm 만들어줘'), 'cylinder', '  원통 인식');
+      let s = P('한 동 8000x12000mm 로 다시');
+      eqi(s.w, 8000, '★"8000x12000mm" 를 mm 로 읽는다 (예전엔 8,000,000 = 8km)');
+      eqi(s.d, 12000, '  깊이도 mm');
+      s = P('한 동 10x14m 로 다시');
+      eqi(s.w, 10000, '  "10x14m" → 10000mm');
+      eqi(s.d, 14000, '  ');
+      s = P('한 동 10X14m 로 다시');
+      eqi(s.w, 10000, '★대문자 X 도 읽는다 (예전엔 통째로 미검출 → 기본 8×12m 로 조용히 대체)');
+      s = P('한 동 10x14 로 다시');
+      eqi(s.d, 14000, '★단위를 안 붙여도 깊이가 버려지지 않는다 (예전엔 폭만 읽고 14 가 사라졌다)');
+      // ★'N층은 OO' 은 층수가 아니다 — 용도 화이트리스트 밖 단어에서도
+      eqi(P('1층은 주차장, 5동 4층으로').floors, 4, '★"1층은 주차장, 5동 4층" 을 4층으로 읽는다 (예전엔 1층)');
+      eqi(P('1층은 로비인 5동 4층').floors, 4, '★어순이 달라도 (예전엔 1층)');
+      eqi(P('1층은 상가, 3동 5층').floors, 5, '  목록 안 용도도 그대로');
+      // ★'비워' 단독은 필로티가 아니다 — PROGRAMS 에 piloti 가 없어 조용히 원룸이 됐다
+      eqi(A.programOf('화면 비워줘'), null, '★"화면 비워줘" 는 용도가 아니다 (예전엔 piloti→원룸 평면 생성)');
+      eqi(A.programOf('1층은 비워'), 'piloti', '  층을 짚어 비우라면 필로티');
+      eqi(A.programOf('필로티로'), 'piloti', '  필로티는 그대로');
+      // ★'콘' 이 '콘크리트' 에 걸리던 것
+      eqi(A.shapeOf('콘크리트 벽 두께 200으로 해줘'), null, '★"콘크리트" 는 원뿔이 아니다 (예전엔 cone)');
+      eqi(A.shapeOf('원뿔 만들어줘'), 'cone', '  원뿔은 그대로');
+      // ★buildComplex 가 실제 치수를 돌려줘야 보고가 사실일 수 있다
+      reset();
+      const rc = A.buildComplex({ count: 3, floors: 2, w: 2000, d: 3000, arrange: 'row' });
+      ok(rc && rc.widths && rc.widths.length === 3, '★buildComplex 가 동별 폭을 돌려준다');
+      ok(rc && rc.depths && rc.depths.length === 3, '★깊이도 돌려준다 (없으면 보고가 입력값을 되읊게 된다)');
+      ok(rc.widths.every(v => v >= 3000), '★하한 보정이 반환값에 보인다 (폭 2000 요청 → ' + rc.widths[0] + ')');
+      ok(rc.depths.every(v => v >= 4000), '  깊이 하한도 (3000 요청 → ' + rc.depths[0] + ')');
+      eqi(rc.arrange, 'row', '  배치도 사실대로');
+      reset();
+    }
+  }
+
+  // ---------- 2026-07-28 로컬 코워커 — 분기가 서로를 삼키지 않는다 (비동기) ----------
+  {
+    const W = document.getElementById('app').contentWindow;
+    const H = W.__WEBCAD_AI_TEST__;
+    if (H && H.localReply) {
+      const LR = H.localReply;
+      const ents = () => C.state.entities.length;
+      const say = (s) => { C.reset(); const n0 = ents();
+        return Promise.resolve(LR(s, null)).then(r => ({ r: String(r), grew: ents() - n0 })); };
+      say('화면 비워줘')
+        .then(x => {
+          group('로컬 코워커 — 분기가 서로를 삼키지 않는다');
+          eqi(x.grew, 0, '★"화면 비워줘" 가 도면을 바꾸지 않는다 (예전엔 33㎡ 원룸 평면 생성)');
+          ok(!/평면을 만들었습니다/.test(x.r), '  원룸을 만들었다고 하지 않는다');
+          return say('원룸이랑 투룸 중에 뭐가 나아?');
+        })
+        .then(x => {
+          eqi(x.grew, 0, '★질문에는 평면을 그리지 않는다 (동사 게이트가 항상 참이었다)');
+          return say('콘크리트 벽 두께 200으로 해줘');
+        })
+        .then(x => {
+          ok(/벽이 없습니다|벽 \d+개/.test(x.r), '★"콘크리트 벽 두께" 가 벽 속성으로 간다 (예전엔 원뿔 생성)');
+          return say('보정 강도가 부족해요');
+        })
+        .then(x => {
+          ok(/러프/.test(x.r), '★"보정 강도가 부족해요" → 러프 (예전엔 정반대인 정밀로 갔다)');
+          return say('3D로 보여줘');
+        })
+        .then(x => {
+          ok(/뷰로 전환/.test(x.r), '★"3D로 보여줘" 가 뷰 전환으로 간다 (예전엔 건물화가 삼켰다)');
+          return say('외쪽지붕 5동 세워줘');
+        })
+        .then(x => {
+          ok(/5동/.test(x.r) && /외쪽지붕/.test(x.r),
+            '★"외쪽지붕 5동 세워줘" 가 다동 배치로 간다 (예전엔 쐐기 한 덩어리)');
+          ok(/동 폭 .*m · 깊이 .*m/.test(x.r), '  보고에 실측 폭·깊이가 들어간다');
+          return say('원통 높이 3000mm 만들어줘');
+        })
+        .then(x => {
+          ok(/×3\.0m/.test(x.r), '★"높이 3000mm" 가 3.0m 로 선다 (예전엔 3000.0m = 3km)');
+          return say('1,000평 사무실 그려줘');
+        })
+        .then(x => {
+          ok(/3306|3,306/.test(x.r), '★"1,000평" 을 3306㎡ 로 읽는다 (예전엔 쉼표에 걸려 33㎡)');
+          C.reset();
+          finishAsync();
+        })
+        .catch(e => { record(false, '로컬 분기 검사 오류: ' + e.message); finishAsync(); });
+    }
+  }
+
   // ---------- 2026-07-28 MCP 도구 목록 대조 (비동기) ----------
   {
     const W = document.getElementById('app').contentWindow;

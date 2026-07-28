@@ -738,7 +738,38 @@
   //  로컬 코워커 — API 키 없이, 건축 지식 알고리즘만으로 작도·모델링
   //  (arch.js 평면 생성 · vision.js 이미지 벡터화 · 기존 sketch/bimify 파이프라인 재사용)
   // ============================================================
-  const numOf = (s, re) => { const m = String(s).match(re); return m ? parseFloat(m[1]) : null; };
+  // ★쉼표를 뺀다 — "1,000평" 은 정규식이 뒷토막 "000평" 에 붙어 0 이 되고, 0 은 falsy 라
+  //   호출부의 `|| 기본값` 에 먹혀 조용히 33㎡ 가 됐다. NaN 도 null 로 돌린다(값 없음과 같게).
+  const numOf = (s, re) => {
+    const m = String(s).match(re);
+    if (!m || m[1] == null) return null;
+    const v = parseFloat(String(m[1]).replace(/,/g, ''));
+    return isFinite(v) ? v : null;
+  };
+  // ── 길이는 한 곳에서만 읽는다 ─────────────────────────────────────────────
+  // ★'m' 뒤에 글자가 오면(mm) 미터로 읽지 않는다. 예전엔 /…\s*m/ 이 "3000mm" 의 첫 m 에
+  //   걸려 3000×1000 = 3km 짜리가 섰다("원통 높이 3000mm" → 3,000,000mm, 실측 확인).
+  //   mm → cm → m 순으로 시도해야 mm 이 m 에 먹히지 않는다.
+  const LNUM = '(\\d[\\d,]*(?:\\.\\d+)?)';
+  function lenMM(t, kw) {                    // kw: '높이|층고' 같은 앞말 패턴(없으면 전체에서)
+    const p = kw ? '(?:' + kw + ')\\s*' : '';
+    let v = numOf(t, new RegExp(p + LNUM + '\\s*mm\\b', 'i')); if (v != null) return Math.round(v);
+    v = numOf(t, new RegExp(p + LNUM + '\\s*cm\\b', 'i'));     if (v != null) return Math.round(v * 10);
+    v = numOf(t, new RegExp(p + LNUM + '\\s*m(?![a-z])', 'i')); if (v != null) return Math.round(v * 1000);
+    return null;
+  }
+  // "10x14m" · "8000x12000mm" · "10X14" — 폭·깊이를 한 번에, 단위를 지켜서 읽는다.
+  // ★예전엔 폭 식만 단위를 안 요구해 "10x14" 에서 14 가 조용히 사라졌고(기본 8m 로 대체),
+  //   대문자 X 는 아예 못 읽었고, mm 로 말하면 1000배가 됐다.
+  function pairMM(t) {
+    const m = String(t).match(new RegExp(LNUM + '\\s*[xX×]\\s*' + LNUM + '\\s*(mm|cm|m)?(?![a-z])', 'i'));
+    if (!m) return null;
+    const a = parseFloat(String(m[1]).replace(/,/g, '')), b = parseFloat(String(m[2]).replace(/,/g, ''));
+    if (!isFinite(a) || !isFinite(b)) return null;
+    const u = (m[3] || '').toLowerCase();
+    const k = u === 'mm' ? 1 : u === 'cm' ? 10 : 1000;   // 단위 없으면 미터로 본다(사람이 말하는 기본)
+    return { w: Math.round(a * k), d: Math.round(b * k) };
+  }
   function wallsTarget() {                      // 선택이 있으면 선택, 없으면 전체 벽
     const S = B().state;
     const sel = [...S.selection].map(id => S.entities.find(e => e.id === id)).filter(e => e && e.bim && e.bim.kind === 'wall');
@@ -773,10 +804,13 @@
       if (pg) { fpm[+mF[1]] = pg; t2 = t2.replace(mF[0], ' '); }
     }
     if (Object.keys(fpm).length) o.floorProgram = fpm;
+    // ★조사가 붙은 'N층은/N층에' 는 층수가 아니라 층 이름이다. 용도 목록(reF)에 없는 말이
+    //   와도("1층은 주차장", "1층은 로비인 5동 4층") 층수로 읽히면 4층 단지가 1층이 된다.
+    //   그래서 목록과 무관하게, 조사가 붙은 N층 구절을 층수 후보에서 통째로 뺀다.
+    t2 = t2.replace(/(?:지하\s*)?\d+\s*층\s*(?:은|는|을|를|에|:)/g, ' ');
     const f = numOf(t2, /(\d+)\s*층/); if (f) o.floors = f;
-    const w = numOf(t, /(\d+(?:\.\d+)?)\s*[x×]\s*\d+(?:\.\d+)?\s*m/);
-    const d = numOf(t, /\d+(?:\.\d+)?\s*[x×]\s*(\d+(?:\.\d+)?)\s*m/);
-    if (w) o.w = w * 1000; if (d) o.d = d * 1000;
+    const wd = pairMM(t);
+    if (wd) { o.w = wd.w; o.d = wd.d; }
     if (/평지붕|평평|플랫/.test(t)) o.roof = 'flat';
     else if (/외쪽|한쪽|시드/.test(t)) o.roof = 'shed';
     else if (/박공|게이블|맞배/.test(t)) o.roof = 'gable';
@@ -802,6 +836,21 @@
     return o;
   }
 
+  // ── 지어진 것을 사실대로 적는다 ──────────────────────────────────────────
+  // ★보고는 입력(spec)이 아니라 반환(r)에서 읽어야 한다. buildComplex 는 동별 폭을
+  //   massList 비율로 다시 만들고(0.45~2.2배), 깊이는 depths 나열과 하한 4000 으로 보정하며,
+  //   arrange 는 'arc'(부채꼴)가 기본이다 — spec 을 되읊으면 전부 어긋난다.
+  const ARR_KO = { arc: '부채꼴 배치(마당은 앞)', circle: '원형 마당 배치', row: '일렬 배치' };
+  const ROOF_KO = { gable: '박공지붕', flat: '평지붕', shed: '외쪽지붕' };
+  const mList = (a) => [...new Set((a || []).map(v => (v / 1000).toFixed(0)))].join('/');
+  function describeComplex(r, spec) {
+    const ws = mList(r.widths), ds = mList(r.depths);
+    return r.n + '동 · ' + r.floors + '층 · '
+      + (ROOF_KO[spec && spec.roof] || (spec && spec.roof) || '지붕')
+      + ' · ' + (ARR_KO[r.arrange] || r.arrange)
+      + ', 동 폭 ' + ws + 'm · 깊이 ' + ds + 'm';
+  }
+
   async function localReply(text, imgs) {
     const t = String(text || '').trim();
     const SKm = window.WEBCAD_SKETCH;
@@ -814,16 +863,20 @@
       const has = exp.count || exp.floors || exp.w || exp.d || exp.roof || exp.arrange
         || exp.glass != null || (exp.depths && exp.depths.length) || exp.floorProgram
         || exp.balcony != null || exp.eaveOvh;
-      if (lastConcept && (exp.count || (has && /다시|바꿔|변경|수정|말고/.test(t)))) {
+      // ★동 수만 보고 재구성하지 않는다 — "5동짜리 단면도 그려줘" 같은 문장이 배치를
+      //   갈아엎었다. 다시 세우라는 뜻의 동사가 함께 있고, 도면을 뽑으라는 말이 없을 때만.
+      const wantRebuild = /다시|바꿔|변경|수정|말고|세워|지어|배치/.test(t)
+        && !/단면|입면|평면도|도면|치수|일람표|면적표/.test(t);
+      if (lastConcept && has && wantRebuild) {
         const spec = Object.assign({}, lastConcept, exp);
         const r = window.PARTI_ARCH.buildComplex(spec);
         if (r) {
           lastConcept = spec;
           execTool('set_view', { mode: '3d' });
-          const roofKo = { gable: '박공지붕', flat: '평지붕', shed: '외쪽지붕' }[spec.roof] || spec.roof;
-          return `다시 세웠습니다 — **${r.n}동 · ${spec.floors}층 · ${roofKo} · `
-            + `${spec.arrange === 'circle' ? '원형 마당' : '일렬'} 배치**, 각 동 ${(spec.w / 1000).toFixed(0)}×${(spec.d / 1000).toFixed(0)}m.\n`
-            + '(되돌리기: Ctrl+Z)';
+          // ★보고는 전부 반환값(r)에서 읽는다. spec 을 되읊으면 실제로 지어진 것과 다르다 —
+          //   배치는 'arc'(부채꼴)인데 '일렬'이라 하고, 동별 폭·깊이 보정과 depths 나열이
+          //   통째로 무시된 값을 단언하게 된다.
+          return '다시 세웠습니다 — **' + describeComplex(r, spec) + '**.\n(되돌리기: Ctrl+Z)';
         }
       }
     }
@@ -836,8 +889,13 @@
         const m = window.PARTI_ARCH.buildMassing({ floors: exp.floors || f.floors, bays: f.bays,
           windows: f.windows, widthMM: f.meta.widthMM, depthMM: f.meta.depthMM, floorH: f.meta.floorH });
         execTool('set_view', { mode: '3d' });
-        return `직전 이미지로 매스를 세웠습니다 — **${f.floors}층 · ${f.bays}베이**, `
+        // ★보고는 실제로 지어진 m.floors 로 한다. 예전엔 판독값 f.floors 를 찍어,
+        //   "4층으로 세워줘" + 3층으로 읽힌 사진이면 4층(12m)을 세워 놓고 '3층 … 12.0m' 라는
+        //   자기모순 문장이 나갔다.
+        return `직전 이미지로 매스를 세웠습니다 — **${m.floors}층 · ${m.bays}베이**, `
           + `${(m.W / 1000).toFixed(1)}×${(m.D / 1000).toFixed(1)}×${(m.H / 1000).toFixed(1)}m (창 ${m.counts.window}개).\n`
+          + (exp.floors && exp.floors !== f.floors
+            ? `사진은 ${f.floors}층으로 읽혔지만 말씀하신 ${exp.floors}층으로 세웠습니다. ` : '')
           + `창 격자 신뢰도가 낮았으니(${Math.round((f.meta.conf || 0) * 100)}%) 치수는 참고용입니다.`;
       }
       void exp;
@@ -849,7 +907,10 @@
     if (imgs && imgs.length && window.PARTI_VISION) {
       const V = window.PARTI_VISION;
       lastImg = imgs[imgs.length - 1];
-      const wmm = numOf(t, /(\d{3,6})\s*mm/) || (numOf(t, /(?:폭|가로)?\s*(\d+(?:\.\d+)?)\s*m\b/) || 0) * 1000 || 10000;
+      // ★도면의 실제 가로는 '폭/가로' 라고 말했을 때만 채택한다. 예전엔 한정어가 없어
+      //   "벽 두께 200mm" 의 200 을 도면 전체 폭으로 써서 도면이 1/50 로 찌그러졌다.
+      const wmmSaid = lenMM(t, '폭|가로|전폭|길이');
+      const wmm = wmmSaid || 10000;
       const forceMass = /매스|매싱|볼륨|파사드|외관/.test(t);
       const forcePlan = /평면도|도면 (그대로|따라)|트레이스/.test(t);
       const fh = numOf(t, /층고\s*(\d{3,5})/) || 3000;
@@ -895,12 +956,12 @@
         const isComplex = pre && pre.masses >= 2 && pre.meta.courtyard;
         if (window.PARTI_ARCH && (orthoish || forceMass) && !isComplex) {
           const f = await V.traceFacade(img.dataUrl, { floorH: fh,
-            depthMM: numOf(t, /(?:깊이|안길이)\s*(\d+(?:\.\d+)?)\s*m/) * 1000 || null });
+            depthMM: lenMM(t, '깊이|안길이') });
           if (forceMass || (f.meta.conf || 0) >= 0.45) {
             const m = window.PARTI_ARCH.buildMassing({ floors: exp.floors || f.floors, bays: f.bays, windows: f.windows,
               widthMM: f.meta.widthMM, depthMM: f.meta.depthMM, floorH: f.meta.floorH, ox: cursorX });
             cursorX += m.W + 4000; massN++;
-            lines.push(`· 사진 → 매스 ${f.floors}층·${f.bays}베이, ${(m.W / 1000).toFixed(1)}×${(m.D / 1000).toFixed(1)}×${(m.H / 1000).toFixed(1)}m (창 ${m.counts.window})`);
+            lines.push(`· 사진 → 매스 ${m.floors}층·${m.bays}베이, ${(m.W / 1000).toFixed(1)}×${(m.D / 1000).toFixed(1)}×${(m.H / 1000).toFixed(1)}m (창 ${m.counts.window})`);
             continue;
           }
         }
@@ -971,16 +1032,26 @@
       // ★순서가 중요하다: 치수·표는 모델 도면에 얹혀야 시트가 그걸 모아 갈 수 있고,
       //   단면은 BIM 을 보므로 치수와 무관하며, 시트는 맨 마지막이어야 모든 탭이 모인다.
       if ((cpxN || massN || planN) && /도면\s*(한\s*장|세트|일습|일체|전부)|한\s*장으로|풀\s*세트|도면화|도면까지|일습/.test(t)) {
-        const br = B(), steps = [];
-        const run = (fn, label) => {
-          if (typeof fn !== 'function') return;
-          try { const r2 = fn(); if (r2 !== false) steps.push(label); }
-          catch (e) { steps.push(label + '(실패: ' + String(e.message || e).slice(0, 40) + ')'); }
+        const br = B(), steps = [], skipped = [];
+        // ★성공을 '반환값이 false 가 아님' 으로 재던 것이 거짓보고의 원인이었다 —
+        //   cmdAreaTable·cmdOwSchedule 은 성공 경로에도 return 이 없어 항상 undefined 이고,
+        //   cmdAutoDim·cmdAutoSection 은 '잴 것이 없습니다' 에서도 undefined 를 낸다.
+        //   undefined !== false 이므로 네 단계가 무조건 '성공' 으로 기록됐다.
+        //   그래서 실제로 무엇이 생겼는지(개체 수·탭 수)를 재서 판정한다.
+        const nEnt = () => br.state.entities.length;
+        const nDoc = () => (window.__CADTEST__ && window.__CADTEST__.docCount ? window.__CADTEST__.docCount() : 1);
+        const run = (fn, label, byTab) => {
+          const e0 = nEnt(), d0 = nDoc();
+          let out;
+          try { out = fn(); }
+          catch (e) { steps.push(label + '(실패: ' + String(e.message || e).slice(0, 40) + ')'); return; }
+          const grew = byTab ? (nDoc() > d0) : (nEnt() > e0);
+          if (grew || out) steps.push(label); else skipped.push(label);
         };
         run(() => br.cmdAutoDim && br.cmdAutoDim(''), '치수');
         run(() => br.cmdOwSchedule && br.cmdOwSchedule(''), '창호일람표');
         run(() => br.cmdAreaTable && br.cmdAreaTable(''), '면적표');
-        run(() => br.cmdAutoSection && br.cmdAutoSection(''), '단면·입면');
+        run(() => br.cmdAutoSection && br.cmdAutoSection(''), '단면·입면', true);
         // 용지·PDF 는 문장에서 읽는다 — "A3 로", "PDF 로 뽑아줘"
         const paper = ((t.match(/(?:^|[^A-Za-z0-9])(A[0-4])(?![0-9])/i) || [])[1] || '');
         const wantPdf = /pdf|피디에프|인쇄|출력|뽑아/i.test(t);
@@ -1002,7 +1073,11 @@
             : sheet ? `  (${sheet.size} · 축척 1:${sheet.denom} · 뷰 ${sheet.views.length}개`
               + (wantPdf ? ' · PDF 내려받음 — 1:1 인쇄하면 도면의 축척이 실제로 맞습니다' : ' — 지금 그 탭입니다') + ')'
             : '';
-          lines.push('· 도면 일습 → ' + steps.join(' → ') + tail);
+          lines.push('· 도면 일습 → ' + steps.join(' → ') + tail
+            // ★넘어간 단계를 밝힌다 — 조용히 빼면 사용자는 다 된 줄 안다
+            + (skipped.length ? `  (건너뜀: ${skipped.join(' · ')} — 만들 근거가 없었습니다)` : ''));
+        } else if (skipped.length) {
+          lines.push('· 도면 일습 → 아무것도 만들지 못했습니다 (' + skipped.join(' · ') + ' 모두 만들 근거가 없었습니다)');
         }
       }
       let builtFromPlan = null;
@@ -1042,17 +1117,27 @@
     // 고정 유형이 아니라 임의 다면체를 세우는 경로. '어떤 형상이든' 요청에 대응한다.
     if (window.PARTI_ARCH && window.PARTI_ARCH.shapeOf) {
       const sh = window.PARTI_ARCH.shapeOf(t);
-      if (sh && /만들|세워|그려|생성|해줘|추가/.test(t)) {
-        const mm = (re, def) => { const v = numOf(t, re); return v ? v * 1000 : def; };
+      // ★이 범용 경로가 더 특수한 분기들을 삼키고 있었다(실측):
+      //   · "외쪽지붕 5동 세워줘" → shapeOf 가 '외쪽'을 쐐기로 읽어 한 덩어리를 세운다 → 동 수가 있으면 비킨다
+      //   · "선이 자꾸 기울어져서 안 그려져요" → '기울'+'그려' 로 기운 상자를 세운다 → 스케치 불만이면 비킨다
+      //   · "콘크리트 벽 두께 200으로 해줘" → '콘'+'해줘' 로 원뿔을 세운다 → 치수 지시면 비킨다
+      //   게이트의 '해줘' 는 거의 모든 명령문에 있어서 사실상 게이트가 아니었다.
+      const notShape = /(\d+)\s*동/.test(t)                       // 다동 배치는 ①-b 가 맡는다
+        || /인식|보정|자꾸|안 그려|이상해|헷갈/.test(t)              // 스케치 불만은 ③ 이 맡는다
+        || /두께|층고|벽\s*높이/.test(t);                          // 벽 속성은 ④ 가 맡는다
+      if (sh && !notShape && /만들|세워|그려|생성|추가/.test(t)) {
+        // ★단위는 lenMM 한 곳에서 처리한다(mm/cm/m). 폭·깊이는 pairMM 으로 함께 읽어
+        //   'AxB' 에서 한쪽만 버려지는 비대칭을 없앤다.
+        const pr = pairMM(t);
         const r = window.PARTI_ARCH.buildShape({
           shape: sh,
-          w: mm(/(?:폭|가로)\s*(\d+(?:\.\d+)?)\s*m/, 0) || mm(/(\d+(?:\.\d+)?)\s*[x×]\s*\d+/, 0) || 10000,
-          d: mm(/(?:깊이|세로|안길이)\s*(\d+(?:\.\d+)?)\s*m/, 0) || mm(/\d+(?:\.\d+)?\s*[x×]\s*(\d+(?:\.\d+)?)\s*m/, 0) || 8000,
-          h: mm(/(?:높이|층고)\s*(\d+(?:\.\d+)?)\s*m/, 0) || (numOf(t, /(?:높이|층고)\s*(\d{3,5})/) || 0) || 6000,
+          w: lenMM(t, '폭|가로') || (pr && pr.w) || 10000,
+          d: lenMM(t, '깊이|세로|안길이') || (pr && pr.d) || 8000,
+          h: lenMM(t, '높이|층고') || 6000,
           sides: numOf(t, /(\d+)\s*각/) || 6,
           n: numOf(t, /(\d+)\s*(?:개|산|골)/) || 4,
-          twist: numOf(t, /(\d+)\s*도\s*(?:비틀|회전)/) || 0,
-          rot: numOf(t, /(\d+)\s*도\s*(?:돌려|틀어)/) || 0,
+          twist: numOf(t, /(\d+)\s*도\s*(?:로|만큼)?\s*(?:비틀|회전)/) || 0,
+          rot: numOf(t, /(\d+)\s*도\s*(?:로|만큼)?\s*(?:돌려|틀어|회전)/) || 0,
         });
         if (r) {
           execTool('set_view', { mode: '3d' });
@@ -1074,23 +1159,37 @@
       if (!r) return '배치를 만들지 못했습니다.';
       lastConcept = spec;
       execTool('set_view', { mode: '3d' });
-      const roofKo = { gable: '박공지붕', flat: '평지붕', shed: '외쪽지붕' }[spec.roof];
-      return `${r.n}동을 ${spec.arrange === 'row' ? '일렬로' : '원형 마당(반지름 ' + (r.R / 1000).toFixed(1) + 'm) 둘레에'} 세웠습니다 — `
-        + `각 동 ${(spec.w / 1000).toFixed(0)}×${(spec.d / 1000).toFixed(0)}m · ${spec.floors}층(${(r.H / 1000).toFixed(1)}m) · ${roofKo}`
+      // ★반환값으로 보고한다 — depths 나열·하한 보정(폭 3000·깊이 4000)이 반영되지 않은
+      //   입력값을 되읊으면 "2×3m 로 5동" 이 3×4m 로 서면서 2×3m 라고 단언하게 된다.
+      return r.n + '동을 세웠습니다 — **' + describeComplex(r, spec) + '**'
+        + (r.arrange === 'circle' ? ` (마당 반지름 ${(r.R / 1000).toFixed(1)}m)` : '')
+        + ` · 높이 ${(r.H / 1000).toFixed(1)}m`
         + (r.counts.window ? ' · 마당 쪽 전면 유리' : '') + '.\n'
         + '동 수·크기·지붕·배치는 같은 문장으로 다시 말하면 새로 세웁니다. (되돌리기: Ctrl+Z)';
     }
     // ② 평면 생성 — "N평/N㎡ + 실 구성"
     const prog = window.PARTI_ARCH && window.PARTI_ARCH.programOf(t);
-    const py = numOf(t, /(\d+(?:\.\d+)?)\s*평/);
-    const m2 = numOf(t, /(\d+(?:\.\d+)?)\s*(?:㎡|m2|m²|제곱미?터?)/i);
-    if (window.PARTI_ARCH && (prog || py || m2) && /그려|만들|생성|평면|배치|plan/i.test(t + (prog ? ' 평면' : ''))) {
-      const areaM2 = m2 || (py ? py * 3.3058 : 33);
+    const py = numOf(t, /(\d[\d,]*(?:\.\d+)?)\s*평/);
+    const m2 = numOf(t, /(\d[\d,]*(?:\.\d+)?)\s*(?:㎡|m2|m²|제곱미?터?)/i);
+    // ★게이트에 문자열을 덧붙이면(t + ' 평면') 정규식이 절대 거짓이 될 수 없다 — prog 만
+    //   걸리면 무조건 평면을 그렸다. "원룸이랑 투룸 중에 뭐가 나아?" 같은 질문에도,
+    //   "사무실 단면 보여줘" 처럼 뒤쪽 분기로 갔어야 할 문장에도 33㎡ 평면이 생겼다.
+    const wantDraw = /그려|만들|생성|배치|뽑아|plan/i.test(t) || /평면(도)?\s*(줘|해|부탁|만들)/.test(t);
+    // ★piloti 는 층 단위 구성이라 평면 생성기가 모른다 — PROGRAMS 에 없어 조용히 원룸이 된다.
+    if (prog === 'piloti' && wantDraw) {
+      return '필로티는 층 단위 구성이라 평면 하나로는 만들 수 없습니다.\n'
+        + '"3동 4층, 1층은 필로티로 세워줘" 처럼 말씀하시면 그 층만 기둥으로 비워 세웁니다.';
+    }
+    if (window.PARTI_ARCH && (prog || py || m2) && wantDraw) {
+      // ★면적을 못 읽었으면 그 사실을 밝힌다. 예전엔 "1,000평" 이 0 으로 읽혀 조용히 33㎡ 가 됐다.
+      const said = m2 != null || py != null;
+      const areaM2 = m2 != null ? m2 : (py != null ? py * 3.3058 : 33);
       const h = numOf(t, /(?:층고|천장|높이)\s*(\d{3,5})/) || undefined;
       const r = window.PARTI_ARCH.buildPlan({ areaM2, program: prog || 'oneroom', h });
       if (!r) return '평면을 만들지 못했습니다.';
       const rooms = r.cells.map(c => `${c.name} ${(c.w * c.h / 1e6).toFixed(1)}㎡`).join(' · ');
       return `${r.program} 평면을 만들었습니다 — 전체 ${r.areaM2.toFixed(1)}㎡(${(r.areaM2 / 3.3058).toFixed(1)}평), ${r.W}×${r.D}mm\n`
+        + (said ? '' : '면적을 말씀하지 않아 33㎡ 로 가정했습니다 — "25평" 처럼 알려주시면 다시 만듭니다.\n')
         + `${rooms}\n벽 ${r.counts.wall} · 문 ${r.counts.door} · 창 ${r.counts.window} 생성. "3D 보여줘" 라고 하시면 입체로 확인할 수 있어요.`;
     }
     // ③ 스케치 보정값 — ★'인식이 이상하다'는 불만은 '인식해줘' 명령보다 먼저 걸러야 한다
@@ -1098,19 +1197,35 @@
     if (SKm && SKm.setParams) {
       if (/곡선으로.*인식|자꾸 곡선|직선인데|곡선이 아닌/.test(t)) { const p = SKm.setParams({ corner: 0.45 }); return `모서리 민감도를 ${p.corner} 로 낮췄습니다 — 완만한 꺾임도 이제 꺾은선으로 인식됩니다. 다시 그려 보세요.`; }
       if (/꺾은선으로.*인식|자꾸 꺾|각지게/.test(t)) { const p = SKm.setParams({ corner: 0.85 }); return `모서리 민감도를 ${p.corner} 로 높였습니다 — 완만한 꺾임은 이제 곡선으로 봅니다.`; }
-      if (/보정.*(세|강|많)|너무 반듯|내 선.*살/.test(t)) { const p = SKm.setParams({ preset: 'fine' }); return `정밀 모드로 바꿨습니다 — 보정 강도 ${p.fitK}, 원본 선을 최대한 살립니다.`; }
+      // ★'약하다'(구체) 를 '세다'(일반) 보다 먼저 본다. 그리고 '강' 이 '보정 강도' 에
+      //   걸리는 바람에, 세기와 무관하게 항상 '세다' 쪽이 이겼다 — "보정 강도가 부족해요"
+      //   가 정반대 프리셋(fine)으로 갔다. (?!도) 로 '강도' 를 뺀다.
       if (/보정.*(약|안 되|부족)|반듯하게 (해|정리)|대충 그려도/.test(t)) { const p = SKm.setParams({ preset: 'rough' }); return `러프 모드로 바꿨습니다 — 보정 강도 ${p.fitK}, 대충 그려도 반듯하게 정리됩니다.`; }
+      if (/보정.*(세|강(?!도)|많)|너무 반듯|내 선.*살/.test(t)) { const p = SKm.setParams({ preset: 'fine' }); return `정밀 모드로 바꿨습니다 — 보정 강도 ${p.fitK}, 원본 선을 최대한 살립니다.`; }
       if (/끝점.*(안 붙|안붙|안 닿)/.test(t)) { const p = SKm.setParams({ snap: 20 }); return `끝점 흡착을 ${p.snap}px 로 넓혔습니다.`; }
       if (/끝점.*(자꾸 붙|너무 붙)/.test(t)) { const p = SKm.setParams({ snap: 5 }); return `끝점 흡착을 ${p.snap}px 로 좁혔습니다.`; }
       if (/기울.*(수평|반듯)|자꾸 수평/.test(t)) { const p = SKm.setParams({ ortho: 3 }); return `수평·수직 정리각을 ${p.ortho}° 로 줄였습니다 — 기울여 그린 선이 유지됩니다.`; }
     }
     // ④ 스케치 인식 / 건물화
-    if (/건물화|모델링|3d\s*로|입체로|세워/i.test(t) && SKm && SKm.buildBuilding) {
+    // ★'세워'·'3d로' 가 너무 넓어 "3D로 보여줘"·"벽 높이 3000으로 세워줘" 까지 삼켰다.
+    //   보여달라는 뜻이면 뷰 전환(⑤)으로, 치수 지시면 벽 속성(④)으로 흘려보낸다.
+    if (/건물화|모델링|건물로 세워|3d\s*로|입체로/i.test(t)
+        && !/보여|전환|봐줘|높이|층고|두께/.test(t) && SKm && SKm.buildBuilding) {
       if (!SKm.getPreview || !SKm.getPreview()) { try { SKm.recognize(); } catch (e) {} }
       const c = await SKm.buildBuilding();
       if (!c) return '건물화할 스케치가 없습니다 — 먼저 평면을 그려 주세요.';
       const KO = { wall: '벽', door: '문', window: '창', column: '기둥', furniture: '가구', slab: '슬래브' };
-      return '건물로 만들었습니다 — ' + Object.entries(c).filter(([, n]) => n > 0).map(([k, n]) => KO[k] + ' ' + n).join(' · ') + '. 3D 로 확인해 보세요.';
+      // ★build 는 어떤 경우에도 counts 객체를 돌려주므로 c 는 언제나 truthy 다.
+      //   구조 요소가 0 이면 '건물로 만들었습니다 — .' 같은 빈 문장이 나가거나,
+      //   가구만 생긴 것을 건물이라고 말하게 된다.
+      const struct = (c.wall || 0) + (c.door || 0) + (c.window || 0) + (c.column || 0) + (c.slab || 0);
+      const made = Object.entries(c).filter(([, v]) => v > 0).map(([k, v]) => (KO[k] || k) + ' ' + v).join(' · ');
+      if (!struct) {
+        return '건물 요소를 찾지 못했습니다 — 벽으로 읽힌 선이 없습니다'
+          + (made ? ' (' + made + '만 생겼습니다).' : '.')
+          + '\n방을 닫힌 사각형으로 그리거나, 유령선을 탭해 종류를 벽으로 바꿔 주세요.';
+      }
+      return '건물로 만들었습니다 — ' + made + '. 3D 로 확인해 보세요.';
     }
     if (/인식|알아봐|정리해|반듯/i.test(t) && SKm && SKm.recognize) {
       const p = SKm.recognize();

@@ -61,7 +61,10 @@ function programOf(text) {
   if (/작업실|스튜디오|공방/.test(t)) return 'studio';
   if (/원룸|스튜디오형|one-?room|studio/i.test(t)) return 'oneroom';
   if (/상가|점포|근생|근린생활|리테일|retail|shop/i.test(t)) return 'shop';
-  if (/필로티|피로티|piloti|기둥만|비워/i.test(t)) return 'piloti';
+  // ★'비워' 를 단독으로 잡으면 안 된다 — "화면 비워줘" 가 필로티로 읽히고, PROGRAMS 에
+  //   piloti 가 없어 조용히 원룸으로 대체돼 33㎡ 원룸 평면이 생겼다(실측).
+  //   piloti 는 층 단위 구성(floorProgram)에서만 뜻이 있는 값이다.
+  if (/필로티|피로티|piloti|기둥만|(?:1층|아래층|저층부)\s*(?:는|은)?\s*비워/i.test(t)) return 'piloti';
   return null;
 }
 // ── 층별 구성 ──
@@ -1152,7 +1155,9 @@ function buildComplex(spec) {
   }
   }
   br.refresh();
-  return { n, floors: o.floors, H, R: Math.round(R), L, widths: Ws, counts, arrange: o.arrange };
+  // ★depths 도 함께 돌려준다 — 호출측이 spec.d 를 그대로 보고하면,
+  //   depths 나열·하한 보정(4000)이 반영되지 않아 실제와 다른 치수를 말하게 된다.
+  return { n, floors: o.floors, H, R: Math.round(R), L, widths: Ws, depths: Ds, counts, arrange: o.arrange };
 }
 
 // ---------- 범용 형상 빌더 — '어떤 형상이든' ----------
@@ -1173,7 +1178,9 @@ const SHAPES = {
 function shapeOf(text) {
   const t = String(text || '');
   if (/톱니|saw|셰드 ?연속/i.test(t)) return 'saw';
-  if (/원뿔|콘|cone/i.test(t)) return 'cone';
+  // ★맨 '콘' 은 '콘크리트'·'콘셉트' 의 부분 문자열이라 잡으면 안 된다
+  //   ("콘크리트 벽 두께 200으로 해줘" 가 원뿔 생성이 됐다).
+  if (/원뿔|콘(?!크리|셉|센|덴|택)|cone/i.test(t)) return 'cone';
   if (/원통|실린더|cylinder|기둥형/i.test(t)) return 'cylinder';
   if (/각뿔|피라미드|pyramid/i.test(t)) return 'pyramid';
   if (/좁아지|테이퍼|taper|사다리꼴 ?매스/i.test(t)) return 'taper';
