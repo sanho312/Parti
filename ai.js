@@ -58,8 +58,8 @@
       },
     },
     {
-      name: 'set_view', description: '뷰 전환/맞춤. mode 2d|3d, fit=전체보기.',
-      input_schema: { type: 'object', properties: { mode: { type: 'string', enum: ['2d', '3d'] }, fit: { type: 'boolean' } } },
+      name: 'set_view', description: '뷰 전환/맞춤. mode 2d(평면)|3d(아이소)|quad(4분할), fit=전체보기.',
+      input_schema: { type: 'object', properties: { mode: { type: 'string', enum: ['2d', '3d', 'quad'] }, fit: { type: 'boolean' } } },
     },
     {
       name: 'select_entities', description: '개체를 선택 상태로 표시(사용자에게 보여주기용).',
@@ -330,12 +330,37 @@
     inp.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     return true;
   }
+  // 현재 보고 있는 것을 사실대로 적는다 — '평면'을 눌러도 3D 셸은 열린 채라
+  // is3D() 만으로는 '3d' 라고 답하게 된다(그건 거짓말이다).
+  function viewNow() {
+    const T = window.__CADTEST__;
+    if (!B().is3D()) return '2d';
+    const v = T && T.v3;
+    if (!v) return '3d';
+    if (v.quad) return 'quad';
+    const w = v.views && v.views[v.act];
+    return (w && w.mode === 'plan') ? 'plan' : ((w && w.name) || '3d');
+  }
   function toolSetView(inp) {
-    const is3 = B().is3D();
-    if (inp.mode === '3d' && !is3) feedCmd('3d');
-    if (inp.mode === '2d' && is3) feedCmd('3d');
-    if (inp.fit) feedCmd('zoom');
-    return { view: B().is3D() ? '3d' : '2d' };
+    inp = inp || {};
+    const m = String(inp.mode || '').toLowerCase();
+    // ★화면의 세그먼트 단추(평면·3D·4분할)를 그대로 누른다.
+    //   레이아웃 저장·복원·quad 토글 로직이 전부 그 핸들러 안에 있어서, 흉내 내면 어긋난다.
+    //   예전 코드는 feedCmd('3d')(=open3D, 열기만 하고 닫지는 않음) 하나로 2d/3d 를 모두
+    //   처리하려 했고, 'quad'·'plan' 은 아예 받는 쪽이 없어 조용히 무시됐다.
+    const SEG = { '3d': 'vw3d', '2d': 'vwPlan', plan: 'vwPlan', quad: 'vwQuad' };
+    if (m) {
+      const id = SEG[m];
+      if (!id) return { error: "mode 는 2d|3d|quad 중 하나입니다 — '" + m + "' 은(는) 없는 모드입니다." };
+      const b = document.getElementById(id);
+      if (!b) return { error: '뷰 전환 단추(#' + id + ')를 찾지 못했습니다.' };
+      // quad 는 토글이라, 이미 4분할이면 눌러서 풀어 버린다 — 원하는 상태로만 맞춘다
+      if (!(m === 'quad' && viewNow() === 'quad')) b.click();
+    }
+    // ★fit 은 'ze'(전체보기)다. 'zoom' 은 드래그 줌 윈도라 부르면 화면이 맞는 게 아니라
+    //   '영역을 드래그하세요' 대기 상태가 된다 — 예전 코드가 그랬다.
+    if (inp.fit) feedCmd('ze');
+    return { view: viewNow() };
   }
   function toolSelect(inp) {
     const S = B().state;
@@ -1105,9 +1130,18 @@
       return `벽 ${ws.length}개를 ${[wh ? '높이 ' + wh : null, wt ? '두께 ' + wt : null].filter(Boolean).join(' · ')}(으)로 바꿨습니다.`;
     }
     // ⑤ 뷰 / 도면
-    if (/4\s*분할|사분할/.test(t)) { execTool('set_view', { mode: 'quad' }); return '4분할로 전환했습니다.'; }
-    if (/3d|입체|아이소/i.test(t)) { execTool('set_view', { mode: '3d' }); return '3D 로 전환했습니다.'; }
-    if (/평면\s*(보여|전환|으로)/.test(t)) { execTool('set_view', { mode: 'plan' }); return '평면으로 전환했습니다.'; }
+    // ★결과를 확인하고 답한다 — 예전에는 'quad'·'plan' 을 받는 쪽이 없어 아무 일도 안 하면서
+    //   "전환했습니다"라고 답했다.
+    const KOV = { quad: '4분할', plan: '평면', '2d': '평면', '3d': '3D' };
+    const goView = (mode) => {
+      const r = execTool('set_view', { mode, fit: true });
+      if (r && r.error) return '뷰를 바꾸지 못했습니다 — ' + r.error;
+      const now = (r && r.view) || '?';
+      return (KOV[now] || now) + ' 뷰로 전환했습니다.';
+    };
+    if (/4\s*분할|사분할/.test(t)) return goView('quad');
+    if (/3d|입체|아이소/i.test(t)) return goView('3d');
+    if (/평면\s*(보여|전환|으로)/.test(t)) return goView('2d');
     if (/단면/.test(t)) { const r = execTool('make_views', { kind: 'section', axis: /세로|x/i.test(t) ? 'x' : 'y' }); return r && r.error ? '단면 생성 실패: ' + r.error : '단면 도면을 새 탭에 만들었습니다.'; }
     if (/입면/.test(t)) { const r = execTool('make_views', { kind: 'elevation', edge: /뒤|북/.test(t) ? 'back' : /좌|서/.test(t) ? 'left' : /우|동/.test(t) ? 'right' : 'front' }); return r && r.error ? '입면 생성 실패: ' + r.error : '입면 도면을 새 탭에 만들었습니다.'; }
     // ⑦ 도움말 / 미해석

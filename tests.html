@@ -6558,6 +6558,29 @@ function tests(){
       ok(rc.new_tabs >= 1, '  새로 생긴 탭 수를 알려 준다');
       C.switchDoc(0, true);
 
+      // ── ★set_view — 하지 않은 일을 했다고 답하지 않는다 ──
+      // 예전엔 'quad'·'plan' 을 받는 쪽이 없어 아무 일도 안 하면서 "전환했습니다"라고 답했고,
+      // fit:true 는 전체보기가 아니라 '영역을 드래그하세요' 대기 상태로 빠뜨렸다.
+      {
+        const V = () => ({ quad: !!(C.v3 && C.v3.quad),
+          act: C.v3 && C.v3.views[C.v3.act] && C.v3.views[C.v3.act].name, tool: C.state.tool });
+        const r3 = AI.execTool('set_view', { mode: '3d' });
+        eqi(V().act, '아이소', '★set_view 3d — 실제로 아이소 뷰가 된다');
+        ok(r3 && !r3.error && r3.view, '  무엇을 보고 있는지 돌려준다 (' + (r3 && r3.view) + ')');
+        AI.execTool('set_view', { mode: 'quad' });
+        ok(V().quad === true, '★set_view quad — 실제로 4분할이 된다 (예전엔 무동작)');
+        AI.execTool('set_view', { mode: 'quad' });
+        ok(V().quad === true, '★두 번 불러도 4분할 그대로 (토글이 아니라 그 상태로 맞춘다)');
+        AI.execTool('set_view', { mode: '2d' });
+        eqi(V().act, '평면', '★set_view 2d — 실제로 평면 칸이 된다');
+        const rb = AI.execTool('set_view', { mode: 'isometric' });
+        ok(rb && rb.error && /없는 모드/.test(rb.error), '★모르는 mode 는 오류를 낸다 (조용히 무시하지 않는다)');
+        // ★fit 은 전체보기여야 한다. 'zoom' 은 드래그 줌 윈도라 앱이 대기 상태로 멈춘다.
+        AI.execTool('set_view', { fit: true });
+        ok(C.state.tool !== '_zoomw',
+          '★fit:true 가 앱을 드래그 대기(_zoomw)로 빠뜨리지 않는다 — 현재 도구 ' + C.state.tool);
+      }
+
       // build_massing 이 잘못된 조합을 경고한다 — 조용히 다른 것을 지어 놓지 않는다
       reset();
       const bm = M.dispatch('build_massing', { count: 1, floors: 2, w: 9000, d: 11000, program: 'piloti' });

@@ -60,8 +60,8 @@ const TOOLS = [
   },
   {
     name: 'set_view',
-    description: '뷰 전환/맞춤. mode 2d|3d, fit=전체보기. 3D 결과물을 만든 뒤에는 {mode:"3d", fit:true} 로 보여 줄 것.',
-    inputSchema: { type: 'object', properties: { mode: { type: 'string', enum: ['2d', '3d'] }, fit: { type: 'boolean' } } },
+    description: '뷰 전환/맞춤. mode 2d(평면)|3d(아이소)|quad(4분할), fit=전체보기. 3D 결과물을 만든 뒤에는 {mode:"3d", fit:true} 로 보여 줄 것. 반환의 view 는 실제로 보고 있는 것을 적는다.',
+    inputSchema: { type: 'object', properties: { mode: { type: 'string', enum: ['2d', '3d', 'quad'] }, fit: { type: 'boolean' } } },
   },
   {
     name: 'select_entities',
