@@ -39,6 +39,11 @@ const CALL_TIMEOUT = Number(process.env.PARTI_MCP_TIMEOUT || 60000);
 //   루프백이 아닌 접속에 한해 페어링 토큰을 요구한다. 토큰은 켤 때마다 새로 만들어
 //   주소에 실어 출력하고(?t=…), 페이지가 그 값을 기억해 브리지 호출에 붙인다.
 //   루프백(127.0.0.1)은 예외 — 이 PC 안에서 온 것은 신뢰한다.
+// ★서버가 스스로 브라우저를 연다 — 사용자가 할 일을 하나로 줄이는 핵심.
+//   Claude Code 가 이 서버를 띄우는 순간 Parti 가 이미 연결된 채로 떠 있어야 한다.
+//   ('주소를 직접 열어 주세요' 는 사용자가 왜 안 되는지 가장 많이 헤매는 지점이었다)
+//   이미 붙어 있는 탭이 있으면 열지 않는다. 끄려면 --no-open 또는 PARTI_MCP_OPEN=0.
+const OPEN = !process.argv.includes('--no-open') && process.env.PARTI_MCP_OPEN !== '0';
 const LAN = process.argv.includes('--lan') || process.env.PARTI_MCP_LAN === '1';
 const TOKEN = LAN ? (process.env.PARTI_MCP_TOKEN || crypto.randomBytes(9).toString('base64url')) : '';
 const HOST = LAN ? '0.0.0.0' : '127.0.0.1';
@@ -378,9 +383,35 @@ server.on('error', (e) => {
     log('MCP 는 계속 뜨지만 브리지가 없어 도구 호출이 실패합니다. PARTI_MCP_PORT 로 바꿀 수 있습니다.');
   } else log('HTTP 서버 오류:', e.message);
 });
+// ★브라우저를 대신 열어 준다 — 사용자가 할 일을 하나로 줄이는 핵심.
+//   Claude Code 가 이 서버를 띄우는 순간 Parti 가 이미 연결된 채로 떠 있어야 한다.
+//   ★stdout 은 MCP 채널이므로 자식 프로세스의 출력이 새어 들어오면 안 된다 — stdio:'ignore'.
+function openBrowser(url) {
+  const { spawn } = require('node:child_process');
+  // 회귀가 진짜 창을 띄우면 안 되므로 실행기를 갈아 끼울 수 있게 해 둔다(테스트 전용).
+  const [cmd, args] = process.env.PARTI_MCP_OPEN_CMD
+    ? [process.env.PARTI_MCP_OPEN_CMD, [url]]
+    : process.platform === 'win32' ? ['cmd', ['/c', 'start', '', url]]
+      : process.platform === 'darwin' ? ['open', [url]]
+        : ['xdg-open', [url]];
+  try {
+    const p = spawn(cmd, args, { stdio: 'ignore', detached: true });
+    p.on('error', (e) => log('브라우저를 열지 못했습니다(' + e.message + ') — 직접 ' + url + ' 을 여세요.'));
+    p.unref();
+  } catch (e) { log('브라우저를 열지 못했습니다 — 직접 ' + url + ' 을 여세요.'); }
+}
+
 server.listen(PORT, HOST, () => {
   log('Parti 를 서빙합니다 → http://127.0.0.1:' + PORT + '/   (작업본: ' + ROOT + ')');
-  log('도구 ' + TOOLS.length + '개 준비됨. 브라우저에서 위 주소를 열면 연결됩니다.');
+  log('도구 ' + TOOLS.length + '개 준비됨.');
+  // 이미 열려 있는 탭이 있으면 열지 않는다. EventSource 는 1초 간격으로 재접속하므로
+  // 1.5초만 기다려 보면 '켜 두고 쓰던 탭' 이 알아서 돌아온다.
+  if (OPEN) setTimeout(() => {
+    if (client) { log('이미 열려 있는 Parti 탭이 붙었습니다 — 새 창을 열지 않습니다.'); return; }
+    const u = 'http://127.0.0.1:' + PORT + '/';
+    log('브라우저를 엽니다 → ' + u + '   (원하지 않으면 --no-open)');
+    openBrowser(u);
+  }, 1500);
   if (LAN) {
     const us = lanURLs();
     log('');

@@ -17,9 +17,13 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ok  ' + m); } else { fail
 const wait = (ms) => new Promise(r => setTimeout(r, ms));
 const group = (n) => console.log('\n▷ ' + n);
 
-function start(port, extraArgs) {
-  const p = spawn(process.execPath, [SERVER].concat(extraArgs || []), {
-    env: { ...process.env, PARTI_MCP_PORT: String(port), PARTI_ROOT: ROOT, PARTI_MCP_TIMEOUT: '4000' },
+function start(port, extraArgs, envMore) {
+  // 기본은 --no-open: 회귀를 돌릴 때마다 진짜 브라우저 창이 뜨면 안 된다.
+  // 자동 열기 자체를 검사할 때만 envMore.PARTI_MCP_OPEN_CMD 로 실행기를 갈아 끼워 연다.
+  const args = envMore && envMore.PARTI_MCP_OPEN_CMD ? [SERVER] : [SERVER, '--no-open'];
+  const p = spawn(process.execPath, args.concat(extraArgs || []), {
+    env: Object.assign({ ...process.env, PARTI_MCP_PORT: String(port), PARTI_ROOT: ROOT,
+      PARTI_MCP_TIMEOUT: '4000' }, envMore || {}),
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   const st = { proc: p, msgs: [], err: '', buf: '' };
@@ -109,6 +113,31 @@ const lanIP = () => {
     ok(st2.claude === false, '★initialize 전에는 claude:false (항상 true 를 내는 게 아니다)');
     F.proc.kill();
   }
+
+  group('브라우저 자동 열기 — 사용자가 주소를 직접 열지 않아도 된다');
+  // ★사용자가 할 일을 하나로 줄이는 핵심. 다만 (a) 이미 붙은 탭이 있으면 안 열고,
+  //   (b) --no-open 이면 안 열어야 한다 — 회귀가 진짜 창을 띄우면 안 되므로.
+  {
+    // (a) 아무도 안 붙었으면 연다 — 실행기는 테스트용으로 갈아 끼운다
+    const O = start(7393, [], { PARTI_MCP_OPEN_CMD: 'node' });
+    await wait(2600);
+    ok(/브라우저를 엽니다/.test(O.err), '★붙은 탭이 없으면 브라우저를 대신 연다');
+    ok(/http:\/\/127\.0\.0\.1:7393\//.test(O.err), '  자기 주소를 연다');
+    ok(!/이미 열려/.test(O.err), '  (붙은 탭이 없는 경우)');
+    O.proc.kill();
+  }
+  {
+    // (b) 이미 붙어 있으면 열지 않는다
+    const O2 = start(7392, [], { PARTI_MCP_OPEN_CMD: 'node' });
+    await wait(400);
+    const sse = await fetch('http://127.0.0.1:7392/bridge/events');
+    await wait(2200);
+    ok(/이미 열려 있는 Parti 탭/.test(O2.err), '★이미 붙은 탭이 있으면 새 창을 열지 않는다');
+    ok(!/브라우저를 엽니다/.test(O2.err), '  중복 창이 뜨지 않는다');
+    try { sse.body.cancel(); } catch (e) {}
+    O2.proc.kill();
+  }
+  ok(!/브라우저를 엽니다/.test(S.err), '★--no-open 이면 열지 않는다 (회귀가 창을 띄우지 않는다)');
 
   group('정적 서빙');
   const html = await fetch('http://127.0.0.1:' + PORT + '/').then(r => r.text());

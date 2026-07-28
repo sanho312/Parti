@@ -463,7 +463,8 @@
     } else {
       box.appendChild(step('❌', 'parti-mcp 서버가 꺼져 있습니다',
         g.https ? '이 페이지는 https 라 로컬 서버를 확인하지 못할 수도 있습니다.'
-          : 'Parti 폴더에서 아래를 실행하세요. 아이패드에서도 쓰려면 <b>--lan</b> 을 붙입니다.',
+          : '<b>가장 쉬운 방법: Parti 폴더에서 Claude Code 를 열면</b> 서버가 뜨고 브라우저까지 알아서 열립니다.'
+            + '<br>서버만 따로 띄우려면 아래를 실행하세요 (아이패드까지 쓰려면 <b>--lan</b>).',
         [cmdBlock(runCmd), rowOf(copyBtn(runCmd, '명령 복사'), copyBtn(runCmd + ' --lan', 'LAN 모드 복사'))]));
     }
 
