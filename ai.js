@@ -1462,7 +1462,16 @@
     return { isPlan, nearPlan, ortho };
   }
 
-  window.__WEBCAD_AI_TEST__ = { execTool, send, attachImage, localReply, parseComplexSpec, planVerdict,
+  // ── 외부 도구 계층 진입점 ───────────────────────────────────────────────
+  // ★beginTurn 이 없으면 두 번째 호출부터 pushUndo 가 영영 안 걸린다.
+  //   turnPushed 리셋은 원래 send()(API 에이전트 루프) 안에만 있었다 — 그 루프를 타지 않는
+  //   호출자(MCP 브리지)는 매 호출 앞에서 직접 이것을 불러야 '호출 1건 = undo 1단계'가 된다.
+  function beginTurn() { turnPushed = false; turnCreated = 0; }
+
+  window.WEBCAD_AI = { execTool, beginTurn, TOOLS, localReply,
+    get lastImg() { return lastImg; }, setLastImg: (v) => { lastImg = v; } };
+
+  window.__WEBCAD_AI_TEST__ = { execTool, beginTurn, send, attachImage, localReply, parseComplexSpec, planVerdict,
     MODELS, PRICE, MODEL_MOVED,
     get history() { return history; }, get cfg() { return cfg; },
     get lastImg() { return lastImg; }, setLastImg: (v) => { lastImg = v; },

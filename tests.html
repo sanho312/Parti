@@ -6516,6 +6516,107 @@ function tests(){
     C.renderFloorBar();
     eqi(el.style.display, 'none', '  도면을 비우면 사라진다');
   }
+
+  // ---------- 2026-07-28 MCP 브리지 ----------
+  // 도구 스키마가 두 벌 존재한다(브라우저 ai.js TOOLS · 서버 parti-mcp/tools.js).
+  // 둘이 어긋나면 Claude 가 있지도 않은 인자를 보내고 조용히 무시된다 — 그 드리프트를 못박는다.
+  group('MCP 브리지 — 스키마 두 벌이 어긋나지 않는다 · 도구가 도면을 만진다');
+  {
+    const W = document.getElementById('app').contentWindow;
+    const M = W.PARTI_MCP, AI = W.WEBCAD_AI;
+    ok(!!AI && !!AI.execTool && !!AI.beginTurn, '★ai.js 가 WEBCAD_AI{execTool,beginTurn,TOOLS} 를 내보낸다');
+    ok(!!M && !!M.dispatch, '★mcp.js 가 PARTI_MCP.dispatch 를 내보낸다');
+    // ★iframe 안에서는 브리지에 붙지 않아야 한다 — 붙으면 테스트를 돌릴 때마다
+    //   사용자가 보고 있는 진짜 Parti 탭의 연결을 빼앗는다(서버는 클라이언트를 하나만 둔다).
+    if (M) ok(M.connected === false, '★iframe 안에서는 브리지에 연결하지 않는다 (진짜 탭의 연결을 뺏지 않음)');
+
+    if (M && AI) {
+      // 호출 1건 = undo 1단계
+      reset();
+      const u0 = C.undoStack.length;
+      M.dispatch('add_entities', { entities: [{ type: 'LINE', x1: 0, y1: 0, x2: 1000, y2: 0 }] });
+      const u1 = C.undoStack.length;
+      M.dispatch('add_entities', { entities: [{ type: 'LINE', x1: 0, y1: 500, x2: 1000, y2: 500 }] });
+      const u2 = C.undoStack.length;
+      eqi(u1 - u0, 1, '★도구 호출 1건 = 실행취소 1단계');
+      eqi(u2 - u1, 1, '★두 번째 호출도 제 단계를 갖는다 (turnPushed 리셋이 살아 있다)');
+
+      // 순수 조회는 아무것도 바꾸지 않는다
+      reset();
+      W.PARTI_ARCH.buildComplex({ count: 2, floors: 2, w: 9000, d: 11000, roof: 'gable', arrange: 'arc' });
+      const nB = C.state.entities.length;
+      for (const w of ['area', 'windows', 'floors', 'sections', 'details', 'docs', 'layers']) {
+        const r = M.dispatch('inspect', { what: w });
+        ok(r && !r.error, '  inspect ' + w);
+      }
+      eqi(C.state.entities.length, nB, '★inspect 는 도면을 바꾸지 않는다');
+      ok(M.dispatch('inspect', { what: 'nope' }).error, '  모르는 what 은 오류를 낸다');
+      // 조회값이 실제 모델과 맞는가
+      const ar = M.dispatch('inspect', { what: 'area' });
+      eqi(ar.data.floors, 2, '  inspect area 가 층수를 맞게 읽는다');
+      ok(ar.data.gross > ar.data.foot, '  연면적 > 건축면적');
+      eqi(M.dispatch('inspect', { what: 'floors' }).max_floor, 2, '  inspect floors');
+
+      // 명령 레이어가 반환값을 돌려준다 (runCommandInput 은 언제나 undefined 다)
+      const rc = M.dispatch('run_command', { command: '도면세트 A2' });
+      ok(rc.result && rc.result.sheets && rc.result.sheets.length >= 2,
+        '★run_command 가 명령의 반환값을 그대로 돌려준다 (' + (rc.result ? rc.result.sheets.length : 0) + '장)');
+      ok(rc.new_tabs >= 1, '  새로 생긴 탭 수를 알려 준다');
+      C.switchDoc(0, true);
+
+      // build_massing 이 잘못된 조합을 경고한다 — 조용히 다른 것을 지어 놓지 않는다
+      reset();
+      const bm = M.dispatch('build_massing', { count: 1, floors: 2, w: 9000, d: 11000, program: 'piloti' });
+      ok((bm.warnings || []).some(s => /piloti/.test(s)),
+        "★program:'piloti' 는 조용히 oneroom 이 되므로 경고한다");
+      const bm2 = M.dispatch('build_massing', { count: 1, floors: 3, w: 9000, d: 11000, rooms: false });
+      ok((bm2.warnings || []).some(s => /계단/.test(s)), '★rooms:false 는 올라갈 방법이 없다고 경고한다');
+      reset();
+    }
+  }
+
+  // ---------- 2026-07-28 MCP 도구 목록 대조 (비동기) ----------
+  {
+    const W = document.getElementById('app').contentWindow;
+    fetch('parti-mcp/tools.js').then(r => r.text()).then(src => {
+      group('MCP 도구 목록 — parti-mcp/tools.js 가 ai.js TOOLS 와 일치한다');
+      const mod = { exports: {} };
+      new Function('module', 'exports', src)(mod, mod.exports);
+      const MT = mod.exports.TOOLS || [];
+      const AT = (W.WEBCAD_AI && W.WEBCAD_AI.TOOLS) || [];
+      const OWN = (W.PARTI_MCP && W.PARTI_MCP.OWN) || {};
+      ok(MT.length >= 20, 'tools.js 를 읽었다 — ' + MT.length + '개');
+      const byName = new Map(MT.map(t => [t.name, t]));
+      eqi(byName.size, MT.length, '  도구 이름 중복 없음');
+
+      // ① ai.js 의 도구가 전부 MCP 목록에 있고 인자가 같은가
+      for (const a of AT) {
+        const m = byName.get(a.name);
+        if (!m) { ok(false, '★ai.js 도구 ' + a.name + ' 가 tools.js 에 없다'); continue; }
+        const ra = (a.input_schema.required || []).slice().sort().join(',');
+        const rm = (m.inputSchema.required || []).slice().sort().join(',');
+        eqi(rm, ra, '  ' + a.name + ' 필수 인자 일치');
+        const pa = Object.keys(a.input_schema.properties || {}).sort().join(',');
+        const pm = Object.keys(m.inputSchema.properties || {}).sort().join(',');
+        eqi(pm, pa, '  ' + a.name + ' 인자 이름 일치');
+      }
+      ok(AT.length >= 15, '  ai.js 도구 ' + AT.length + '개를 전부 대조했다');
+
+      // ② MCP 전용 도구는 전부 브라우저에 구현이 있는가 (선언만 있고 실행이 없으면 조용히 실패한다)
+      const aiNames = new Set(AT.map(t => t.name));
+      const only = MT.filter(t => !aiNames.has(t.name)).map(t => t.name);
+      ok(only.length >= 5, '  MCP 전용 도구 ' + only.length + '개');
+      for (const n of only) ok(typeof OWN[n] === 'function', '★' + n + ' 는 mcp.js 에 구현이 있다');
+
+      // ③ 반대 방향 — 구현만 있고 선언이 없는 도구는 Claude 가 부를 수 없다
+      for (const k of Object.keys(OWN)) ok(byName.has(k), '★OWN.' + k + ' 는 tools.js 에 선언이 있다');
+
+      // ④ 스키마 형식
+      ok(MT.every(t => t.inputSchema && t.inputSchema.type === 'object'), '  전부 inputSchema.type=object');
+      ok(MT.every(t => t.description && t.description.length > 20), '  전부 설명이 붙어 있다');
+      finishAsync();
+    }).catch(e => { record(false, 'MCP 도구 목록 대조 오류: ' + e.message); finishAsync(); });
+  }
 }
 
 document.getElementById('rerun').addEventListener('click', () => { if(T) runAll(); });

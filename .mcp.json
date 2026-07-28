@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "parti": {
+      "command": "node",
+      "args": ["parti-mcp/server.js"]
+    }
+  }
+}
