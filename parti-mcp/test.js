@@ -111,6 +111,29 @@ const lanIP = () => {
     await wait(700);
     const st2 = await fetch('http://127.0.0.1:7394/bridge/status').then(r => r.json());
     ok(st2.claude === false, '★initialize 전에는 claude:false (항상 true 를 내는 게 아니다)');
+
+    // ★브리지만 붙은 상태 → 나중에 Claude 가 붙는 상태. 두 번 다 브라우저에 알려 줘야 한다.
+    //   (알려 주지 않으면 패널은 영영 '브리지만 붙음' 에 머문다)
+    const r2 = (await fetch('http://127.0.0.1:7394/bridge/events')).body.getReader();
+    const d2 = new TextDecoder(); let b2 = '';
+    const read2 = async () => {
+      const t0 = Date.now();
+      while (Date.now() - t0 < 4000) {
+        const m2 = b2.match(/data: (\{.*?\})\n\n/);
+        if (m2) { b2 = b2.slice(m2.index + m2[0].length); const o = JSON.parse(m2[1]); if (o.state) return o.state; continue; }
+        const { value, done } = await r2.read(); if (done) return null;
+        b2 += d2.decode(value, { stream: true });
+      }
+      return null;
+    };
+    const sA = await read2();
+    ok(sA && sA.claude === false, '★Claude 가 안 붙었으면 state.claude:false 로 알려 준다');
+    F.send({ jsonrpc: '2.0', id: 1, method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'late', version: '1' } } });
+    const sB = await read2();
+    ok(sB && sB.claude === true && sB.client.name === 'late',
+      '★Claude 가 나중에 붙어도 열려 있던 탭에 곧바로 알려 준다');
+    try { r2.cancel(); } catch (e) {}
     F.proc.kill();
   }
 
@@ -151,22 +174,36 @@ const lanIP = () => {
   group('브리지 왕복');
   const es = await fetch('http://127.0.0.1:' + PORT + '/bridge/events');
   const reader = es.body.getReader(); const dec = new TextDecoder(); let sse = '';
-  const nextCall = async () => {
+  const nextMsg = async (pred) => {
     const t0 = Date.now();
     while (Date.now() - t0 < 4000) {
+      const m0 = sse.match(/data: (\{.*?\})\n\n/);
+      if (m0) {
+        sse = sse.slice(m0.index + m0[0].length);
+        const o = JSON.parse(m0[1]); if (pred(o)) return o;
+        continue;
+      }
       const { value, done } = await reader.read();
       if (done) return null;
       sse += dec.decode(value, { stream: true });
-      const m = sse.match(/data: (\{.*?\})\n\n/);
-      if (m) { sse = sse.slice(m.index + m[0].length); const o = JSON.parse(m[1]); if (o.id) return o; }
     }
     return null;
   };
+  const nextCall = () => nextMsg(o => !!o.id);
   const reply = (id, body) => fetch('http://127.0.0.1:' + PORT + '/bridge/result', {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(Object.assign({ id }, body)) });
   await wait(200);
   ok((await fetch('http://127.0.0.1:' + PORT + '/bridge/status').then(r => r.json())).connected === true,
     'SSE 연결 후 status.connected');
+
+  // ★붙자마자 'Claude 가 붙었는가' 를 알려 준다.
+  //   이게 없으면 브라우저는 브리지 연결만 보고 "Claude Code 창에 말하세요" 라고 안내하게 되는데,
+  //   정작 Claude 가 안 붙어 있으면 그건 사용자가 실제로 겪은 그 거짓말이다.
+  {
+    const s0 = await nextMsg(o => !!o.state);
+    ok(s0 && s0.state.claude === true, '★SSE 가 붙는 즉시 state 를 보낸다 (claude:true)');
+    ok(s0 && s0.state.client && s0.state.client.name === 't', '  어느 클라이언트인지도 함께');
+  }
 
   S.send({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'measure', arguments: {} } });
   const c1 = await nextCall();

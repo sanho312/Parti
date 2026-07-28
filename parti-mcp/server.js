@@ -84,6 +84,13 @@ let clientSeq = 0;
 const pending = new Map(); // callId → {resolve, reject, timer}
 let callSeq = 0;
 
+// ★브라우저에 'Claude 가 붙었는가' 를 알려 준다.
+//   브리지가 붙은 것과 Claude 가 붙은 것은 다르다 — 구분하지 않으면 패널이
+//   "Claude 에게 말하세요" 라고 해 놓고 정작 Claude 는 없는 상태가 된다.
+function sendState() {
+  sendToClient({ state: { claude: !!mcpClient, client: mcpClient } });
+}
+
 function sendToClient(obj) {
   if (!client) return false;
   try {
@@ -193,6 +200,7 @@ const server = http.createServer(async (req, res) => {
     res.write(': connected\n\n');
     const hb = setInterval(() => { try { res.write(': hb\n\n'); } catch (e) {} }, 20000);
     client = { id, res };
+    sendState();   // 붙자마자 'Claude 가 붙었는가' 를 알려 준다
     log('브라우저 연결됨 (#' + id + ')');
     req.on('close', () => { clearInterval(hb); dropClient(id); });
     return;
@@ -310,6 +318,7 @@ async function handle(msg) {
     const ci = (params && params.clientInfo) || {};
     mcpClient = { name: ci.name || 'unknown', version: ci.version || '', at: new Date().toISOString() };
     log('Claude 연결됨 — ' + mcpClient.name + ' ' + mcpClient.version);
+    sendState();   // 이미 열려 있는 Parti 탭의 안내를 즉시 바꾼다
     reply(id, {
       protocolVersion: v, capabilities: { tools: {} },
       serverInfo: SERVER_INFO, instructions: INSTRUCTIONS,
@@ -374,7 +383,13 @@ process.stdin.on('data', (chunk) => {
     });
   }
 });
-process.stdin.on('end', () => process.exit(0));
+// ★MCP 클라이언트가 붙었다가 stdin 이 닫히면 그건 Claude 가 떠난 것이므로 함께 끝낸다.
+//   하지만 붙은 적이 없다면 '서버만 띄워 브리지로 쓰는' 경우다(README 에 적어 둔 경로) —
+//   백그라운드·파이프로 띄우면 stdin 이 곧바로 EOF 라, 예전엔 그 경우 즉시 죽었다.
+process.stdin.on('end', () => {
+  if (mcpClient) process.exit(0);
+  log('stdin 이 닫혔지만 MCP 클라이언트가 붙은 적이 없습니다 — 브리지만으로 계속 서빙합니다.');
+});
 
 // ═══════════════════════════════════════════════════════════════════════════
 server.on('error', (e) => {

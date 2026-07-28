@@ -564,6 +564,9 @@
   #aiMcpBtn .dot{width:6px;height:6px;border-radius:50%;background:#6b7280;flex:0 0 auto}
   #aiMcpBtn.on{border-color:#2f7d4f;color:#8ee6ac}
   #aiMcpBtn.on .dot{background:#30d158}
+  /* 브리지만 붙은 중간 상태 — 초록으로 칠하면 'Claude 가 붙었다'는 거짓 신호가 된다 */
+  #aiMcpBtn.half{border-color:#7d6a2f;color:#e6d78e}
+  #aiMcpBtn.half .dot{background:#ffd426}
   #aiMcpBtn:hover{border-color:#4a6bd0}
   #aiMsgs{flex:1;overflow-y:auto;padding:10px;display:flex;flex-direction:column;gap:8px}
   .aiM{max-width:92%;padding:7px 10px;border-radius:10px;white-space:pre-wrap;word-break:break-word}
@@ -677,10 +680,14 @@
     head.appendChild(mcpBtn);
     // 연결 상태를 주기적으로 비춘다 (표시만 — 연결은 mcp.js 가 한다)
     setInterval(() => {
-      const on = !!(window.PARTI_MCP && window.PARTI_MCP.connected);
-      mcpBtn.classList.toggle('on', on);
-      mcpBtn.title = on ? 'MCP 연결됨 — Claude 가 이 도면을 만질 수 있습니다'
-        : 'MCP 연결 안 됨 — 눌러서 연결하기';
+      // ★초록은 'Claude 까지 붙었다' 일 때만. 브리지만 붙은 상태를 초록으로 칠하면
+      //   단추가 사용자에게 거짓말을 한다(패널이 로컬 모드인 이유를 못 찾게 된다).
+      const st = mcpNow();
+      mcpBtn.classList.toggle('on', st === 'on');
+      mcpBtn.classList.toggle('half', st === 'bridge');
+      mcpBtn.title = st === 'on' ? 'MCP 연결됨 — Claude 가 이 도면을 만질 수 있습니다'
+        : st === 'bridge' ? '브리지만 연결됨 — Claude Code 에서 parti 서버를 승인하세요 (눌러서 진단)'
+          : 'MCP 연결 안 됨 — 눌러서 연결하기';
     }, 1000);
     const clrBtn = h('button', { title: '대화 초기화' });
     clrBtn.innerHTML = '<svg class="ic" viewBox="0 0 24 24"><path d="M4.5 7h15M9.5 7V5.2A1.2 1.2 0 0 1 10.7 4h2.6a1.2 1.2 0 0 1 1.2 1.2V7M6.5 7l1 12.5h9L17.5 7M10 10.5v6M14 10.5v6"/></svg>';
@@ -733,23 +740,61 @@
     document.body.appendChild(panel);
     greet();
   }
+  // ★인사말은 '지금 상태'를 말하므로 상태가 바뀌면 다시 써야 한다.
+  //   예전에는 인사말이 "지금은 로컬 모드입니다" 라고 못박아 둔 채, 연결되면 그 아래에
+  //   "MCP 연결됨" 이 따로 붙었다 — 두 메시지가 서로 모순되고 사용자는 위를 읽는다(실사용 보고).
+  const GREET_LOCAL = '안녕하세요! 지금은 로컬 모드입니다 — 키 없이 건축 지식 알고리즘으로 바로 씁니다.\n'
+    + '예) "10평 원룸 그려줘" · "25평 투룸" · 도면 이미지를 첨부하고 "이 도면 따라 그려줘" · "건물화해줘"\n'
+    + '무엇을 할 수 있는지 궁금하면 "도움말" 이라고 보내 주세요.\n\n'
+    + '💡 자유로운 자연어 대화는 MCP 로 합니다 — Parti 폴더에서 Claude Code 를 열면 '
+    + '브라우저까지 알아서 뜨고 연결됩니다. 안 되면 위 MCP 단추를 누르세요.';
+  // ★가장 중요한 한 줄: 연결됐으면 '어디에 말해야 하는지' 를 알려 준다.
+  //   MCP 는 Claude 가 도면을 만지는 통로지, 이 입력창을 Claude 로 바꾸는 것이 아니다.
+  //   그걸 안 알려주면 사용자가 이 창에 이미지를 넣고 Claude 의 답을 기다리게 된다(실사용 보고).
+  // ★브리지가 붙은 것과 Claude 가 붙은 것은 다르다. 뭉뚱그리면 Claude 가 없는데도
+  //   "Claude 에게 말하세요" 라고 하게 된다 — 그것도 거짓말이다.
+  const GREET_BRIDGE = '브리지는 붙었지만 Claude 가 아직 안 붙었습니다.\n\n'
+    + 'Parti 폴더(C:\\Parti)에서 Claude Code 를 열고 parti 서버를 승인하세요.\n'
+    + '★이미 열어 두셨다면 한 번 껐다 켜야 합니다 — MCP 설정은 시작할 때만 읽습니다.\n\n'
+    + '그때까지 아래 입력창은 로컬 모드로 씁니다. 자세한 건 위 MCP 단추를 누르세요.';
+  const GREET_MCP = '🔗 Claude 연결됨 — Claude 가 이 도면을 직접 만질 수 있습니다.\n\n'
+    + '★ Claude Code 창에 말씀하세요.\n'
+    + '   거기서 "3층짜리 두 동 세우고 도면세트 뽑아줘" 처럼 말하면 이 화면의 도면이 바뀝니다.\n'
+    + '   이미지도 Claude Code 창에 붙여 넣으세요 — 이 입력창이 아니라요.\n\n'
+    + '아래 입력창은 로컬 모드로 남아 있습니다 — 키 없이 도는 간단한 명령용입니다\n'
+    + '("10평 원룸 그려줘" · "3D 보여줘" · "도움말").';
+  const PH_LOCAL = '예: 5000×4000 방 그려줘 · 도면 이미지를 첨부하면 그대로 모델링해 드립니다';
+  const PH_MCP = '로컬 모드 — 자유 대화·이미지는 Claude Code 창에서. 여기서는 "10평 원룸 그려줘" 같은 간단한 명령';
+  const GREET_OF = { on: GREET_MCP, bridge: GREET_BRIDGE, off: GREET_LOCAL };
+  // ★인사말이 먼저 그려질 수도, mcp.js 가 먼저 붙을 수도 있다. 순서에 기대지 않고
+  //   그리는 시점에 실제 상태를 물어본다.
+  const mcpNow = () => {
+    try { const m = window.PARTI_MCP; return (m && m.state) || 'off'; } catch (e) { return 'off'; }
+  };
+  let mcpState = 'off';
+  let greetEl = null;
   function greet() {
     // ★대화는 저장하지 않는다 — 새로고침하면 사라진다(로컬 모드의 원래 동작).
-    // ★연결 상태는 여기서 말하지 않는다. greet 은 패널을 만들 때 한 번 돌고 브리지는 그 뒤에
-    //   붙으므로, 여기서 판정하면 이미 연결됐는데 "MCP 를 쓰세요"라고 하는 어긋남이 생긴다.
-    //   연결됐다는 사실은 mcp.js 가 붙는 순간 직접 알린다(notify).
-    addMsg('ai', '안녕하세요! 지금은 **로컬 모드**입니다 — 키 없이 건축 지식 알고리즘으로 바로 씁니다.\n'
-      + '예) "10평 원룸 그려줘" · "25평 투룸" · 도면 이미지를 첨부하고 "이 도면 따라 그려줘" · "건물화해줘"\n'
-      + '무엇을 할 수 있는지 궁금하면 "도움말" 이라고 보내 주세요.\n\n'
-      + '💡 자유로운 자연어 대화는 **MCP** 로 합니다 — Parti 폴더에서 Claude Code 를 열면 '
-      + '브라우저까지 알아서 뜨고 연결됩니다. 안 되면 위 **MCP** 단추를 누르세요.');
+    mcpState = mcpNow();
+    greetEl = addMsg('ai', GREET_OF[mcpState] || GREET_LOCAL);
+    if (inEl) inEl.placeholder = mcpState === 'on' ? PH_MCP : PH_LOCAL;
+  }
+  // mcp.js 가 상태를 알려 주면 인사말·입력창 안내를 지금 상태로 다시 쓴다.
+  //   state: 'off'(브리지 없음) · 'bridge'(브리지만) · 'on'(Claude 까지)
+  function setMcp(state) {
+    try {
+      mcpState = (state === true) ? 'on' : (state === false ? 'off' : String(state || 'off'));
+      if (greetEl && greetEl.isConnected) greetEl.textContent = GREET_OF[mcpState] || GREET_LOCAL;
+      if (inEl) inEl.placeholder = mcpState === 'on' ? PH_MCP : PH_LOCAL;
+    } catch (e) {}
   }
   function addMsg(kind, text) {
-    if (!msgsEl) return;
+    if (!msgsEl) return null;
     const d = h('div', { class: 'aiM ' + kind });
     d.textContent = text;
     msgsEl.appendChild(d);
     msgsEl.scrollTop = msgsEl.scrollHeight;
+    return d;                       // 나중에 다시 쓰기 위해 (인사말은 상태가 바뀌면 갱신된다)
   }
   let busyEl = null;
   function setBusy(on) {
@@ -1341,7 +1386,8 @@
 
   // TOOL_KO 는 도구 이름의 한국어 표기 — MCP 브리지가 명령 로그에 무슨 도구가 돌았는지 적을 때 쓴다.
   window.WEBCAD_AI = { execTool, beginTurn, TOOLS, TOOL_KO, localReply,
-    notify: (kind, text) => addMsg(kind, text),   // mcp.js 가 연결·도구 실행을 채팅에 알린다
+    notify: (kind, text) => addMsg(kind, text),   // mcp.js 가 도구 실행을 채팅에 알린다
+    setMcp,                                       // mcp.js 가 연결 상태를 알려 주면 안내를 다시 쓴다
     get lastImg() { return lastImg; }, setLastImg: (v) => { lastImg = v; } };
 
   window.__WEBCAD_AI_TEST__ = { execTool, beginTurn, attachImage, localReply, parseComplexSpec, planVerdict,

@@ -278,6 +278,15 @@
   function notify(kind, text) {
     try { const ai = AI(); if (ai && ai.notify) ai.notify(kind, text); } catch (e) {}
   }
+  // 코워커 패널의 안내를 지금 상태로 다시 쓴다 (인사말 · 입력창 안내문)
+  //   state: 'off'(브리지 없음) · 'bridge'(브리지만 붙음) · 'on'(Claude 까지 붙음)
+  // ★셋을 구분하는 이유: 브리지가 붙었다고 Claude 가 붙은 것이 아니다. 뭉뚱그리면
+  //   Claude 가 없는데도 "Claude Code 창에 말하세요" 라고 안내하게 된다.
+  let uiState = 'off';
+  function setMcpUI(state) {
+    uiState = state === true ? 'on' : (state === false ? 'off' : String(state || 'off'));
+    try { const ai = AI(); if (ai && ai.setMcp) ai.setMcp(uiState); } catch (e) {}
+  }
   function toolKo(name) {
     const ai = AI();
     return OWN_KO[name] || (ai && ai.TOOL_KO && ai.TOOL_KO[name]) || name;
@@ -307,9 +316,13 @@
       es = new EventSource(BASE + '/bridge/events' + q);
     } catch (e) { setDot('var(--danger,#ff453a)', '연결 실패', false); return; }
     es.onopen = () => {
-      setDot('var(--success,#30d158)', '연결됨 — Claude 가 이 도면을 만질 수 있습니다', true);
-      // 재접속마다 떠들지 않는다 — 처음 붙었을 때만 알린다
-      if (!announced) { announced = true; notify('ai', '🔗 **MCP 연결됨** — Claude 가 이 도면을 직접 만질 수 있습니다. Claude 쪽에 그냥 말씀하세요.'); }
+      // 붙은 것은 '브리지'다. Claude 가 붙었는지는 서버가 곧 보내 주는 state 로만 알 수 있다.
+      setDot('var(--warn,#ffd60a)', '브리지 연결됨 — Claude 확인 중…', true);
+      // ★메시지를 덧붙이지 않고 인사말 자체를 다시 쓴다.
+      //   예전에는 "지금은 로컬 모드입니다" 인사말 아래에 "MCP 연결됨" 을 따로 붙였는데,
+      //   두 메시지가 서로 모순되고 사용자는 위에 있는 것을 읽는다(실사용 보고).
+      setMcpUI('bridge');
+      announced = true;
     };
     es.onmessage = (ev) => {
       let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
@@ -318,13 +331,24 @@
       if (m && m.evict) {
         evicted = true;
         try { es.close(); } catch (e) {}
+        setMcpUI('off');
         setDot('var(--muted,#888)', '다른 Parti 탭이 브리지를 쓰고 있습니다 — 눌러서 가져오기', false);
+        return;
+      }
+      // 서버가 알려 주는 'Claude 가 붙었는가'. 붙는 순간·떠 있는 채로 탭을 연 순간 둘 다 온다.
+      if (m && m.state) {
+        const on = !!m.state.claude;
+        setMcpUI(on ? 'on' : 'bridge');
+        setDot(on ? 'var(--success,#30d158)' : 'var(--warn,#ffd60a)',
+          on ? '연결됨 — Claude 가 이 도면을 만질 수 있습니다'
+            : '브리지만 연결됨 — Claude Code 에서 parti 서버를 승인하세요 (눌러서 진단)', true);
         return;
       }
       if (m && m.id) onCall(m).catch(() => {});   // 절대 밖으로 던지지 않는다
     };
     es.onerror = () => {
       if (evicted) return;
+      setMcpUI('off');   // 끊겼는데 'Claude Code 창에 말하세요' 가 남아 있으면 거짓말이 된다
       // ★토큰은 서버를 다시 켤 때마다 바뀐다. 기억해 둔 옛 토큰으로는 403 이 나는데
       //   EventSource 는 상태 코드를 알려 주지 않으므로, 토큰을 쓰는 중이면 그 가능성을 함께 안내한다.
       setDot('var(--danger,#ff453a)', TOKEN
@@ -589,5 +613,7 @@
   ].join('\n');
 
   window.PARTI_MCP = { dispatch, connect, OWN, diagnose, openDialog, closeDialog, eligible: ELIGIBLE,
-    get connected() { return !!es && es.readyState === 1; } };
+    get connected() { return !!es && es.readyState === 1; },
+    // 'off' | 'bridge' | 'on' — 'on' 이라야 Claude 가 실제로 붙어 있다는 뜻이다.
+    get state() { return (!!es && es.readyState === 1) ? uiState : 'off'; } };
 })();
